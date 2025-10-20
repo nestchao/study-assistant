@@ -1,4 +1,4 @@
-<!-- templates/workspace.html (Final Version with Copy Note Button) -->
+<!-- templates/workspace.html (Combined Final Version with Topic Generator) -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -9,7 +9,7 @@
         * { box-sizing: border-box; }
         .container { display: flex; height: 100vh; }
         .panel { padding: 20px; border-right: 1px solid #ddd; background-color: #fff; display: flex; flex-direction: column; }
-        .panel h2 { margin-top: 0; padding-bottom: 10px; border-bottom: 1px solid #eee; }
+        .panel h2, .panel h3 { margin-top: 0; padding-bottom: 10px; border-bottom: 1px solid #eee; }
         .left-panel { flex: 1; min-width: 250px; }
         #source-list { list-style-type: none; padding: 0; margin: 0; overflow-y: auto; flex-grow: 1; }
         #source-list li { padding: 10px; cursor: pointer; border-radius: 5px; margin-bottom: 5px; border: 1px solid transparent; }
@@ -31,12 +31,36 @@
         #scratchpad { flex-grow: 1; border: 1px solid #ccc; border-radius: 5px; padding: 15px; overflow-y: auto; }
         .action-buttons { display: flex; gap: 10px; margin-top: 15px; }
         .action-buttons button { flex-grow: 1; padding: 12px; }
-        
-        /* Style for our copy button */
         #copy-note-btn { background-color: #28a745; color: white; border: none; }
         #copy-note-btn:hover { background-color: #218838; }
-
         .loader { text-align: center; padding: 10px; display: none; }
+
+        /* --- NEW STYLES for Topic Generator --- */
+        #topic-note-form { 
+            margin-top: 20px; 
+            border-top: 1px solid #eee; 
+            padding-top: 20px;
+        }
+        #topic-input {
+            width: 100%;
+            height: 60px;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            margin-bottom: 10px;
+            font-family: inherit;
+        }
+        #generate-topic-note-btn {
+            width: 100%;
+            padding: 12px;
+            background-color: #ffc107; /* A yellow/gold color */
+            color: black;
+            border: none;
+            cursor: pointer;
+        }
+        #generate-topic-note-btn:hover {
+            background-color: #e0a800;
+        }
     </style>
 </head>
 <body>
@@ -44,7 +68,7 @@
     <a href="/" style="position: absolute; top: 5px; left: 5px; text-decoration: none; padding: 5px 10px; background: #eee; border-radius: 5px; color: #333;">&larr; Back to Projects</a>
     
     <div class="container">
-        <!-- Left Panel -->
+        <!-- Left Panel (Unchanged) -->
         <div class="panel left-panel">
             <h2>Sources for {{ project_name }}</h2>
             <ul id="source-list"></ul>
@@ -56,7 +80,7 @@
             <div class="loader" id="upload-loader"></div>
         </div>
         
-        <!-- Center Panel -->
+        <!-- Center Panel (Unchanged) -->
         <div class="panel center-panel">
             <h2>Chat</h2>
             <div class="chat-window" id="chat-window"><div class="bot-message"><p>Hello! Ask a question to search all sources, or select a source on the left to focus your questions.</p></div></div>
@@ -66,22 +90,28 @@
             </form>
         </div>
 
-        <!-- Right Panel: MODIFIED with a new button -->
+        <!-- Right Panel (MODIFIED to include Topic Generator) -->
         <div class="panel right-panel">
             <h2>Scratchpad</h2>
-            <div id="scratchpad"><p>Select a source to begin.</p></div>
-            <!-- Container for action buttons -->
+            <div id="scratchpad"><p>Select a source and click "Show Source Note", or use the tool below to create a custom note from all sources.</p></div>
             <div class="action-buttons">
-                <button id="generate-note-btn" disabled>Show Generated Note</button>
+                <button id="generate-note-btn" disabled>Show Source Note</button>
                 <button id="copy-note-btn" disabled>Copy Note</button>
             </div>
             <div class="loader" id="note-loader"></div>
+
+            <!-- --- NEW: TOPIC NOTE GENERATOR FORM --- -->
+            <form id="topic-note-form">
+                <h3>Generate Custom Note</h3>
+                <textarea id="topic-input" placeholder="Enter a topic or instruction... e.g., 'Create a list of all key definitions' or 'Summarize the main arguments about photosynthesis'"></textarea>
+                <button type="submit" id="generate-topic-note-btn">Generate from All Sources</button>
+            </form>
         </div>
     </div>
 
     <script>
     document.addEventListener('DOMContentLoaded', () => {
-        // === DOM Element References ===
+        // === DOM Element References (with new elements added) ===
         const sourceList = document.getElementById('source-list');
         const uploadForm = document.getElementById('upload-form');
         const pdfInput = document.getElementById('pdf-files');
@@ -89,17 +119,20 @@
         const sourceLoader = document.getElementById('source-loader');
         const scratchpad = document.getElementById('scratchpad');
         const generateNoteBtn = document.getElementById('generate-note-btn');
-        const copyNoteBtn = document.getElementById('copy-note-btn'); // NEW
+        const copyNoteBtn = document.getElementById('copy-note-btn');
         const noteLoader = document.getElementById('note-loader');
         const chatWindow = document.getElementById('chat-window');
         const chatForm = document.getElementById('chat-form');
         const chatInput = document.getElementById('chat-input');
+        // NEW: Topic generator elements
+        const topicNoteForm = document.getElementById('topic-note-form');
+        const topicInput = document.getElementById('topic-input');
 
         // === STATE MANAGEMENT ===
         const projectId = document.getElementById('project-id').value;
         let selectedSourceId = null;
         let chatHistory = [];
-        let noteIsVisible = false; // NEW: Track if a note is currently displayed
+        let noteIsVisible = false;
 
         // === Core Functions ===
         async function loadSources() {
@@ -144,23 +177,19 @@
             if (e.target && e.target.tagName === 'LI') {
                 const currentSelected = sourceList.querySelector('.selected');
                 
-                // Clear state when selection changes
                 noteIsVisible = false;
                 copyNoteBtn.disabled = true;
                 copyNoteBtn.textContent = 'Copy Note';
-                scratchpad.innerHTML = '<p>Select a source to begin.</p>';
+                scratchpad.innerHTML = '<p>Select a source and click "Show Source Note", or use the tool below to create a custom note from all sources.</p>';
                 generateNoteBtn.disabled = true;
                 resetChat();
 
-
                 if (currentSelected && currentSelected === e.target) {
-                    // Deselecting the current source
                     currentSelected.classList.remove('selected');
                     selectedSourceId = null;
                     chatInput.placeholder = "Ask a question (all sources)...";
                     addMessage("You are now chatting with all sources.", "bot");
                 } else {
-                    // Selecting a new source
                     if (currentSelected) { currentSelected.classList.remove('selected'); }
                     e.target.classList.add('selected');
                     selectedSourceId = e.target.dataset.sourceId;
@@ -173,11 +202,10 @@
 
         generateNoteBtn.addEventListener('click', async () => {
             if (!selectedSourceId) return;
-            noteLoader.textContent = 'Fetching note...';
+            noteLoader.textContent = 'Fetching source note...';
             noteLoader.style.display = 'block';
             scratchpad.innerHTML = '';
             
-            // Disable copy button while fetching
             copyNoteBtn.disabled = true; 
             copyNoteBtn.textContent = 'Copy Note';
             noteIsVisible = false;
@@ -188,33 +216,26 @@
 
             if (data.note_html) { 
                 scratchpad.innerHTML = data.note_html; 
-                copyNoteBtn.disabled = false; // Enable copy on success
+                copyNoteBtn.disabled = false;
                 noteIsVisible = true;
             }
             else { scratchpad.innerHTML = `<p>Error: ${data.error || 'Could not fetch note.'}</p>`; }
         });
-
-        // --- NEW: Event listener for our copy button ---
+        
         copyNoteBtn.addEventListener('click', () => {
             if (!noteIsVisible) return;
-
-            // Use the modern clipboard API to copy rich text (HTML)
             const htmlContent = scratchpad.innerHTML;
-            
-            // Check if ClipboardItem is available (modern browsers)
             if (typeof ClipboardItem !== 'undefined') {
                 const blob = new Blob([htmlContent], { type: 'text/html' });
                 const clipboardItem = new ClipboardItem({ 'text/html': blob });
-
                 navigator.clipboard.write([clipboardItem]).then(() => {
                     copyNoteBtn.textContent = 'Copied!';
                     setTimeout(() => { copyNoteBtn.textContent = 'Copy Note'; }, 2000);
                 }).catch(err => {
                     console.error('Failed to copy HTML: ', err);
-                    copyNoteBtn.textContent = 'Copy Failed (Check Console)';
+                    copyNoteBtn.textContent = 'Copy Failed';
                 });
             } else {
-                // Fallback for older browsers (might only copy plain text)
                 navigator.clipboard.writeText(scratchpad.innerText).then(() => {
                     copyNoteBtn.textContent = 'Copied (Text)!';
                     setTimeout(() => { copyNoteBtn.textContent = 'Copy Note'; }, 2000);
@@ -225,6 +246,41 @@
             }
         });
         
+        // --- NEW: Event listener for the topic note form ---
+        topicNoteForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const topic = topicInput.value.trim();
+            if (!topic) return;
+
+            noteLoader.textContent = 'Generating custom note...';
+            noteLoader.style.display = 'block';
+            scratchpad.innerHTML = '';
+            copyNoteBtn.disabled = true;
+            noteIsVisible = false;
+
+            try {
+                const response = await fetch(`/generate-topic-note/${projectId}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ topic: topic })
+                });
+                const data = await response.json();
+
+                if (data.note_html) {
+                    scratchpad.innerHTML = data.note_html;
+                    copyNoteBtn.disabled = false;
+                    noteIsVisible = true;
+                } else {
+                    scratchpad.innerHTML = `<p>Error: ${data.error || 'Could not generate note.'}</p>`;
+                }
+            } catch (error) {
+                console.error('Error generating topic note:', error);
+                scratchpad.innerHTML = '<p>An error occurred while generating the custom note.</p>';
+            } finally {
+                noteLoader.style.display = 'none';
+            }
+        });
+
         chatForm.addEventListener('submit', async (e) => {
             e.preventDefault();
             const question = chatInput.value.trim();
@@ -258,7 +314,6 @@
             const messageDiv = document.createElement('div');
             messageDiv.className = `chat-message ${sender}-message`;
             const p = document.createElement('p');
-            // Ensure HTML tables/formatting in bot messages are displayed correctly
             if (sender === 'bot') {
                  p.innerHTML = text;
             } else {

@@ -98,38 +98,38 @@ def split_into_chunks(text):
 def generate_note_for_text(text):
     model = genai.GenerativeModel('gemini-2.5-flash') # Using 1.5-flash as it's a newer, efficient model
     prompt = f"""
-    You are an expert universal study assistant. Your mission is to transform dense academic texts from **any language** into simplified, well-structured, and easy-to-understand study notes.
+    You are an expert universal study assistant. Your mission is to transform dense academic texts from **any language** into simplified, well-structured, and exceptionally easy-to-understand study notes.
 
-    Your output should be in the **same language as the source text**, enhanced with specific annotations. Follow these rules meticulously to create the perfect study guide.
+    Your output must be in the **same language as the source text**. Follow these rules meticulously, as they are your core programming.
 
-    **1. 🎯 Core Mission: Comprehensive Distillation**
-    *   Your primary goal is to distill the *entire* document. Do not skip any major topics or concepts.
-    *   Process the text section by section, ensuring your notes mirror the structure and flow of the original document.
-    *   Extract the most critical information—key definitions, core arguments, and important examples. Discard repetitive fluff and unnecessary details.
+    **1. 💡 The Golden Rule: Simplify Everything**
+    *   This is your most important task. Your absolute priority is to make the content easy to understand for a student who finds the original text difficult.
+    *   **Step A: Simplify Vocabulary.** Find any complex, technical, or **unfamiliar words** in the original text and replace them with simpler, more common words in that **same language**.
+        *   *English Example:* Change "leverage synergistic paradigms" to "use teamwork effectively."
+        *   *Spanish Example:* Change "implementar una metodología vanguardista" to "usar un método nuevo y moderno."
+    *   **Step B: Simplify Sentences.** Break down long, complex sentences into shorter, clearer ones that are easy to read and digest.
+    *   **Step C: Simplify Structure.** Convert dense paragraphs into scannable bullet points, numbered lists, and short, focused sections.
 
-    **2. 💡 The Golden Rule: Radical Simplification**
-    *   This is your most important task. Your priority is to make the content understandable to someone who finds the original text difficult.
-    *   **Simplify In-Language First:** Before anything else, rewrite complex sentences and vocabulary using simpler words and shorter sentences *in the original language of the text*.
-        *   **Example:** If the source text (in English) says "leverage synergistic paradigms," you should rewrite it as "use teamwork effectively."
-        *   **Example:** If the source text (in Spanish) says "implementar una metodología vanguardista," you might rewrite it as "usar un método nuevo y moderno."
-    *   Break down long paragraphs into easy-to-digest bullet points or short, numbered lists.
+    **2. ✍️ Annotation Rule: Translate ALL Simplified Words (NEW & IMPROVED)**
+    *   Your annotation is not just for major keywords. For **every single word** that you simplified in Rule #1 because it was complex or unfamiliar, you **must** provide its Chinese translation.
+    *   The format is always: `new simplified word (中文翻译)`.
+    *   **Example of Scope:** If the original text said "The *ubiquitous* nature of the *phenomenon*...", and you simplify it to "The *widespread* nature of the *event*...", your output must be: "The **widespread (普遍的)** nature of the **event (事件)**..." This applies to all such words.
 
-    **3. ✍️ Annotation Rule: Chinese Translation**
-    *   Identify all key technical terms, important concepts, and any words that might be unfamiliar to a student.
-    *   **Immediately after** the simplified term in the original language, add its **Chinese translation** in parentheses.
-        *   **English Example:** "This process is called **photosynthesis (光合作用)**, which is how plants make their own food."
-        *   **Japanese Example:** "これは**量子力学 (量子力学)**の基本原則です。"
+    **3. 🎨 Formatting Rule: Make it Engaging and Clear**
+    *   **Headings and Emojis:** Use markdown headings (`#`, `##`) to create a clear structure. Add a relevant emoji next to each main heading to make it visually appealing (e.g., 🔍 for Definitions, ⚙️ for Processes, ✅ for Key Takeaways).
+    *   **Highlighting:** Use **bold text** to emphasize the most important simplified keywords and concepts.
+    *   **Tone:** Adopt a friendly, encouraging, and helpful tone, as if you are a tutor guiding the student through the material.
 
-    **4. 🎨 Structure and Engagement**
-    *   **Headings and Emojis:** Use markdown headings (`#`, `##`) for clear structure. Add a relevant emoji next to each main heading to make it visually engaging and signal its purpose (e.g., 🔍 for Definitions, ⚙️ for Processes, ✅ for Key Takeaways).
-    *   **Formatting:** Use **bold text** for key terms, `code blocks` for formulas or specific names, and tables to organize comparisons.
-    *   **Tone:** Adopt a friendly, encouraging, and conversational tone. Act like a helpful tutor explaining things one-on-one. Use simple analogies to clarify abstract ideas.
+    **4. 🎯 Content Rule: Be Comprehensive and Accurate**
+    *   While simplifying, you must still cover **all major topics and key concepts** from the original text. Do not skip sections.
+    *   Your notes should follow the same logical flow and structure as the source document.
+    *   Extract only the most critical information—definitions, key arguments, and essential examples.
 
-    **5. 🧠 Memory Aid: Mnemonic Tip**
-    *   At the end of each major section, create a short, creative **Mnemonic Tip**. This could be an acronym, a simple rhyme, or a memorable phrase to help the student recall the main points of that section.
+    **5. 🧠 Memory Aid: Add a Mnemonic Tip (记忆技巧)**
+    *   At the end of each major section, create a short, creative **Mnemonic Tip (记忆技巧)**. This could be an acronym, a simple rhyme, or a memorable phrase to help the student recall the main points.
 
     **Constraint:**
-    *   You must not add any new information that is not present in the original text. Your role is to simplify and structure, not to add external knowledge.
+    *   You must not add any new information that is not present in the original text. Your job is to simplify and structure, not to invent or add external knowledge.
 
     Here is the text to process:
     ---
@@ -302,5 +302,70 @@ def ask_chatbot(project_id):
         print(f"Chatbot error: {e}")
         return jsonify({"error": f"An error occurred while communicating with the chatbot: {str(e)}"}), 500
 
+@app.route('/generate-topic-note/<project_id>', methods=['POST'])
+def generate_topic_note(project_id):
+    data = request.get_json()
+    topic = data.get('topic')
+    if not topic:
+        return jsonify({"error": "No topic provided"}), 400
+
+    try:
+        # Step 1: Gather all Q&A chunks for the entire project
+        # This logic is similar to the chatbot's "global mode"
+        all_chunks = []
+        source_refs = db.collection('projects').document(project_id).collection('sources').list_documents()
+        for source_ref in source_refs:
+            qna_pages = source_ref.collection('qna_pages').stream()
+            for page in qna_pages:
+                chunks_from_page = page.to_dict().get('content', [])
+                for chunk in chunks_from_page:
+                    all_chunks.append({"text": chunk, "source": source_ref.id})
+        
+        if not all_chunks:
+            return jsonify({"error": "This project has no sources to generate a note from."}), 400
+
+        # Step 2: Find the most relevant chunks based on the topic
+        # We use a simple keyword search, but this is where semantic search would be powerful
+        topic_words = set(topic.lower().split())
+        relevant_chunks = [c for c in all_chunks if any(word in c['text'].lower() for word in topic_words)]
+        
+        # If we don't find many direct matches, we can broaden the context
+        if len(relevant_chunks) < 5:
+            relevant_chunks.extend(all_chunks[:10]) # Add some general context
+
+        # Remove duplicates
+        unique_chunks = list({v['text']:v for v in relevant_chunks}.values())
+        context = "\n---\n".join([f"Source: {c['source']}\nContent: {c['text']}" for c in unique_chunks[:20]]) # Use a larger context for note generation
+
+        # Step 3: Call the AI with a specialized "Note Generation" prompt
+        model = genai.GenerativeModel('gemini-2.5-flash')
+        prompt = f"""
+        You are an expert study assistant. Your task is to generate a well-structured and detailed note based on a specific user request and the provided source material.
+
+        USER REQUEST: "{topic}"
+
+        SOURCE MATERIAL (Excerpts from user's documents):
+        ---
+        {context}
+        ---
+        
+        INSTRUCTIONS:
+        1.  Carefully read the USER REQUEST to understand the goal of the note.
+        2.  Thoroughly review the SOURCE MATERIAL to find all relevant information.
+        3.  Synthesize ONLY the relevant information into a new note that directly addresses the user's request.
+        4.  Format the note clearly using markdown (headings, bullet points, tables, bold text).
+        5.  Do NOT include information that is not relevant to the user's request.
+        6.  If the source material does not contain enough information to address the request, state that clearly.
+        """
+        
+        response = model.generate_content(prompt)
+        generated_note_markdown = response.text
+        note_html = markdown.markdown(generated_note_markdown, extensions=['tables'])
+
+        return jsonify({"note_html": note_html})
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    
 if __name__ == '__main__':
     app.run(debug=True)
