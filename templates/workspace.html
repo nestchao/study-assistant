@@ -1,0 +1,282 @@
+<!-- templates/workspace.html (Final Version with Copy Note Button) -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>{{ project_name }} - AI Study Assistant</title>
+    <style>
+        body, html { margin: 0; padding: 0; font-family: sans-serif; height: 100%; background-color: #f7f7f7; }
+        * { box-sizing: border-box; }
+        .container { display: flex; height: 100vh; }
+        .panel { padding: 20px; border-right: 1px solid #ddd; background-color: #fff; display: flex; flex-direction: column; }
+        .panel h2 { margin-top: 0; padding-bottom: 10px; border-bottom: 1px solid #eee; }
+        .left-panel { flex: 1; min-width: 250px; }
+        #source-list { list-style-type: none; padding: 0; margin: 0; overflow-y: auto; flex-grow: 1; }
+        #source-list li { padding: 10px; cursor: pointer; border-radius: 5px; margin-bottom: 5px; border: 1px solid transparent; }
+        #source-list li:hover { background-color: #f0f0f0; }
+        #source-list li.selected { background-color: #007bff; color: white; border-color: #0056b3; }
+        #upload-form { margin-top: 15px; padding-top: 15px; border-top: 1px solid #eee; }
+        #upload-form button { width: 100%; padding: 10px; }
+        .center-panel { flex: 2; border-right: none; }
+        .chat-window { flex-grow: 1; overflow-y: auto; border: 1px solid #ccc; padding: 10px; border-radius: 5px; margin-bottom: 15px; display: flex; flex-direction: column; }
+        .chat-message { margin-bottom: 10px; max-width: 80%; }
+        .user-message { align-self: flex-end; }
+        .user-message p { background-color: #007bff; color: white; padding: 10px; border-radius: 15px 15px 0 15px; display: inline-block; }
+        .bot-message { align-self: flex-start; }
+        .bot-message p { background-color: #e9e9eb; padding: 10px; border-radius: 15px 15px 15px 0; display: inline-block; white-space: pre-wrap; }
+        #chat-form { display: flex; }
+        #chat-input { flex-grow: 1; padding: 10px; border: 1px solid #ccc; border-radius: 5px 0 0 5px; }
+        #chat-form button { padding: 10px 15px; border: none; background-color: #007bff; color: white; border-radius: 0 5px 5px 0; cursor: pointer; }
+        .right-panel { flex: 1.5; min-width: 300px; border-right: none; }
+        #scratchpad { flex-grow: 1; border: 1px solid #ccc; border-radius: 5px; padding: 15px; overflow-y: auto; }
+        .action-buttons { display: flex; gap: 10px; margin-top: 15px; }
+        .action-buttons button { flex-grow: 1; padding: 12px; }
+        
+        /* Style for our copy button */
+        #copy-note-btn { background-color: #28a745; color: white; border: none; }
+        #copy-note-btn:hover { background-color: #218838; }
+
+        .loader { text-align: center; padding: 10px; display: none; }
+    </style>
+</head>
+<body>
+    <input type="hidden" id="project-id" value="{{ project_id }}">
+    <a href="/" style="position: absolute; top: 5px; left: 5px; text-decoration: none; padding: 5px 10px; background: #eee; border-radius: 5px; color: #333;">&larr; Back to Projects</a>
+    
+    <div class="container">
+        <!-- Left Panel -->
+        <div class="panel left-panel">
+            <h2>Sources for {{ project_name }}</h2>
+            <ul id="source-list"></ul>
+            <div class="loader" id="source-loader">Loading sources...</div>
+            <form id="upload-form">
+                <input type="file" id="pdf-files" name="pdfs" accept=".pdf" required multiple>
+                <button type="submit">Upload & Process PDF(s)</button>
+            </form>
+            <div class="loader" id="upload-loader"></div>
+        </div>
+        
+        <!-- Center Panel -->
+        <div class="panel center-panel">
+            <h2>Chat</h2>
+            <div class="chat-window" id="chat-window"><div class="bot-message"><p>Hello! Ask a question to search all sources, or select a source on the left to focus your questions.</p></div></div>
+            <form id="chat-form">
+                <input type="text" id="chat-input" placeholder="Ask a question...">
+                <button type="submit">Send</button>
+            </form>
+        </div>
+
+        <!-- Right Panel: MODIFIED with a new button -->
+        <div class="panel right-panel">
+            <h2>Scratchpad</h2>
+            <div id="scratchpad"><p>Select a source to begin.</p></div>
+            <!-- Container for action buttons -->
+            <div class="action-buttons">
+                <button id="generate-note-btn" disabled>Show Generated Note</button>
+                <button id="copy-note-btn" disabled>Copy Note</button>
+            </div>
+            <div class="loader" id="note-loader"></div>
+        </div>
+    </div>
+
+    <script>
+    document.addEventListener('DOMContentLoaded', () => {
+        // === DOM Element References ===
+        const sourceList = document.getElementById('source-list');
+        const uploadForm = document.getElementById('upload-form');
+        const pdfInput = document.getElementById('pdf-files');
+        const uploadLoader = document.getElementById('upload-loader');
+        const sourceLoader = document.getElementById('source-loader');
+        const scratchpad = document.getElementById('scratchpad');
+        const generateNoteBtn = document.getElementById('generate-note-btn');
+        const copyNoteBtn = document.getElementById('copy-note-btn'); // NEW
+        const noteLoader = document.getElementById('note-loader');
+        const chatWindow = document.getElementById('chat-window');
+        const chatForm = document.getElementById('chat-form');
+        const chatInput = document.getElementById('chat-input');
+
+        // === STATE MANAGEMENT ===
+        const projectId = document.getElementById('project-id').value;
+        let selectedSourceId = null;
+        let chatHistory = [];
+        let noteIsVisible = false; // NEW: Track if a note is currently displayed
+
+        // === Core Functions ===
+        async function loadSources() {
+            sourceLoader.style.display = 'block';
+            sourceList.innerHTML = '';
+            try {
+                const response = await fetch(`/get-sources/${projectId}`); 
+                const sources = await response.json();
+                if (sources && sources.length > 0) {
+                    sources.forEach(source => {
+                        const li = document.createElement('li');
+                        li.textContent = source.filename;
+                        li.dataset.sourceId = source.id;
+                        sourceList.appendChild(li);
+                    });
+                } else { sourceList.innerHTML = '<p>No sources uploaded yet.</p>'; }
+            } catch (error) { sourceList.innerHTML = '<p>Error loading sources.</p>'; }
+            sourceLoader.style.display = 'none';
+        }
+
+        uploadForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const files = pdfInput.files;
+            if (files.length === 0) return;
+            uploadLoader.textContent = `Processing ${files.length} file(s)...`;
+            uploadLoader.style.display = 'block';
+            const formData = new FormData();
+            for (let i = 0; i < files.length; i++) { formData.append('pdfs', files[i]); }
+            try {
+                const response = await fetch(`/upload-source/${projectId}`, { 
+                method: 'POST',
+                body: formData
+                });
+                const result = await response.json();
+                if (result.success) { await loadSources(); } else { alert(`Error: ${result.error}`); }
+            } catch (error) { alert('An unexpected error during upload.'); }
+            uploadLoader.style.display = 'none';
+            uploadForm.reset();
+        });
+        
+        sourceList.addEventListener('click', (e) => {
+            if (e.target && e.target.tagName === 'LI') {
+                const currentSelected = sourceList.querySelector('.selected');
+                
+                // Clear state when selection changes
+                noteIsVisible = false;
+                copyNoteBtn.disabled = true;
+                copyNoteBtn.textContent = 'Copy Note';
+                scratchpad.innerHTML = '<p>Select a source to begin.</p>';
+                generateNoteBtn.disabled = true;
+                resetChat();
+
+
+                if (currentSelected && currentSelected === e.target) {
+                    // Deselecting the current source
+                    currentSelected.classList.remove('selected');
+                    selectedSourceId = null;
+                    chatInput.placeholder = "Ask a question (all sources)...";
+                    addMessage("You are now chatting with all sources.", "bot");
+                } else {
+                    // Selecting a new source
+                    if (currentSelected) { currentSelected.classList.remove('selected'); }
+                    e.target.classList.add('selected');
+                    selectedSourceId = e.target.dataset.sourceId;
+                    generateNoteBtn.disabled = false;
+                    chatInput.placeholder = `Ask about ${selectedSourceId}...`;
+                    addMessage(`Conversation started for ${selectedSourceId}.`, "bot");
+                }
+            }
+        });
+
+        generateNoteBtn.addEventListener('click', async () => {
+            if (!selectedSourceId) return;
+            noteLoader.textContent = 'Fetching note...';
+            noteLoader.style.display = 'block';
+            scratchpad.innerHTML = '';
+            
+            // Disable copy button while fetching
+            copyNoteBtn.disabled = true; 
+            copyNoteBtn.textContent = 'Copy Note';
+            noteIsVisible = false;
+
+            const response = await fetch(`/get-note/${projectId}/${encodeURIComponent(selectedSourceId)}`);
+            const data = await response.json();
+            noteLoader.style.display = 'none';
+
+            if (data.note_html) { 
+                scratchpad.innerHTML = data.note_html; 
+                copyNoteBtn.disabled = false; // Enable copy on success
+                noteIsVisible = true;
+            }
+            else { scratchpad.innerHTML = `<p>Error: ${data.error || 'Could not fetch note.'}</p>`; }
+        });
+
+        // --- NEW: Event listener for our copy button ---
+        copyNoteBtn.addEventListener('click', () => {
+            if (!noteIsVisible) return;
+
+            // Use the modern clipboard API to copy rich text (HTML)
+            const htmlContent = scratchpad.innerHTML;
+            
+            // Check if ClipboardItem is available (modern browsers)
+            if (typeof ClipboardItem !== 'undefined') {
+                const blob = new Blob([htmlContent], { type: 'text/html' });
+                const clipboardItem = new ClipboardItem({ 'text/html': blob });
+
+                navigator.clipboard.write([clipboardItem]).then(() => {
+                    copyNoteBtn.textContent = 'Copied!';
+                    setTimeout(() => { copyNoteBtn.textContent = 'Copy Note'; }, 2000);
+                }).catch(err => {
+                    console.error('Failed to copy HTML: ', err);
+                    copyNoteBtn.textContent = 'Copy Failed (Check Console)';
+                });
+            } else {
+                // Fallback for older browsers (might only copy plain text)
+                navigator.clipboard.writeText(scratchpad.innerText).then(() => {
+                    copyNoteBtn.textContent = 'Copied (Text)!';
+                    setTimeout(() => { copyNoteBtn.textContent = 'Copy Note'; }, 2000);
+                }).catch(err => {
+                    console.error('Failed to copy text: ', err);
+                    copyNoteBtn.textContent = 'Copy Failed';
+                });
+            }
+        });
+        
+        chatForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const question = chatInput.value.trim();
+            if (!question) return;
+
+            addMessage(question, 'user');
+            chatHistory.push({ role: 'user', content: question });
+            chatInput.value = '';
+            addMessage('Thinking...', 'bot', true);
+
+            try {
+                const response = await fetch(`/ask-chatbot/${projectId}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    question: question,
+                    source_id: selectedSourceId, 
+                    history: chatHistory.slice(0, -1)
+                    })
+                });
+                const data = await response.json();
+                const thinkingBubble = document.getElementById('thinking-bubble');
+                if (thinkingBubble) { thinkingBubble.parentElement.remove(); }
+                const answer = data.answer || data.error || "Sorry, something went wrong.";
+                addMessage(answer, 'bot');
+                chatHistory.push({ role: 'bot', content: answer });
+            } catch (error) { console.error("Chatbot fetch error:", error); }
+        });
+
+        function addMessage(text, sender, isThinking = false) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `chat-message ${sender}-message`;
+            const p = document.createElement('p');
+            // Ensure HTML tables/formatting in bot messages are displayed correctly
+            if (sender === 'bot') {
+                 p.innerHTML = text;
+            } else {
+                 p.textContent = text;
+            }
+            if (isThinking) p.id = 'thinking-bubble';
+            messageDiv.appendChild(p);
+            chatWindow.appendChild(messageDiv);
+            chatWindow.scrollTop = chatWindow.scrollHeight;
+        }
+
+        function resetChat() {
+            chatHistory = [];
+            chatWindow.innerHTML = '';
+        }
+
+        loadSources();
+    });
+    </script>
+</body>
+</html>
