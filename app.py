@@ -1,4 +1,4 @@
-# app.py (DEFINITIVE Final Version with OCR and Subcollections for Large Data)
+# app.py (DEFINITIVE Final Version with OCR, Subcollections, and Secure API Key Handling)
 
 import os
 import google.generativeai as genai
@@ -12,11 +12,12 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 import io
 from pdf2image import convert_from_bytes
 import pytesseract
-from PIL import Image # Needed for pdf2image/pytesseract on some systems
+from PIL import Image
+from dotenv import load_dotenv # <-- ADD THIS IMPORT
 
 # --- Load Environment Variables ---
 # This line loads the variables from your .env file (e.g., GEMINI_API_KEY)
-load_dotenv()
+load_dotenv() # <-- ADD THIS LINE
 
 # --- OCR Configuration (Windows Users MUST do this) ---
 try:
@@ -25,28 +26,29 @@ try:
 except:
     print("Tesseract path not explicitly set. Assuming it's in the PATH or on a non-Windows OS.")
 
+
 # --- Configuration & Initialization ---
 # MODIFIED: Get the API key from the environment variables
 API_KEY = os.getenv("GEMINI_API_KEY") 
 if not API_KEY:
     raise ValueError("GEMINI_API_KEY not found. Please set it in your .env file.")
 
-# --- Configuration & Initialization ---
-API_KEY = "AIzaSyBkebq31MWvPEGWx4w92b2B1Swi7Gd1zY4" 
 genai.configure(api_key=API_KEY)
 
+# It's also a good practice to load the Firebase credentials path from .env if you want
+# For now, we'll assume firebase-credentials.json is present locally but ignored by git
 cred = credentials.Certificate("firebase-credentials.json")
 firebase_admin.initialize_app(cred)
 db = firestore.client()
 
 app = Flask(__name__)
 
-# --- NEW Helper Function for splitting the note (for HTML storage) ---
+# --- Helper Function for splitting the note (for HTML storage) ---
 def split_large_string(text, chunk_size=900000): 
     """Splits a large string into chunks safely under the 1MB Firestore limit."""
     return [text[i:i+chunk_size] for i in range(0, len(text), chunk_size)]
 
-# --- NEW Helper Function for batching lists (for Q&A chunks storage) ---
+# --- Helper Function for batching lists (for Q&A chunks storage) ---
 def batch_list(data, batch_size=100):
     """Yield successive n-sized chunks from a list."""
     for i in range(0, len(data), batch_size):
@@ -75,13 +77,15 @@ def extract_text_from_pdf_with_ocr(file_stream):
         print("Direct text extraction failed or insufficient. Falling back to OCR...")
         ocr_text = ""
         try:
-            images = convert_from_bytes(file_bytes)
+            # You might need to specify poppler_path for convert_from_bytes on Windows
+            # poppler_path=r"C:\path\to\poppler-xx\bin"
+            images = convert_from_bytes(file_bytes) 
             for i, image in enumerate(images):
                 print(f"  - OCR on page {i+1}...")
-                ocr_text += pytesseract.image_to_string(image, lang='eng')
+                ocr_text += pytesseract.image_to_string(image, lang='eng') # Specify language if needed
             text = ocr_text
         except Exception as ocr_error:
-            print(f"An error occurred during OCR: {ocr_error}. Is Tesseract installed and configured?")
+            print(f"An error occurred during OCR: {ocr_error}. Is Tesseract and Poppler installed and configured?")
             return text
             
     return text
@@ -92,7 +96,7 @@ def split_into_chunks(text):
     return text_splitter.split_text(text)
 
 def generate_note_for_text(text):
-    model = genai.GenerativeModel('gemini-2.5-flash')
+    model = genai.GenerativeModel('gemini-2.5-flash') # Using 1.5-flash as it's a newer, efficient model
     prompt = f"""
     You are an expert universal study assistant. Your mission is to transform dense academic texts from **any language** into simplified, well-structured, and easy-to-understand study notes.
 
@@ -178,7 +182,6 @@ def create_project():
 def get_sources(project_id):
     try:
         sources_ref = db.collection('projects').document(project_id).collection('sources').stream()
-        # Note: We only fetch metadata here (id, filename)
         sources = [{"id": source.id, "filename": source.to_dict().get('filename')} for source in sources_ref]
         return jsonify(sources)
     except Exception as e:
@@ -204,32 +207,20 @@ def upload_source(project_id):
             note_html = generate_note_for_text(text)
             qna_chunks = split_into_chunks(text)
             
-            # --- NEW LOGIC: Save large data into subcollections ---
             source_ref = db.collection('projects').document(project_id).collection('sources').document(file.filename)
             
-            # 1. Save the main document with just metadata
             source_ref.set({
                 'filename': file.filename,
                 'timestamp': firestore.SERVER_TIMESTAMP
             })
             
-            # 2. Save note_html in pages inside a 'note_pages' subcollection
             note_pages_ref = source_ref.collection('note_pages')
-            
-            # Delete old note pages if they exist (cleanup)
             for doc in note_pages_ref.stream(): doc.reference.delete()
-
-            # Split the HTML into chunks and save
             for i, note_part in enumerate(split_large_string(note_html)):
                 note_pages_ref.document(f'page_{i}').set({'content': note_part})
 
-            # 3. Save qna_chunks in pages inside a 'qna_pages' subcollection
             qna_pages_ref = source_ref.collection('qna_pages')
-            
-            # Delete old qna pages if they exist (cleanup)
             for doc in qna_pages_ref.stream(): doc.reference.delete()
-
-            # Batch Q&A chunks and save
             for i, qna_batch in enumerate(batch_list(qna_chunks, batch_size=100)):
                 qna_pages_ref.document(f'page_{i}').set({'content': qna_batch})
             
@@ -242,10 +233,7 @@ def upload_source(project_id):
 @app.route('/get-note/<project_id>/<source_id>', methods=['GET'])
 def get_note(project_id, source_id):
     try:
-        # Fetch chunks from the 'note_pages' subcollection
         note_pages_ref = db.collection('projects').document(project_id).collection('sources').document(source_id).collection('note_pages').stream()
-        
-        # Reassemble the full note on the server
         note_parts = [doc.to_dict().get('content', '') for doc in note_pages_ref]
         full_note_html = "".join(note_parts)
         
@@ -266,15 +254,14 @@ def ask_chatbot(project_id):
         all_chunks = []
         source_refs = []
 
-        if source_id: # Focused Mode
+        if source_id:
             source_refs.append(db.collection('projects').document(project_id).collection('sources').document(source_id))
-        else: # "Global" Mode for the project (fetch all source documents)
+        else:
             source_refs = db.collection('projects').document(project_id).collection('sources').list_documents()
 
-        # Fetch chunks from the 'qna_pages' subcollection for each source
         for source_ref in source_refs:
             qna_pages = source_ref.collection('qna_pages').stream()
-            source_id_name = source_ref.id # Get the filename/ID for context
+            source_id_name = source_ref.id
             
             for page in qna_pages:
                 chunks_from_page = page.to_dict().get('content', [])
@@ -284,19 +271,15 @@ def ask_chatbot(project_id):
         if not all_chunks:
             return jsonify({"answer": "This project is empty. Please upload documents to this project first."})
 
-        # Simple RAG: Select relevant chunks based on keyword overlap
         question_words = set(question.lower().split())
         relevant_chunks = [c for c in all_chunks if any(word in c['text'].lower() for word in question_words)]
         
-        # Fallback: if no relevant chunks are found, use the first 5 chunks of the data
         if not relevant_chunks: relevant_chunks = all_chunks[:5]
 
-        # Format context for the AI (using the new structured chunk data)
         context = "\n---\n".join([f"Source: {c['source']}\nContent: {c['text']}" for c in relevant_chunks[:5]])
 
-        # Prepare prompt
         formatted_history = "\n".join([f"{'User' if msg['role'] == 'user' else 'Model'}: {msg['content']}" for msg in history])
-        model = genai.GenerativeModel('gemini-2.5-flash-lite')
+        model = genai.GenerativeModel('gemini-2.5-flash')
         
         prompt = f"""
         You are an AI study assistant. Answer the user's NEW QUESTION using the SOURCE MATERIAL and CONVERSATION HISTORY.
@@ -316,7 +299,6 @@ def ask_chatbot(project_id):
         return jsonify({"answer": response.text})
 
     except Exception as e:
-        # In a production environment, this should log the error details securely.
         print(f"Chatbot error: {e}")
         return jsonify({"error": f"An error occurred while communicating with the chatbot: {str(e)}"}), 500
 
