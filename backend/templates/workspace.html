@@ -61,6 +61,82 @@
         #generate-topic-note-btn:hover {
             background-color: #e0a800;
         }
+
+        .panel {
+            position: relative;
+            /* This prevents panels from getting too small during resize */
+            min-width: 150px; 
+        }
+
+        /* Style for the resizer handles */
+        .resizer {
+            flex: 0 0 10px; /* The resizer has a fixed width of 10px */
+            background-color: #eef0f2;
+            cursor: col-resize; /* Cursor indicates horizontal resizing */
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-left: 1px solid #ddd;
+            border-right: 1px solid #ddd;
+            z-index: 5; /* Ensure it's above panels */
+        }
+        .resizer::after {
+            content: '⋮';
+            font-size: 14px;
+            color: #888;
+        }
+
+        /* Style for the drawer toggle buttons */
+        .drawer-toggle {
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 20px;
+            height: 40px;
+            background-color: #007bff;
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 0 5px 5px 0;
+            cursor: pointer;
+            z-index: 10;
+            font-weight: bold;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.2);
+        }
+
+        /* Position the toggles on the correct side */
+        .left-panel .drawer-toggle {
+            right: -20px; /* Sits on the outside edge of the left panel */
+        }
+        .right-panel .drawer-toggle {
+            left: -20px; /* Sits on the outside edge of the right panel */
+            border-radius: 5px 0 0 5px;
+        }
+
+        /* The "collapsed" state for a panel */
+        .panel.collapsed {
+            flex: 0 0 0 !important; /* The magic: makes the panel take up no space */
+            min-width: 0;
+            padding: 0;
+            border: none;
+            overflow: hidden; /* Hide all content when collapsed */
+        }
+
+        /* When a panel is collapsed, we need to hide its resizer too */
+        .panel.collapsed + .resizer {
+            display: none;
+        }
+
+        /* This class prevents ugly text selection during drag */
+        body.resizing {
+            cursor: col-resize;
+            user-select: none; /* A modern CSS property for this */
+            -webkit-user-select: none; /* For older browsers */
+            -moz-user-select: none;
+        }
+
+        
     </style>
 </head>
 <body>
@@ -70,6 +146,9 @@
     <div class="container">
         <!-- Left Panel (Unchanged) -->
         <div class="panel left-panel">
+
+            <div class="drawer-toggle" data-target="left-panel">&larr;</div>
+
             <h2>Sources for {{ project_name }}</h2>
             <ul id="source-list"></ul>
             <div class="loader" id="source-loader">Loading sources...</div>
@@ -79,6 +158,8 @@
             </form>
             <div class="loader" id="upload-loader"></div>
         </div>
+
+        <div class="resizer" data-resizer-type="x"></div>
         
         <!-- Center Panel (Unchanged) -->
         <div class="panel center-panel">
@@ -90,8 +171,13 @@
             </form>
         </div>
 
+        <div class="resizer" data-resizer-type="x"></div>
+
         <!-- Right Panel (MODIFIED to include Topic Generator) -->
         <div class="panel right-panel">
+
+            <div class="drawer-toggle" data-target="right-panel">&rarr;</div>
+
             <h2>Scratchpad</h2>
             <div id="scratchpad"><p>Select a source and click "Show Source Note", or use the tool below to create a custom note from all sources.</p></div>
             <div class="action-buttons">
@@ -333,5 +419,80 @@
         loadSources();
     });
     </script>
+
+    <script>
+
+        document.addEventListener('DOMContentLoaded', () => {
+
+        // --- DRAWER/COLLAPSE LOGIC ---
+        document.querySelectorAll('.drawer-toggle').forEach(toggle => {
+            toggle.addEventListener('click', () => {
+                const targetPanelClass = toggle.dataset.target;
+                const panel = document.querySelector(`.${targetPanelClass}`);
+                
+                panel.classList.toggle('collapsed');
+                
+                // Change the arrow direction based on the collapsed state
+                if (panel.classList.contains('collapsed')) {
+                    toggle.innerHTML = targetPanelClass === 'left-panel' ? '&rarr;' : '&larr;';
+                } else {
+                    toggle.innerHTML = targetPanelClass === 'left-panel' ? '&larr;' : '&rarr;';
+                }
+            });
+        });
+
+        // --- RESIZE LOGIC ---
+        document.querySelectorAll('.resizer[data-resizer-type="x"]').forEach(resizer => {
+            let prevPanel = resizer.previousElementSibling;
+            let nextPanel = resizer.nextElementSibling;
+            let isResizing = false;
+
+            resizer.addEventListener('mousedown', (e) => {
+                // Prevent default drag behavior
+                e.preventDefault();
+                isResizing = true;
+                document.body.classList.add('resizing');
+
+                const handleMouseMove = (moveEvent) => {
+                    if (!isResizing) return;
+
+                    const container = resizer.parentElement;
+                    const containerRect = container.getBoundingClientRect();
+
+                    // Calculate new widths based on mouse position relative to the container
+                    const newPrevPanelWidth = moveEvent.clientX - prevPanel.getBoundingClientRect().left;
+                    
+                    // Adjust for the total flex basis, ensuring they always add up correctly
+                    const totalFlexBasis = parseFloat(prevPanel.style.flexBasis) + parseFloat(nextPanel.style.flexBasis);
+                    const newNextPanelWidth = (prevPanel.offsetWidth + nextPanel.offsetWidth) - newPrevPanelWidth;
+
+                    // Respect min-width constraints (parsed from CSS)
+                    const prevMinWidth = parseInt(getComputedStyle(prevPanel).minWidth, 10);
+                    const nextMinWidth = parseInt(getComputedStyle(nextPanel).minWidth, 10);
+                    
+                    if (newPrevPanelWidth > prevMinWidth && newNextPanelWidth > nextMinWidth) {
+                        // Use flex-basis for better control in a flex layout
+                        prevPanel.style.flex = `0 0 ${newPrevPanelWidth}px`;
+                        nextPanel.style.flex = `0 0 ${newNextPanelWidth}px`;
+                    }
+                };
+
+                const handleMouseUp = () => {
+                    isResizing = false;
+                    document.body.classList.remove('resizing');
+                    // IMPORTANT: Remove listeners from the document to stop tracking
+                    document.removeEventListener('mousemove', handleMouseMove);
+                    document.removeEventListener('mouseup', handleMouseUp);
+                };
+
+                // Attach listeners to the document to capture mouse movement anywhere on the page
+                document.addEventListener('mousemove', handleMouseMove);
+                document.addEventListener('mouseup', handleMouseUp);
+            });
+        });
+    });
+    
+    </script>
+
 </body>
 </html>

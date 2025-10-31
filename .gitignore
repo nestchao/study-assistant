@@ -12,10 +12,6 @@ firebase-credentials.json
 # Python / Backend
 # ===================================================================
 
-# Virtual Environment - This is critical to ignore
-# The slash ensures it only matches the directory in the backend folder
-/backend/venv/
-
 # Compiled Python files
 __pycache__/
 *.pyc
