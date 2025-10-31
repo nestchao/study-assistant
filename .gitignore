@@ -34,16 +34,6 @@ htmlcov/
 # Node.js / Frontend
 # ===================================================================
 
-# Dependencies - This is the most important one for frontend
-# The slash ensures it only matches the directory in the frontend folder
-/frontend/node_modules/
-
-# Build output folders for common frameworks (React, Next.js, etc.)
-/frontend/build/
-/frontend/dist/
-/frontend/.next/
-/frontend/.output/
-
 # Log files
 npm-debug.log*
 yarn-error.log
