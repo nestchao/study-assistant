@@ -1,2 +1,89 @@
+# ===================================================================
+# Secrets and Credentials
+# NEVER commit secret keys, credentials, or environment-specific files.
+# ===================================================================
 .env
+.env.*
+!.env.example
 firebase-credentials.json
+
+
+# ===================================================================
+# Python / Backend
+# ===================================================================
+
+# Virtual Environment - This is critical to ignore
+# The slash ensures it only matches the directory in the backend folder
+/backend/venv/
+
+# Compiled Python files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+*.egg
+
+# Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+
+
+# ===================================================================
+# Node.js / Frontend
+# ===================================================================
+
+# Dependencies - This is the most important one for frontend
+# The slash ensures it only matches the directory in the frontend folder
+/frontend/node_modules/
+
+# Build output folders for common frameworks (React, Next.js, etc.)
+/frontend/build/
+/frontend/dist/
+/frontend/.next/
+/frontend/.output/
+
+# Log files
+npm-debug.log*
+yarn-error.log
+yarn-debug.log
+pnpm-debug.log
+
+# Local environment overrides (for frontend)
+/frontend/.env.local
+/frontend/.env.*.local
+
+
+# ===================================================================
+# IDE and Editor Configuration
+# Keep your repository clean of personal editor settings.
+# ===================================================================
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+*.code-workspace
+
+
+# ===================================================================
+# Operating System Files
+# ===================================================================
+
+# macOS
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+
+# Windows
+Thumbs.db
+ehthumbs.db
+desktop.ini
+
+# Linux
+*~
