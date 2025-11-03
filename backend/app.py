@@ -1,106 +1,97 @@
-# app.py (DEFINITIVE Final Version with OCR, Subcollections, and Secure API Key Handling)
-
+# backend/app.py
 import os
 import google.generativeai as genai
 import PyPDF2
-from flask import Flask, request, jsonify, render_template
 import markdown
 import time
 import firebase_admin
 from firebase_admin import credentials, firestore
+from flask import Flask, request, jsonify, render_template
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-import io
 from pdf2image import convert_from_bytes
 import pytesseract
-from PIL import Image
-from dotenv import load_dotenv # <-- ADD THIS IMPORT
+from dotenv import load_dotenv
+from flask_cors import CORS
+import re
 
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# --- LOAD .env ---
+load_dotenv()
 
-# --- Load Environment Variables ---
-# This line loads the variables from your .env file (e.g., GEMINI_API_KEY)
-dotenv_path = os.path.join(PROJECT_ROOT, '.env')
-load_dotenv(dotenv_path=dotenv_path)
-
-# --- OCR Configuration (Windows Users MUST do this) ---
-try:
-    # IMPORTANT: Update this path if you are on Windows
-    pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
-except:
-    print("Tesseract path not explicitly set. Assuming it's in the PATH or on a non-Windows OS.")
-
-
-# --- Configuration & Initialization ---
-# MODIFIED: Get the API key from the environment variables
-API_KEY = os.getenv("GEMINI_API_KEY") 
+# --- CONFIG ---
+API_KEY = os.getenv("GEMINI_API_KEY")
 if not API_KEY:
-    raise ValueError("GEMINI_API_KEY not found. Please set it in your .env file.")
+    raise ValueError("GEMINI_API_KEY missing in .env")
 
-genai.configure(api_key=API_KEY)
+genai.configure(
+    api_key=API_KEY,
+    transport='rest'  # Add this
+)
+pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
-# It's also a good practice to load the Firebase credentials path from .env if you want
-# For now, we'll assume firebase-credentials.json is present locally but ignored by git
-credentials_path = os.path.join(PROJECT_ROOT, 'firebase-credentials.json')
-cred = credentials.Certificate(credentials_path) # <-- Use the full path
+# --- FIREBASE ---
+cred = credentials.Certificate("../firebase-credentials.json")
 firebase_admin.initialize_app(cred)
 db = firestore.client()
 
 app = Flask(__name__)
+CORS(app)
 
-# --- Helper Function for splitting the note (for HTML storage) ---
-def split_large_string(text, chunk_size=900000): 
-    """Splits a large string into chunks safely under the 1MB Firestore limit."""
-    return [text[i:i+chunk_size] for i in range(0, len(text), chunk_size)]
-
-# --- Helper Function for batching lists (for Q&A chunks storage) ---
-def batch_list(data, batch_size=100):
-    """Yield successive n-sized chunks from a list."""
-    for i in range(0, len(data), batch_size):
-        yield data[i:i + batch_size]
-
-# --- MODIFIED Helper Function to include OCR ---
-def extract_text_from_pdf_with_ocr(file_stream):
-    """
-    Tries to extract text directly from a PDF. If that fails (e.g., it's a scanned PDF), 
-    it falls back to converting pages to images and running OCR (Tesseract).
-    """
-    # Read the entire file content into memory as bytes
-    file_bytes = file_stream.read()
-    
-    # 1. First, try the fast direct text extraction (PDFs with text layers)
+def extract_text(pdf_stream):
+    """OCR + Text Extract with logging"""
+    print("  🔍 Attempting text extraction...")
     text = ""
+    
     try:
-        reader = PyPDF2.PdfReader(io.BytesIO(file_bytes))
-        for page in reader.pages:
-            text += page.extract_text() or ""
+        reader = PyPDF2.PdfReader(pdf_stream)
+        print(f"  📄 PDF has {len(reader.pages)} pages")
+        
+        for i, page in enumerate(reader.pages):
+            page_text = page.extract_text() or ""
+            text += page_text
+            if i == 0:
+                print(f"  ✓ Page 1 extracted: {len(page_text)} chars")
+        
+        print(f"  ✅ PyPDF2 extracted: {len(text)} chars total")
     except Exception as e:
-        print(f"PyPDF2 direct extraction failed: {e}")
-
-    # 2. If direct extraction yields little or no text, perform OCR
+        print(f"  ⚠️  PyPDF2 failed: {e}")
+    
     if len(text.strip()) < 100:
-        print("Direct text extraction failed or insufficient. Falling back to OCR...")
-        ocr_text = ""
+        print("  🔄 Text too short, trying OCR...")
         try:
-            # You might need to specify poppler_path for convert_from_bytes on Windows
-            # poppler_path=r"C:\path\to\poppler-xx\bin"
-            images = convert_from_bytes(file_bytes) 
-            for i, image in enumerate(images):
-                print(f"  - OCR on page {i+1}...")
-                ocr_text += pytesseract.image_to_string(image, lang='eng') # Specify language if needed
-            text = ocr_text
-        except Exception as ocr_error:
-            print(f"An error occurred during OCR: {ocr_error}. Is Tesseract and Poppler installed and configured?")
-            return text
+            pdf_stream.seek(0)
+            images = convert_from_bytes(pdf_stream.read())
+            print(f"  📸 Converted to {len(images)} images")
             
+            ocr_text = ""
+            for i, img in enumerate(images):
+                page_text = pytesseract.image_to_string(img)
+                ocr_text += page_text
+                if i == 0:
+                    print(f"  ✓ OCR page 1: {len(page_text)} chars")
+            
+            text = ocr_text
+            print(f"  ✅ OCR extracted: {len(text)} chars total")
+        except Exception as e:
+            print(f"  ❌ OCR failed: {e}")
+    
     return text
 
-# --- Helper Functions (Remaining ones are perfect) ---
-def split_into_chunks(text):
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1500, chunk_overlap=200, length_function=len)
-    return text_splitter.split_text(text)
+def split_chunks(text):
+    print("  ✂️  Splitting text into chunks...")
+    splitter = RecursiveCharacterTextSplitter(chunk_size=1500, chunk_overlap=200)
+    chunks = splitter.split_text(text)
+    print(f"  ✅ Created {len(chunks)} chunks")
+    return chunks
 
-def generate_note_for_text(text):
-    model = genai.GenerativeModel('gemini-2.5-flash') # Using 1.5-flash as it's a newer, efficient model
+def split_chunks(text):
+    splitter = RecursiveCharacterTextSplitter(chunk_size=1500, chunk_overlap=200)
+    return splitter.split_text(text)
+
+def generate_note(text):
+
+    print("  🤖 Generating AI study note with gemini-pro-latest...")
+    model = genai.GenerativeModel('models/gemini-pro-latest')
+
     prompt = f"""
     You are an expert universal study assistant. Your mission is to transform dense academic texts from **any language** into simplified, well-structured, and exceptionally easy-to-understand study notes.
 
@@ -140,236 +131,314 @@ def generate_note_for_text(text):
     {text}
     ---
     """
-    response = model.generate_content(prompt)
-    generated_note_markdown = response.text
-    return markdown.markdown(generated_note_markdown, extensions=['tables'])
+    try:
+        response = model.generate_content(prompt)
+        return markdown.markdown(response.text)
+    except Exception as e:
+        print(f"  ❌ Generation failed: {e}")
+        raise
 
-# --- Main App Routes ---
+def batch_save(collection, items, batch_size=100):
+    batch = db.batch()
+    for i, item in enumerate(items):
+        if i % batch_size == 0 and i > 0:
+            batch.commit()
+            batch = db.batch()
+        ref = collection.document()
+        batch.set(ref, item)
+    batch.commit()
+
+# --- ROUTES ---
 @app.route('/')
-def dashboard():
-    """Renders the main project dashboard."""
+def home():
     return render_template('dashboard.html')
 
 @app.route('/workspace/<project_id>')
 def workspace(project_id):
-    """Renders the workspace for a specific project."""
-    project_doc = db.collection('projects').document(project_id).get()
-    if not project_doc.exists:
-        return "Project not found", 404
-    project_name = project_doc.to_dict().get('name', 'Untitled Project')
-    return render_template('workspace.html', project_id=project_id, project_name=project_name)
+    doc = db.collection('projects').document(project_id).get()
+    name = doc.to_dict().get('name', 'Project') if doc.exists else 'Not Found'
+    return render_template('workspace.html', project_id=project_id, project_name=name)
 
-# --- Dashboard API Endpoints ---
-@app.route('/get-projects', methods=['GET'])
+# --- API ---
+@app.route('/get-projects')
 def get_projects():
-    try:
-        projects_ref = db.collection('projects').order_by('timestamp', direction=firestore.Query.DESCENDING).stream()
-        projects = [{"id": proj.id, "name": proj.to_dict().get('name')} for proj in projects_ref]
-        return jsonify(projects)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    docs = db.collection('projects').stream()
+    return jsonify([{"id": d.id, "name": d.to_dict().get('name')} for d in docs])
 
 @app.route('/create-project', methods=['POST'])
 def create_project():
-    project_name = request.get_json().get('name')
-    if not project_name:
-        return jsonify({"error": "Project name is required"}), 400
-    try:
-        doc_ref = db.collection('projects').document()
-        doc_ref.set({'name': project_name, 'timestamp': firestore.SERVER_TIMESTAMP})
-        return jsonify({"success": True, "id": doc_ref.id})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-# --- Workspace API Endpoints ---
-@app.route('/get-sources/<project_id>', methods=['GET'])
-def get_sources(project_id):
-    try:
-        sources_ref = db.collection('projects').document(project_id).collection('sources').stream()
-        sources = [{"id": source.id, "filename": source.to_dict().get('filename')} for source in sources_ref]
-        return jsonify(sources)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/upload-source/<project_id>', methods=['POST'])
-def upload_source(project_id):
-    files = request.files.getlist('pdfs')
-    if not files: return jsonify({"error": "No files selected"}), 400
-    
-    processed_files = []
-    try:
-        for file in files:
-            print(f"Processing file with OCR support: {file.filename}...")
-            
-            file.stream.seek(0)
-            text = extract_text_from_pdf_with_ocr(file.stream)
-            
-            if not text.strip(): 
-                print(f"Could not extract any text from {file.filename}, skipping.")
-                continue
-
-            note_html = generate_note_for_text(text)
-            qna_chunks = split_into_chunks(text)
-            
-            source_ref = db.collection('projects').document(project_id).collection('sources').document(file.filename)
-            
-            source_ref.set({
-                'filename': file.filename,
-                'timestamp': firestore.SERVER_TIMESTAMP
-            })
-            
-            note_pages_ref = source_ref.collection('note_pages')
-            for doc in note_pages_ref.stream(): doc.reference.delete()
-            for i, note_part in enumerate(split_large_string(note_html)):
-                note_pages_ref.document(f'page_{i}').set({'content': note_part})
-
-            qna_pages_ref = source_ref.collection('qna_pages')
-            for doc in qna_pages_ref.stream(): doc.reference.delete()
-            for i, qna_batch in enumerate(batch_list(qna_chunks, batch_size=100)):
-                qna_pages_ref.document(f'page_{i}').set({'content': qna_batch})
-            
-            processed_files.append(file.filename)
-            time.sleep(1) 
-        return jsonify({"success": True, "processed_files": processed_files})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/get-note/<project_id>/<source_id>', methods=['GET'])
-def get_note(project_id, source_id):
-    try:
-        note_pages_ref = db.collection('projects').document(project_id).collection('sources').document(source_id).collection('note_pages').stream()
-        note_parts = [doc.to_dict().get('content', '') for doc in note_pages_ref]
-        full_note_html = "".join(note_parts)
-        
-        if not full_note_html:
-            return jsonify({"error": "Note pages not found or note is empty."}), 404
-
-        return jsonify({"note_html": full_note_html})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    name = request.json.get('name')
+    ref = db.collection('projects').document()
+    ref.set({'name': name, 'timestamp': firestore.SERVER_TIMESTAMP})
+    return jsonify({"id": ref.id})
 
 @app.route('/ask-chatbot/<project_id>', methods=['POST'])
 def ask_chatbot(project_id):
-    data = request.get_json()
-    question, source_id, history = data.get('question'), data.get('source_id'), data.get('history', [])
-    if not question: return jsonify({"error": "No question provided"}), 400
+    data = request.json
+    q = data.get('question')
+    src = data.get('source_id')
+    
+    # Get chunks
+    all_chunks = []
+    
+    if src:
+        # Get chunks from specific source
+        chunk_docs = db.collection('projects').document(project_id) \
+            .collection('sources').document(src) \
+            .collection('chunks').stream()
+        
+        for doc in chunk_docs:
+            all_chunks.extend(doc.to_dict().get('chunks', []))
+    else:
+        # Get chunks from all sources
+        sources = db.collection('projects').document(project_id) \
+            .collection('sources').stream()
+        
+        for source in sources:
+            chunk_docs = source.reference.collection('chunks').stream()
+            for doc in chunk_docs:
+                all_chunks.extend(doc.to_dict().get('chunks', []))
 
+    if not all_chunks:
+        return jsonify({"answer": "Please upload a PDF first!"})
+
+    # Use first 10 chunks as context
+    context = "\n---\n".join(all_chunks[:10])
+    
+    model = genai.GenerativeModel('models/gemini-pro-latest')  # ✅ Updated
+    prompt = f"Answer using only this context:\n{context}\n\nQuestion: {q}\nAnswer:"
+    
     try:
-        all_chunks = []
-        source_refs = []
-
-        if source_id:
-            source_refs.append(db.collection('projects').document(project_id).collection('sources').document(source_id))
-        else:
-            source_refs = db.collection('projects').document(project_id).collection('sources').list_documents()
-
-        for source_ref in source_refs:
-            qna_pages = source_ref.collection('qna_pages').stream()
-            source_id_name = source_ref.id
-            
-            for page in qna_pages:
-                chunks_from_page = page.to_dict().get('content', [])
-                for chunk in chunks_from_page:
-                    all_chunks.append({"text": chunk, "source": source_id_name})
-        
-        if not all_chunks:
-            return jsonify({"answer": "This project is empty. Please upload documents to this project first."})
-
-        question_words = set(question.lower().split())
-        relevant_chunks = [c for c in all_chunks if any(word in c['text'].lower() for word in question_words)]
-        
-        if not relevant_chunks: relevant_chunks = all_chunks[:5]
-
-        context = "\n---\n".join([f"Source: {c['source']}\nContent: {c['text']}" for c in relevant_chunks[:5]])
-
-        formatted_history = "\n".join([f"{'User' if msg['role'] == 'user' else 'Model'}: {msg['content']}" for msg in history])
-        model = genai.GenerativeModel('gemini-2.5-flash')
-        
-        prompt = f"""
-        You are an AI study assistant. Answer the user's NEW QUESTION using the SOURCE MATERIAL and CONVERSATION HISTORY.
-        Base your answer ONLY on the source material. If the answer isn't there, state that the information is not in the sources.
-        
-        --- SOURCE MATERIAL (Context derived from relevant document chunks) ---
-        {context}
-        --- END SOURCE ---
-        
-        --- CONVERSATION HISTORY ---
-        {formatted_history}
-        --- END HISTORY ---
-        
-        NEW QUESTION: {question}\nANSWER:"""
-        
-        response = model.generate_content(prompt)
-        return jsonify({"answer": response.text})
-
+        answer = model.generate_content(prompt).text
+        return jsonify({"answer": answer})
     except Exception as e:
-        print(f"Chatbot error: {e}")
-        return jsonify({"error": f"An error occurred while communicating with the chatbot: {str(e)}"}), 500
+        return jsonify({"answer": f"Error: {e}"})
 
 @app.route('/generate-topic-note/<project_id>', methods=['POST'])
-def generate_topic_note(project_id):
-    data = request.get_json()
-    topic = data.get('topic')
-    if not topic:
-        return jsonify({"error": "No topic provided"}), 400
-
+def topic_note(project_id):
+    topic = request.json.get('topic')
+    
+    all_chunks = []
+    sources = db.collection('projects').document(project_id).collection('sources').stream()
+    
+    for source in sources:
+        chunk_docs = source.reference.collection('chunks').stream()
+        for doc in chunk_docs:
+            all_chunks.extend(doc.to_dict().get('chunks', []))
+    
+    context = "\n".join(all_chunks[:20])
+    
+    model = genai.GenerativeModel('models/gemini-pro-latest')  # ✅ Updated
+    prompt = f"Make a study note about: {topic}\nUse this:\n{context}"
+    
     try:
-        # Step 1: Gather all Q&A chunks for the entire project
-        # This logic is similar to the chatbot's "global mode"
-        all_chunks = []
-        source_refs = db.collection('projects').document(project_id).collection('sources').list_documents()
-        for source_ref in source_refs:
-            qna_pages = source_ref.collection('qna_pages').stream()
-            for page in qna_pages:
-                chunks_from_page = page.to_dict().get('content', [])
-                for chunk in chunks_from_page:
-                    all_chunks.append({"text": chunk, "source": source_ref.id})
+        html = markdown.markdown(model.generate_content(prompt).text)
+        return jsonify({"note_html": html})
+    except Exception as e:
+        return jsonify({"note_html": f"<p>Error generating note: {e}</p>"})
+
+@app.route('/upload-source/<project_id>', methods=['POST'])
+def upload_source(project_id):
+    print("=" * 80)
+    print(f"📁 UPLOAD REQUEST for project: {project_id}")
+    print("=" * 80)
+    
+    # Check if files exist in request
+    if 'pdfs' not in request.files:
+        print("❌ ERROR: No 'pdfs' field in request!")
+        print(f"Available fields: {list(request.files.keys())}")
+        return jsonify({"error": "No files provided", "success": False}), 400
+    
+    files = request.files.getlist('pdfs')
+    print(f"📦 Received {len(files)} file(s)")
+    
+    if not files or files[0].filename == '':
+        print("❌ ERROR: Empty file list or no filename")
+        return jsonify({"error": "No files selected", "success": False}), 400
+    
+    processed = []
+    errors = []
+
+    for idx, file in enumerate(files):
+        print(f"\n{'─' * 60}")
+        print(f"🔄 Processing file {idx + 1}/{len(files)}")
+        print(f"{'─' * 60}")
         
-        if not all_chunks:
-            return jsonify({"error": "This project has no sources to generate a note from."}), 400
-
-        # Step 2: Find the most relevant chunks based on the topic
-        # We use a simple keyword search, but this is where semantic search would be powerful
-        topic_words = set(topic.lower().split())
-        relevant_chunks = [c for c in all_chunks if any(word in c['text'].lower() for word in topic_words)]
+        filename = file.filename
+        print(f"📄 Original filename: {filename}")
         
-        # If we don't find many direct matches, we can broaden the context
-        if len(relevant_chunks) < 5:
-            relevant_chunks.extend(all_chunks[:10]) # Add some general context
+        safe_id = re.sub(r'[.#$/[\]]', '_', filename)
+        print(f"🔐 Safe ID: {safe_id}")
 
-        # Remove duplicates
-        unique_chunks = list({v['text']:v for v in relevant_chunks}.values())
-        context = "\n---\n".join([f"Source: {c['source']}\nContent: {c['text']}" for c in unique_chunks[:20]]) # Use a larger context for note generation
+        try:
+            # Step 1: Extract text
+            print("📖 Step 1: Extracting text from PDF...")
+            file.stream.seek(0)
+            text = extract_text(file.stream)
+            
+            print(f"✅ Text extracted: {len(text)} characters")
+            
+            if not text.strip():
+                error_msg = f"No text extracted from {filename}"
+                print(f"⚠️  WARNING: {error_msg}")
+                errors.append({"filename": filename, "error": error_msg})
+                continue
+            
+            print(f"📝 Preview: {text[:200]}...")
 
-        # Step 3: Call the AI with a specialized "Note Generation" prompt
-        model = genai.GenerativeModel('gemini-2.5-flash')
-        prompt = f"""
-        You are an expert study assistant. Your task is to generate a well-structured and detailed note based on a specific user request and the provided source material.
+            # Step 2: Create source document
+            print("💾 Step 2: Creating source document in Firestore...")
+            source_ref = db.collection('projects').document(project_id) \
+                             .collection('sources').document(safe_id)
+            
+            source_ref.set({
+                'filename': filename, 
+                'timestamp': firestore.SERVER_TIMESTAMP,
+                'character_count': len(text)
+            })
+            print(f"✅ Source document created: projects/{project_id}/sources/{safe_id}")
 
-        USER REQUEST: "{topic}"
+            # Step 3: Generate AI note
+            print("🤖 Step 3: Generating AI study note...")
+            try:
+                note_html = generate_note(text)
+                print(f"✅ Note generated: {len(note_html)} characters")
+            except Exception as e:
+                error_msg = f"AI generation failed: {str(e)}"
+                print(f"❌ ERROR: {error_msg}")
+                note_html = f"<p>AI note generation failed: {e}</p>"
 
-        SOURCE MATERIAL (Excerpts from user's documents):
-        ---
-        {context}
-        ---
+            # Step 4: Save note in chunks
+            print("💾 Step 4: Saving note pages to Firestore...")
+            chunk_size = 900000
+            note_pages_saved = 0
+            
+            for i in range(0, len(note_html), chunk_size):
+                chunk = note_html[i:i+chunk_size]
+                page_num = i // chunk_size
+                
+                source_ref.collection('note_pages').document(f'page_{page_num}').set({
+                    'html': chunk,
+                    'order': page_num
+                })
+                note_pages_saved += 1
+                print(f"  ✓ Saved note page {page_num} ({len(chunk)} chars)")
+            
+            print(f"✅ Total note pages saved: {note_pages_saved}")
+
+            # Step 5: Split text for Q&A
+            print("✂️  Step 5: Splitting text into chunks for Q&A...")
+            text_chunks = split_chunks(text)
+            print(f"✅ Created {len(text_chunks)} text chunks")
+            
+            # Step 6: Save Q&A chunks
+            print("💾 Step 6: Saving Q&A chunks to Firestore...")
+            chunks_docs_saved = 0
+            
+            for i in range(0, len(text_chunks), 100):
+                batch_chunks = text_chunks[i:i+100]
+                page_num = i // 100
+                
+                source_ref.collection('chunks').document(f'page_{page_num}').set({
+                    'chunks': batch_chunks,
+                    'order': page_num,
+                    'count': len(batch_chunks)
+                })
+                chunks_docs_saved += 1
+                print(f"  ✓ Saved chunk page {page_num} ({len(batch_chunks)} chunks)")
+            
+            print(f"✅ Total chunk pages saved: {chunks_docs_saved}")
+
+            processed.append({
+                "filename": filename, 
+                "id": safe_id,
+                "text_length": len(text),
+                "note_pages": note_pages_saved,
+                "chunk_pages": chunks_docs_saved
+            })
+            
+            print(f"✅ ✅ ✅ SUCCESS: {filename} fully processed!")
+
+        except Exception as e:
+            error_msg = f"Failed to process {filename}: {str(e)}"
+            print(f"❌ CRITICAL ERROR: {error_msg}")
+            import traceback
+            print(traceback.format_exc())
+            errors.append({"filename": filename, "error": error_msg})
+
+    print("\n" + "=" * 80)
+    print(f"📊 UPLOAD SUMMARY")
+    print("=" * 80)
+    print(f"✅ Successfully processed: {len(processed)}")
+    print(f"❌ Errors: {len(errors)}")
+    
+    if processed:
+        print("\n✅ Processed files:")
+        for p in processed:
+            print(f"  - {p['filename']} (ID: {p['id']})")
+    
+    if errors:
+        print("\n❌ Errors:")
+        for e in errors:
+            print(f"  - {e['filename']}: {e['error']}")
+    
+    print("=" * 80)
+
+    return jsonify({
+        "success": len(processed) > 0,
+        "processed": processed,
+        "errors": errors
+    })
+
+@app.route('/test-models')
+def test_models():
+    try:
+        print("🔍 Checking available models...")
+        models = genai.list_models()
+        available = []
+        for m in models:
+            print(f"  Found: {m.name} - {m.display_name}")
+            if 'generateContent' in m.supported_generation_methods:
+                available.append({
+                    'name': m.name,
+                    'display_name': m.display_name,
+                    'supported_methods': m.supported_generation_methods
+                })
+        return jsonify({
+            "success": True,
+            "available_models": available,
+            "count": len(available)
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }), 500
+
+@app.route('/get-sources/<project_id>')
+def get_sources(project_id):
+    docs = db.collection('projects').document(project_id) \
+             .collection('sources').stream()
+    return jsonify([{
+        "id": d.id,                 
+        "filename": d.to_dict().get('filename')
+    } for d in docs])
+
+@app.route('/get-note/<project_id>/<path:source_id>')
+def get_note(project_id, source_id):
+    try:
+        pages = db.collection('projects').document(project_id) \
+                  .collection('sources').document(source_id) \
+                  .collection('note_pages').stream()
         
-        INSTRUCTIONS:
-        1.  Carefully read the USER REQUEST to understand the goal of the note.
-        2.  Thoroughly review the SOURCE MATERIAL to find all relevant information.
-        3.  Synthesize ONLY the relevant information into a new note that directly addresses the user's request.
-        4.  Format the note clearly using markdown (headings, bullet points, tables, bold text).
-        5.  Do NOT include information that is not relevant to the user's request.
-        6.  If the source material does not contain enough information to address the request, state that clearly.
-        """
-        
-        response = model.generate_content(prompt)
-        generated_note_markdown = response.text
-        note_html = markdown.markdown(generated_note_markdown, extensions=['tables'])
-
-        return jsonify({"note_html": note_html})
-
+        html = "".join(p.to_dict().get('html', '') for p in pages)
+        return jsonify({"note_html": html or "<p>No note generated yet.</p>"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-    
+
+
+
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(host='0.0.0.0', port=5000, debug=True)
