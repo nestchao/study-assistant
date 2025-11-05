@@ -90,13 +90,38 @@ def extract_text(pdf_stream):
     
     return text
 
-# CORRECTED: Removed the duplicate function definition
 def split_chunks(text):
     print("  ✂️  Splitting text into chunks...")
     splitter = RecursiveCharacterTextSplitter(chunk_size=1500, chunk_overlap=200)
     chunks = splitter.split_text(text)
     print(f"  ✅ Created {len(chunks)} chunks")
     return chunks
+
+def extract_text_from_image(image_stream):
+    """Extracts text from an image file stream using OCR."""
+    print("  🖼️  Extracting text from image via OCR...")
+    try:
+        image = Image.open(image_stream)
+        text = pytesseract.image_to_string(image)
+        print(f"  ✅ OCR extracted {len(text)} characters from image.")
+        return text
+    except Exception as e:
+        print(f"  ❌ Image OCR failed: {e}")
+        return ""
+    
+def get_project_context(project_id):
+    """Fetches all text chunks from all sources in a project."""
+    all_chunks = []
+    sources_ref = db.collection('projects').document(project_id).collection('sources')
+    for source_doc in sources_ref.stream():
+        chunks_ref = source_doc.reference.collection('chunks')
+        for chunk_doc in chunks_ref.stream():
+            all_chunks.extend(chunk_doc.to_dict().get('chunks', []))
+    
+    # Join the first 30 chunks for a reasonably sized context
+    context = "\n---\n".join(all_chunks[:30])
+    print(f"  📚 Retrieved context of {len(context)} characters for project {project_id}")
+    return context
 
 def generate_note(text):
 
@@ -159,7 +184,6 @@ def batch_save(collection, items, batch_size=100):
         batch.set(ref, item)
     batch.commit()
 
-# NEW: Add this helper function for recursive deletion
 def delete_collection(coll_ref, batch_size):
     """
     Recursively deletes all documents and subcollections within a collection.
@@ -181,10 +205,49 @@ def delete_collection(coll_ref, batch_size):
         return delete_collection(coll_ref, batch_size)
 
 # --- ROUTES ---
-# CORRECTED: Removed the old @app.route('/') and @app.route('/workspace/...') routes
-# that were causing the crash.
 
-# --- ADD THIS ENTIRE NEW ROUTE ---
+# ADDED: Health-check route
+@app.route('/api/hello')
+def hello():
+    return jsonify({"message": "Hello from your Python Backend!"})
+
+# GET Projects
+@app.route('/get-projects')
+def get_projects():
+    docs = db.collection('projects').stream()
+    return jsonify([{"id": d.id, "name": d.to_dict().get('name'), "timestamp": d.to_dict().get('timestamp')} for d in docs])
+
+# POST Create Project
+@app.route('/create-project', methods=['POST'])
+def create_project():
+    name = request.json.get('name')
+    ref = db.collection('projects').document()
+    ref.set({'name': name, 'timestamp': firestore.SERVER_TIMESTAMP})
+    return jsonify({"id": ref.id})
+
+# --- NEW: PUT Rename Project ---
+@app.route('/rename-project/<project_id>', methods=['PUT'])
+def rename_project(project_id):
+    print(f"\n✏️  RENAME REQUEST for project: {project_id}")
+    try:
+        new_name = request.json.get('new_name')
+        if not new_name:
+            return jsonify({"success": False, "error": "New name not provided"}), 400
+
+        project_ref = db.collection('projects').document(project_id)
+        project_ref.update({'name': new_name})
+        
+        print(f"✅ Successfully renamed project to: {new_name}")
+        return jsonify({"success": True, "message": f"Project renamed to {new_name}."}), 200
+
+    except Exception as e:
+        import traceback
+        print(f"❌ Error renaming project {project_id}: {e}")
+        print(traceback.format_exc())
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# DELETE Project
 @app.route('/delete-project/<project_id>', methods=['DELETE'])
 def delete_project(project_id):
     print(f"\n🗑️  DELETE REQUEST for project: {project_id}")
@@ -208,24 +271,31 @@ def delete_project(project_id):
         print(traceback.format_exc())
         return jsonify({"success": False, "error": str(e)}), 500
 
-# ADDED: A simple health-check route for the Flutter app to call.
-@app.route('/api/hello')
-def hello():
-    return jsonify({"message": "Hello from your Python Backend!"})
+# --- NEW: DELETE Source ---
+@app.route('/delete-source/<project_id>/<path:source_id>', methods=['DELETE'])
+def delete_source(project_id, source_id):
+    print(f"\n🗑️  DELETE REQUEST for source: {source_id} in project: {project_id}")
+    try:
+        source_ref = db.collection('projects').document(project_id).collection('sources').document(source_id)
 
-# --- API ---
-@app.route('/get-projects')
-def get_projects():
-    docs = db.collection('projects').stream()
-    return jsonify([{"id": d.id, "name": d.to_dict().get('name')} for d in docs])
+        # 1. Delete subcollections (note_pages, chunks)
+        for collection_ref in source_ref.collections():
+            print(f"  Deleting subcollection: {collection_ref.id}")
+            delete_collection(collection_ref, batch_size=50)
 
-@app.route('/create-project', methods=['POST'])
-def create_project():
-    name = request.json.get('name')
-    ref = db.collection('projects').document()
-    ref.set({'name': name, 'timestamp': firestore.SERVER_TIMESTAMP})
-    return jsonify({"id": ref.id})
+        # 2. Delete the source document itself
+        source_ref.delete()
+        print(f"✅ Successfully deleted source document: {source_id}")
 
+        return jsonify({"success": True, "message": f"Source {source_id} deleted."}), 200
+
+    except Exception as e:
+        import traceback
+        print(f"❌ Error deleting source {source_id}: {e}")
+        print(traceback.format_exc())
+        return jsonify({"success": False, "error": str(e)}), 500
+
+# Other routes...
 @app.route('/ask-chatbot/<project_id>', methods=['POST'])
 def ask_chatbot(project_id):
     data = request.json
@@ -485,6 +555,24 @@ def get_note(project_id, source_id):
         return jsonify({"note_html": html or "<p>No note generated yet.</p>"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+    
+@app.route('/get-papers/<project_id>')
+def get_papers(project_id):
+    try:
+        papers_ref = db.collection('projects').document(project_id).collection('past_papers').order_by('timestamp', direction=firestore.Query.DESCENDING)
+        papers = []
+        for doc in papers_ref.stream():
+            paper_data = doc.to_dict()
+            papers.append({
+                "id": doc.id,
+                "filename": paper_data.get("filename"),
+                "qa_pairs": paper_data.get("qa_pairs", [])
+            })
+        return jsonify(papers)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    
+
 
 @app.route('/update-note/<project_id>/<path:source_id>', methods=['POST'])
 def update_note(project_id, source_id):

@@ -25,9 +25,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   void _showCreateProjectDialog() {
-    // Using the provider's controller is better for state management
     final provider = Provider.of<ProjectProvider>(context, listen: false);
-    provider.projectNameController.clear(); // Clear previous input
+    provider.projectNameController.clear();
 
     showDialog(
       context: context,
@@ -65,6 +64,57 @@ class _DashboardScreenState extends State<DashboardScreen> {
       },
     );
   }
+  
+  // --- NEW: Rename Project Dialog ---
+  void _showRenameProjectDialog(Project project) {
+    final provider = Provider.of<ProjectProvider>(context, listen: false);
+    provider.projectNameController.text = project.name; // Pre-fill with current name
+
+    showDialog(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Text('Rename Project'),
+          content: TextField(
+            controller: provider.projectNameController,
+            autofocus: true,
+            decoration: InputDecoration(
+              hintText: "Enter a new name",
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            onSubmitted: (value) => _renameProject(dialogContext, project.id, value),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+              onPressed: () => _renameProject(
+                dialogContext,
+                project.id,
+                provider.projectNameController.text,
+              ),
+              child: const Text('Save'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  // --- NEW: Rename Project Logic ---
+  void _renameProject(BuildContext dialogContext, String projectId, String newName) {
+    if (newName.trim().isNotEmpty) {
+      Provider.of<ProjectProvider>(context, listen: false)
+          .renameProject(projectId, newName.trim());
+      Navigator.of(dialogContext).pop();
+    }
+  }
 
   void _createProject(BuildContext context, String name) {
     if (name.trim().isNotEmpty) {
@@ -89,7 +139,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
         backgroundColor: primaryColor,
         elevation: 1.0,
         actions: [
-          // Add a refresh button for manual updates
           IconButton(
             icon: const Icon(Icons.refresh, color: Colors.white),
             onPressed: () {
@@ -102,7 +151,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
       ),
       body: Consumer<ProjectProvider>(
         builder: (context, provider, child) {
-          // Show loading spinner only if the cache was empty initially
           if (provider.isLoadingProjects && provider.projects.isEmpty) {
             return const Center(child: CircularProgressIndicator());
           }
@@ -158,7 +206,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Widget _buildEmptyState() {
     return Center(
-      child: SingleChildScrollView( // Prevents overflow on small screens
+      child: SingleChildScrollView(
         child: Padding(
           padding: const EdgeInsets.all(32.0),
           child: Column(
@@ -257,7 +305,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
             delegate: SliverChildBuilderDelegate(
               (context, index) {
                 final project = projects[index];
-                final bool isDeleting = provider.deletingProjectId == project.id;
+                final isDeleting = provider.deletingProjectId == project.id;
+                final isRenaming = provider.renamingProjectId == project.id;
+                final isLoading = isDeleting || isRenaming;
 
                 return Card(
                   margin: const EdgeInsets.symmetric(vertical: 8.0),
@@ -269,12 +319,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   ),
                   child: InkWell(
                     borderRadius: BorderRadius.circular(12.0),
-                    onTap: isDeleting
+                    onTap: isLoading
                         ? null
                         : () {
                             provider.setCurrentProject(project);
                             Navigator.of(context).push(MaterialPageRoute(
-                              builder: (_) => WorkspaceScreen(),
+                              builder: (_) => const WorkspaceScreen(),
                             ));
                           },
                     child: Padding(
@@ -321,11 +371,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                               ],
                             ),
                           ),
-                          // Action Button / Spinner
+                          // Action Buttons / Spinner
                           SizedBox(
-                            width: 48,
+                            width: 88, // Increased width for two buttons
                             height: 48,
-                            child: isDeleting
+                            child: isLoading
                                 ? const Center(
                                     child: SizedBox(
                                       width: 24,
@@ -333,15 +383,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                       child: CircularProgressIndicator(strokeWidth: 2.5),
                                     ),
                                   )
-                                : IconButton(
-                                    icon: Icon(
-                                      Icons.delete_outline,
-                                      color: Colors.grey[500],
-                                    ),
-                                    tooltip: 'Delete Project',
-                                    onPressed: () {
-                                      _showDeleteConfirmDialog(project);
-                                    },
+                                : Row(
+                                    mainAxisAlignment: MainAxisAlignment.end,
+                                    children: [
+                                      IconButton(
+                                        icon: Icon(Icons.edit_outlined, color: Colors.grey[500]),
+                                        tooltip: 'Rename Project',
+                                        onPressed: () => _showRenameProjectDialog(project),
+                                      ),
+                                      IconButton(
+                                        icon: Icon(Icons.delete_outline, color: Colors.grey[500]),
+                                        tooltip: 'Delete Project',
+                                        onPressed: () => _showDeleteConfirmDialog(project),
+                                      ),
+                                    ],
                                   ),
                           ),
                         ],

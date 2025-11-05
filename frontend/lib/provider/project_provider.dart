@@ -7,11 +7,11 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:study_assistance/api/api_service.dart';
 import 'package:study_assistance/models/project.dart';
-import 'dart:convert'; // Import
-import 'dart:typed_data'; // Import
+import 'dart:convert'; 
+import 'dart:typed_data'; 
 import 'package:image_picker/image_picker.dart';
+import 'package:study_assistance/models/past_paper.dart'; 
 
-// Your Source and ChatMessage classes remain the same
 class Source {
   final String id;
   final String filename;
@@ -34,6 +34,18 @@ class ProjectProvider with ChangeNotifier {
   final ImagePicker _picker = ImagePicker();
 
   final Map<String, Uint8List> _mediaCache = {};
+
+  List<PastPaper> _pastPapers = [];
+  List<PastPaper> get pastPapers => _pastPapers;
+
+  bool _isLoadingPapers = false;
+  bool get isLoadingPapers => _isLoadingPapers;
+
+  bool _isUploadingPaper = false;
+  bool get isUploadingPaper => _isUploadingPaper;
+
+  String? _paperError;
+  String? get paperError => _paperError;
 
   Future<Uint8List?> getCachedMediaBytes(String mediaId) async {
     // 1. Check if the image is already in the cache.
@@ -100,10 +112,8 @@ class ProjectProvider with ChangeNotifier {
 
   ApiService get apiService => _api;
 
-  // NEW: Add a constructor to load from cache immediately
   ProjectProvider() {
     _loadProjectsFromCache();
-    // Start fetching from the API immediately after loading cache
     fetchProjects();
   }
 
@@ -147,11 +157,16 @@ class ProjectProvider with ChangeNotifier {
   bool _isBotThinking = false;
   bool get isBotThinking => _isBotThinking;
 
-  // Add a state variable to track the ID of the project being deleted.
+  // --- NEW: State variables for UI feedback ---
   String? _deletingProjectId;
   String? get deletingProjectId => _deletingProjectId;
+  String? _renamingProjectId;
+  String? get renamingProjectId => _renamingProjectId;
+  String? _deletingSourceId;
+  String? get deletingSourceId => _deletingSourceId;
 
-  // --- NEW CACHING LOGIC ---
+
+  // --- CACHING LOGIC ---
 
   Future<void> _loadProjectsFromCache() async {
     final prefs = await SharedPreferences.getInstance();
@@ -161,7 +176,7 @@ class ProjectProvider with ChangeNotifier {
       final List<dynamic> projectList = jsonDecode(projectsJson);
       _projects = projectList.map((map) => Project.fromMap(map)).toList();
       print("✅ Loaded ${_projects.length} projects from cache.");
-      notifyListeners(); // Show cached data on the UI immediately
+      notifyListeners(); 
     }
   }
 
@@ -173,23 +188,13 @@ class ProjectProvider with ChangeNotifier {
     print("💾 Saved ${_projects.length} projects to cache.");
   }
 
-  // --- UPDATED DATA FETCHING METHODS ---
+  // --- DATA FETCHING & MUTATION METHODS ---
 
-  /// Fetches projects from the API.
-  /// If `forceRefresh` is false, it won't fetch if a list is already present
-  /// and not loading (this is mostly for the constructor call).
   Future<void> fetchProjects({bool forceRefresh = false}) async {
-    // Prevent simultaneous fetches or redundant fetches if not forcing a refresh
     if (_isLoadingProjects) return;
-
-    // Only prevent fetch if we have data AND we are not forcing a refresh
-    if (_projects.isNotEmpty && !forceRefresh) {
-      // If we have data, we assume it came from cache, so we still start loading
-      // to refresh it in the background, but we don't return here.
-    }
+    if (_projects.isNotEmpty && !forceRefresh) return;
     
     _isLoadingProjects = true;
-    // Only show the full-screen loading spinner if the cache was empty
     if (_projects.isEmpty || forceRefresh) {
       notifyListeners();
     }
@@ -198,53 +203,96 @@ class ProjectProvider with ChangeNotifier {
       final data = await _api.getProjects();
       final newProjects = data.map((map) => Project.fromMap(map)).toList();
       
-      // Only update and save if the data actually changed
       if (jsonEncode(newProjects.map((p) => p.toMap()).toList()) != jsonEncode(_projects.map((p) => p.toMap()).toList())) {
           _projects = newProjects;
-          await _saveProjectsToCache(); // Save fresh data to cache
+          await _saveProjectsToCache();
       }
     } catch (e) {
       print("Error fetching projects: $e");
-      // If fetching fails, we keep the cached list, but still need to stop loading.
     } finally {
       _isLoadingProjects = false;
       notifyListeners();
     }
   }
 
-  // UPDATED: Now refreshes the project list and saves to cache
   Future<void> createProject(String name) async {
     if (name.isEmpty) return;
     try {
       await _api.createProject(name);
-      // Force a refresh to get the new project from the server and update cache
       await fetchProjects(forceRefresh: true);
     } catch (e) {
       print("Error creating project: $e");
     }
   }
 
-  // UPDATED: Now updates the cache after deleting
-  Future<void> deleteProject(String projectId) async {
-    _deletingProjectId = projectId;
-    notifyListeners(); // Tell the UI to show a loading indicator for this project
+  // --- NEW ---
+  Future<void> renameProject(String projectId, String newName) async {
+    _renamingProjectId = projectId;
+    notifyListeners();
 
     try {
-      await _api.deleteProject(projectId); // Call the API
-      _projects.removeWhere((project) => project.id == projectId); // Remove from local list
-      await _saveProjectsToCache(); // Update the cache
+      await _api.renameProject(projectId, newName);
+      // Find and update the project in the local list
+      final index = _projects.indexWhere((p) => p.id == projectId);
+      if (index != -1) {
+        _projects[index] = Project(
+          id: _projects[index].id,
+          name: newName,
+          createdAt: _projects[index].createdAt,
+        );
+        await _saveProjectsToCache(); // Update the cache
+      }
     } catch (e) {
-      print("Error deleting project: $e");
-      // Re-throw the error so the UI can catch it and show a message
+      print("Error renaming project: $e");
       rethrow;
     } finally {
-      // This block runs whether the deletion succeeded or failed.
-      _deletingProjectId = null;
-      notifyListeners(); // Tell the UI to remove the loading indicator
+      _renamingProjectId = null;
+      notifyListeners();
     }
   }
 
-  // --- REST OF YOUR METHODS (Unchanged functionality) ---
+  Future<void> deleteProject(String projectId) async {
+    _deletingProjectId = projectId;
+    notifyListeners();
+
+    try {
+      await _api.deleteProject(projectId);
+      _projects.removeWhere((project) => project.id == projectId);
+      await _saveProjectsToCache();
+    } catch (e) {
+      print("Error deleting project: $e");
+      rethrow;
+    } finally {
+      _deletingProjectId = null;
+      notifyListeners();
+    }
+  }
+
+  // --- NEW ---
+  Future<void> deleteSource(String sourceId) async {
+    if (_currentProject == null) return;
+    _deletingSourceId = sourceId;
+    notifyListeners();
+    try {
+      await _api.deleteSource(_currentProject!.id, sourceId);
+      _sources.removeWhere((s) => s.id == sourceId);
+
+      // If the deleted source was the selected one, clear the selection
+      if (_selectedSource?.id == sourceId) {
+        _selectedSource = null;
+        _scratchpadContent = "<p>Select a source to see its note.</p>";
+      }
+    } catch (e) {
+      print("Error deleting source: $e");
+      rethrow;
+    } finally {
+      _deletingSourceId = null;
+      notifyListeners();
+    }
+  }
+
+
+  // --- REST OF YOUR METHODS ---
 
   void setCurrentProject(Project project) {
     _currentProject = project;
@@ -255,7 +303,9 @@ class ProjectProvider with ChangeNotifier {
     ];
     _scratchpadContent = "<p>Select a source and click 'Show Source Note'.</p>";
     _mediaCache.clear();
+    _pastPapers = []; // Clear old papers
     fetchSources();
+    fetchPastPapers(); // Fetch papers for the new project
     notifyListeners();
   }
 
@@ -354,8 +404,6 @@ class ProjectProvider with ChangeNotifier {
     _isBotThinking = true;
     notifyListeners();
     try {
-      // Prepare history: all messages except the last user message (which is `question`)
-      // The API call expects the current question separately.
       final historyForApi = _chatHistory
           .where((m) => !m.isUser || m != _chatHistory.last)
           .map((m) => {'role': m.isUser ? 'user' : 'bot', 'content': m.content})
@@ -394,13 +442,60 @@ class ProjectProvider with ChangeNotifier {
 
         if (mediaId != null) {
           final imageTag = '\n\n<firestore-image src="$mediaId"></firestore-image>\n\n';
-          // Append to the text passed in from the editor, not the old provider state.
           return currentNoteText + imageTag;
         }
       }
     } catch (e) {
       print("Error taking photo: $e");
     }
-    return null; // Return null on failure
+    return null; 
+  }
+
+  Future<void> fetchPastPapers({bool forceRefresh = false}) async {
+    if (_currentProject == null) return;
+    if (_isLoadingPapers) return;
+
+    _isLoadingPapers = true;
+    notifyListeners();
+    try {
+      final data = await _api.getPastPapers(_currentProject!.id);
+      _pastPapers = data.map((map) => PastPaper.fromMap(map)).toList();
+    } catch (e) {
+      print("Error fetching past papers: $e");
+    } finally {
+      _isLoadingPapers = false;
+      notifyListeners();
+    }
+  }
+  
+  Future<void> pickAndProcessPaper() async {
+    if (_currentProject == null) return;
+
+    FilePickerResult? result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['pdf', 'png', 'jpg', 'jpeg'],
+      allowMultiple: false,
+    );
+
+    if (result != null && result.files.single.bytes != null) {
+      _isUploadingPaper = true;
+      _paperError = null;
+      notifyListeners();
+      try {
+        await _api.uploadPastPaper(_currentProject!.id, result.files.single);
+        await fetchPastPapers(forceRefresh: true);
+      } catch (e) {
+        print("Paper processing error: $e");
+        _paperError = e.toString();
+      } finally {
+        _isUploadingPaper = false;
+        notifyListeners();
+      }
+    }
+  }
+
+  void clearPaperError() {
+    _paperError = null;
+    notifyListeners();
   }
 }
