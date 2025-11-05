@@ -6,7 +6,6 @@ import 'package:study_assistance/api/api_service.dart';
 import 'package:study_assistance/models/project.dart';
 import 'dart:typed_data'; // Import
 import 'dart:convert';
-import 'dart:typed_data';
 import 'package:image_picker/image_picker.dart';
 import 'package:study_assistance/models/past_paper.dart';
 

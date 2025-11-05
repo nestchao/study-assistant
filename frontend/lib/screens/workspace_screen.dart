@@ -1,96 +1,17 @@
-// lib/screens/workspace_screen.dart
-
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:study_assistance/provider/project_provider.dart';
 import 'package:flutter_html/flutter_html.dart';
 import 'package:study_assistance/models/past_paper.dart';
-import 'package:study_assistance/screens/workspace_panels.dart'; // Make sure this import is correct
-import 'package:super_clipboard/super_clipboard.dart';
 import 'package:study_assistance/screens/workspace_panels.dart';
+import 'package:super_clipboard/super_clipboard.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:study_assistance/services/firestore_image_service.dart';
 import 'package:study_assistance/widgets/firestore_image.dart';
+import 'package:markdown/markdown.dart' as md;
 
-// Re-usable helper widget.
-class SourceTile extends StatelessWidget {
-  final String title;
-  final IconData icon;
-  final bool isSelected;
-  final bool isDeleting;
-  final VoidCallback? onTap;
-  final VoidCallback? onDelete;
-
-  const SourceTile({
-    super.key,
-    required this.title,
-    required this.icon,
-    this.isSelected = false,
-    this.isDeleting = false,
-    this.onTap,
-    this.onDelete,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4.0),
-      child: Material(
-        color:
-            isSelected ? Colors.indigo.withOpacity(0.1) : Colors.transparent,
-        borderRadius: BorderRadius.circular(10),
-        child: InkWell(
-          onTap: isDeleting ? null : onTap,
-          borderRadius: BorderRadius.circular(10),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(
-                  color: isSelected ? Colors.indigo : Colors.transparent),
-            ),
-            child: Row(
-              children: [
-                Icon(icon, color: isSelected ? Colors.indigo : Colors.grey[700]),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    title,
-                    style: TextStyle(
-                      fontWeight:
-                          isSelected ? FontWeight.bold : FontWeight.normal,
-                      color: Colors.black87,
-                    ),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-                if (isDeleting)
-                  const SizedBox(
-                    width: 24,
-                    height: 24,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                else if (onDelete != null)
-                  IconButton(
-                    icon: Icon(Icons.delete_outline, color: Colors.grey[600]),
-                    onPressed: onDelete,
-                    tooltip: 'Delete Source',
-                  )
-                else if (isSelected)
-                  const Icon(Icons.check_circle, color: Colors.indigo, size: 20),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-
-// --- Main Workspace Screen ---
-// This is now the single source of truth for the workspace layout.
+// --- 1. TOP-LEVEL WORKSPACE SCREEN (Manages the two main tabs) ---
 class WorkspaceScreen extends StatefulWidget {
   const WorkspaceScreen({super.key});
 
@@ -102,28 +23,6 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> with SingleTickerProv
   late TabController _tabController;
 
   @override
-  State<DesktopWorkspaceLayout> createState() => _DesktopWorkspaceLayoutState();
-}
-
-class _DesktopWorkspaceLayoutState extends State<DesktopWorkspaceLayout> {
-  // State variables to manage panel widths and visibility
-  double _sourcesWidth = 280.0;
-  double _notesWidth = 400.0;
-  bool _isSourcesVisible = true;
-  bool _isChatVisible = true;
-  bool _isNotesVisible = true;
-  final double _minPanelWidth = 150.0; // Minimum width before a panel is useful
-  final double _collapseThreshold = 50.0; // Width at which panels auto-hide
-  final double _minChatPanelWidth = 200.0;
-
-  static const String _firestoreImagePlaceholderPrefix = '%%FIRESTORE_IMAGE_';
-  static const String _firestoreImagePlaceholderSuffix = '%%';
-
-  bool _isEditingNote = false;
-  final TextEditingController _noteEditController = TextEditingController();
-
-  final ScrollController _sourcesScrollController = ScrollController();
-  final ScrollController _notesScrollController = ScrollController();
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
@@ -138,7 +37,11 @@ class _DesktopWorkspaceLayoutState extends State<DesktopWorkspaceLayout> {
   @override
   Widget build(BuildContext context) {
     final provider = context.watch<ProjectProvider>();
-    final project = provider.currentProject!;
+    final project = provider.currentProject;
+
+    if (project == null) {
+      return const Scaffold(body: Center(child: Text("No project selected.")));
+    }
 
     return Scaffold(
       appBar: AppBar(
@@ -175,121 +78,602 @@ class _DesktopWorkspaceLayoutState extends State<DesktopWorkspaceLayout> {
   }
 }
 
-// --- WIDGET FOR TAB 1: STUDY HUB (NOW RESPONSIVE) ---
-class StudyHubView extends StatefulWidget {
+
+// --- 2. STUDY HUB GATEKEEPER (Decides mobile vs. desktop) ---
+class StudyHubView extends StatelessWidget {
   const StudyHubView({super.key});
-
-  @override
-  State<StudyHubView> createState() => _StudyHubViewState();
-}
-
-class _StudyHubViewState extends State<StudyHubView> with SingleTickerProviderStateMixin {
-  late TabController _studyTabController;
-
-  // Breakpoint to switch between desktop (Row) and mobile (TabBar) layouts
-  static const double mobileBreakpoint = 900.0; // Increased breakpoint for 3 panels
-          // --- RESIZER 1 ---
-          if (_isSourcesVisible && _isChatVisible)
-            _buildResizer(
-              onDrag: (details) {
-                setState(() {
-                  _sourcesWidth =
-                      max(_collapseThreshold, _sourcesWidth + details.delta.dx);
-                  if (_sourcesWidth < _minPanelWidth) _isSourcesVisible = false;
-                  final chatWidth = screenWidth -
-                      _sourcesWidth -
-                      (_isNotesVisible ? _notesWidth + 8 : 0) -
-                      8;
-                  if (chatWidth < _minChatPanelWidth && visibleCount > 1) {
-                    _isChatVisible = false;
-                  }
-                });
-              },
-            ),
-
-  @override
-  void initState() {
-    super.initState();
-    // This controller is now for 3 panels on mobile
-    _studyTabController = TabController(length: 3, vsync: this);
-  }
-
-  @override
-  void dispose() {
-    _studyTabController.dispose();
-    super.dispose();
-  }
-          // --- RESIZER 2 ---
-          if (_isChatVisible && _isNotesVisible)
-            _buildResizer(
-              onDrag: (details) {
-                setState(() {
-                  _notesWidth =
-                      max(_collapseThreshold, _notesWidth - details.delta.dx);
-                  if (_notesWidth < _minPanelWidth) _isNotesVisible = false;
-                  final chatWidth = screenWidth -
-                      _notesWidth -
-                      (_isSourcesVisible ? _sourcesWidth + 8 : 0) -
-                      8;
-                  if (chatWidth < _minChatPanelWidth && visibleCount > 1) {
-                    _isChatVisible = false;
-                  }
-                });
-              },
-            ),
+  static const double mobileBreakpoint = 900.0;
 
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
         if (constraints.maxWidth < mobileBreakpoint) {
-          // --- MOBILE LAYOUT: Use a TabBar for Sources, Chat, and Notes ---
-          return Scaffold(
-            appBar: TabBar(
-              controller: _studyTabController,
-              labelColor: Colors.indigo,
-              tabs: const [
-                Tab(icon: Icon(Icons.folder_open), text: "Sources"),
-                Tab(icon: Icon(Icons.smart_toy), text: "AI Chat"),
-                Tab(icon: Icon(Icons.edit_note), text: "Note"), // ADDED NOTE TAB
-              ],
-            ),
-            body: TabBarView(
-              controller: _studyTabController,
-              children: const [
-                SourcesPanel(),
-                AiChatPanel(),
-                NotesPanel(), // ADDED NOTE PANEL
-              ],
-            ),
-          );
+          return const MobileStudyLayout();
         } else {
-          // --- DESKTOP LAYOUT: Use a Row for three side-by-side panels ---
-          return Row(
-            children: [
-              const Expanded(flex: 2, child: SourcesPanel()),
-              Container(width: 1, color: Colors.grey[300]),
-              const Expanded(flex: 3, child: AiChatPanel()),
-              Container(width: 1, color: Colors.grey[300]), // ADDED DIVIDER
-              const Expanded(flex: 3, child: NotesPanel()),   // ADDED NOTE PANEL
-            ],
-          );
+          return const DesktopStudyLayout();
         }
       },
     );
   }
 }
 
-// --- WIDGET FOR TAB 2: PAPER SOLVER ---
+
+// --- 3. DESKTOP STUDY LAYOUT ---
+class DesktopStudyLayout extends StatefulWidget {
+  const DesktopStudyLayout({super.key});
+
+  @override
+  State<DesktopStudyLayout> createState() => _DesktopStudyLayoutState();
+}
+
+class _DesktopStudyLayoutState extends State<DesktopStudyLayout> {
+  // State for desktop UI
+  double _sourcesWidth = 280.0;
+  double _notesWidth = 400.0;
+  bool _isSourcesVisible = true;
+  bool _isChatVisible = true;
+  bool _isNotesVisible = true;
+  final double _minPanelWidth = 150.0;
+  final double _collapseThreshold = 50.0;
+  final double _minChatPanelWidth = 200.0;
+  bool _isEditingNote = false;
+  final TextEditingController _noteEditController = TextEditingController();
+  final ScrollController _sourcesScrollController = ScrollController();
+  final ScrollController _notesScrollController = ScrollController();
+
+  @override
+  void dispose() {
+    _sourcesScrollController.dispose();
+    _notesScrollController.dispose();
+    _noteEditController.dispose();
+    super.dispose();
+  }
+
+  void _togglePanelVisibility(String panel) {
+    setState(() {
+      if (panel == 'chat' && !_isChatVisible) {
+        _isChatVisible = true;
+        final double screenWidth = MediaQuery.of(context).size.width;
+        const double targetChatWidth = 400.0;
+        final currentSidePanelsWidth = (_isSourcesVisible ? _sourcesWidth : 0) + (_isNotesVisible ? _notesWidth : 0);
+        final availableSpaceForSidePanels = screenWidth - targetChatWidth - 16;
+        if (currentSidePanelsWidth > availableSpaceForSidePanels) {
+          final overflow = currentSidePanelsWidth - availableSpaceForSidePanels;
+          if (_isSourcesVisible && _isNotesVisible) {
+            double sourcesProportion = _sourcesWidth / currentSidePanelsWidth;
+            _sourcesWidth -= overflow * sourcesProportion;
+            _notesWidth -= overflow * (1 - sourcesProportion);
+          } else if (_isSourcesVisible) {
+            _sourcesWidth -= overflow;
+          } else if (_isNotesVisible) {
+            _notesWidth -= overflow;
+          }
+        }
+        return;
+      }
+      int visibleCount = (_isSourcesVisible ? 1 : 0) + (_isChatVisible ? 1 : 0) + (_isNotesVisible ? 1 : 0);
+      if (visibleCount > 1) {
+        if (panel == 'sources') _isSourcesVisible = !_isSourcesVisible;
+        if (panel == 'chat') _isChatVisible = !_isChatVisible;
+        if (panel == 'notes') _isNotesVisible = !_isNotesVisible;
+      }
+      if (panel == 'sources' && _isSourcesVisible) _sourcesWidth = 280.0;
+      if (panel == 'notes' && _isNotesVisible) _notesWidth = 400.0;
+    });
+  }
+
+  Widget _buildVisibilityToggleButton({
+    required String tooltip, required IconData icon, required Color color,
+    required bool isVisible, required VoidCallback onPressed, required bool isDisabled,
+  }) {
+    return IconButton(
+      tooltip: tooltip,
+      icon: Icon(icon),
+      style: IconButton.styleFrom(
+        foregroundColor: color,
+        backgroundColor: isVisible ? color.withOpacity(0.20) : Colors.transparent,
+        disabledForegroundColor: color.withOpacity(0.3),
+      ),
+      onPressed: isDisabled ? null : onPressed,
+    );
+  }
+
+  Widget _buildResizer({required GestureDragUpdateCallback onDrag}) {
+    return GestureDetector(
+      onHorizontalDragUpdate: onDrag,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.resizeLeftRight,
+        child: Container(width: 8, color: Colors.grey[300]),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final provider = context.watch<ProjectProvider>();
+    final int visibleCount = (_isSourcesVisible ? 1 : 0) + (_isChatVisible ? 1 : 0) + (_isNotesVisible ? 1 : 0);
+    final double screenWidth = MediaQuery.of(context).size.width;
+    
+    return Scaffold(
+      appBar: AppBar(
+        toolbarHeight: 50,
+        backgroundColor: Colors.grey[100],
+        elevation: 0,
+        automaticallyImplyLeading: false,
+        title: const Text("View Panels", style: TextStyle(color: Colors.black54, fontSize: 16)),
+        actions: [
+          _buildVisibilityToggleButton(
+            tooltip: 'Toggle Sources', icon: Icons.folder_open, color: Colors.blue[300]!,
+            isVisible: _isSourcesVisible, onPressed: () => _togglePanelVisibility('sources'),
+            isDisabled: _isSourcesVisible && visibleCount == 1,
+          ),
+          _buildVisibilityToggleButton(
+            tooltip: 'Toggle AI Chat', icon: Icons.chat_bubble_outline, color: Colors.purple[300]!,
+            isVisible: _isChatVisible, onPressed: () => _togglePanelVisibility('chat'),
+            isDisabled: _isChatVisible && visibleCount == 1,
+          ),
+          _buildVisibilityToggleButton(
+            tooltip: 'Toggle Notes', icon: Icons.note_alt, color: Colors.green[300]!,
+            isVisible: _isNotesVisible, onPressed: () => _togglePanelVisibility('notes'),
+            isDisabled: _isNotesVisible && visibleCount == 1,
+          ),
+          const SizedBox(width: 8),
+        ],
+      ),
+      body: Row(
+        children: [
+          if (_isSourcesVisible)
+            _isChatVisible
+              ? SizedBox(width: _sourcesWidth, child: SourcesPanel(scrollController: _sourcesScrollController))
+              : Expanded(flex: _sourcesWidth.round(), child: SourcesPanel(scrollController: _sourcesScrollController)),
+          
+          if (_isSourcesVisible && _isChatVisible)
+            _buildResizer(onDrag: (details) { setState(() {
+              _sourcesWidth = max(_collapseThreshold, _sourcesWidth + details.delta.dx);
+              if (_sourcesWidth < _minPanelWidth) _isSourcesVisible = false;
+              final chatWidth = screenWidth - _sourcesWidth - (_isNotesVisible ? _notesWidth + 8 : 0) - 8;
+              if (chatWidth < _minChatPanelWidth && visibleCount > 1) _isChatVisible = false;
+            }); }),
+          
+          if (_isChatVisible) const Expanded(child: AiChatPanel()),
+          
+          if (_isChatVisible && _isNotesVisible)
+            _buildResizer(onDrag: (details) { setState(() {
+              _notesWidth = max(_collapseThreshold, _notesWidth - details.delta.dx);
+              if (_notesWidth < _minPanelWidth) _isNotesVisible = false;
+              final chatWidth = screenWidth - _notesWidth - (_isSourcesVisible ? _sourcesWidth + 8 : 0) - 8;
+              if (chatWidth < _minChatPanelWidth && visibleCount > 1) _isChatVisible = false;
+            }); }),
+
+          if (_isNotesVisible)
+            _isChatVisible
+              ? SizedBox(width: _notesWidth, child: _buildScratchpadPanel(context, provider))
+              : Expanded(flex: _notesWidth.round(), child: _buildScratchpadPanel(context, provider)),
+        ],
+      ),
+    );
+  }
+
+  Widget _noteActions(BuildContext ctx, ProjectProvider p, String html) =>
+      Container(
+        padding: const EdgeInsets.all(12),
+        child: Column(children: [
+          ElevatedButton.icon(
+              onPressed: p.selectedSource == null ? null : p.getNoteForSelectedSource,
+              icon: const Icon(Icons.refresh),
+              label: const Text("Reload")),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+              onPressed: () => _copyRichTextToClipboard(ctx, html),
+              icon: const Icon(Icons.copy),
+              label: const Text("Copy Note")),
+          const Divider(height: 24),
+          TextField(
+              controller: p.topicController,
+              maxLines: 2,
+              decoration: const InputDecoration(hintText: "e.g. Explain OOP")),
+          ElevatedButton.icon(
+              onPressed: () {
+                final t = p.topicController.text.trim();
+                if (t.isNotEmpty) p.generateTopicNote(t);
+              },
+              icon: const Icon(Icons.auto_awesome),
+              label: const Text("Generate")),
+        ]),
+      );
+
+  Widget _buildNoteViewer(String html) {
+    return Scrollbar(
+      controller: _notesScrollController,
+      thumbVisibility: true,
+      child: SingleChildScrollView(
+        controller: _notesScrollController,
+        padding: const EdgeInsets.all(16),
+        child: Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Html(
+              data: html,
+              extensions: [
+                TagExtension(
+                  tagsToExtend: {"firestore-image"},
+                  builder: (ExtensionContext context) {
+                    final String mediaId = context.attributes['src'] ?? '';
+                    return FirestoreImage(mediaId: mediaId);
+                  },
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _copyRichTextToClipboard(BuildContext context, String html) async {
+    final item = DataWriterItem();
+    item.add(Formats.htmlText(html));
+    
+    // Helper to create a plain text fallback
+    String stripHtmlTags(String html) {
+      final RegExp exp = RegExp(r"<[^>]*>", multiLine: true, caseSensitive: true);
+      return html.replaceAll(exp, '').replaceAll('&nbsp;', ' ');
+    }
+
+    final plainText = stripHtmlTags(html).trim();
+    item.add(Formats.plainText(plainText));
+    
+    await SystemClipboard.instance?.write([item]);
+    
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Formatted note copied!"),
+          backgroundColor: Colors.green,
+        ),
+      );
+    }
+  }
+
+  Widget _buildNoteEditor() {
+    return Padding(
+      padding: const EdgeInsets.all(16.0),
+      child: TextField(
+        controller: _noteEditController,
+        maxLines: null,
+        expands: true,
+        keyboardType: TextInputType.multiline,
+        decoration: const InputDecoration(
+          hintText: "Edit your notes here...",
+          border: OutlineInputBorder(),
+          isDense: true,
+        ),
+        textAlignVertical: TextAlignVertical.top,
+      ),
+    );
+  }
+
+  Widget _buildScratchpadPanel(BuildContext context, ProjectProvider p) {
+    final html = p.scratchpadContent;
+    return Container(
+      color: Colors.white,
+      child: Column(
+        children: [
+          Container( // Header
+            padding: const EdgeInsets.all(16),
+            color: Colors.green[50],
+            child: Row(children: [
+              Icon(Icons.note_alt, color: Colors.green[700]),
+              const SizedBox(width: 8),
+              const Text("Study Notes", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            ]),
+          ),
+          
+          // Edit/Save Buttons
+          if (!_isEditingNote)
+            TextButton.icon(
+              icon: const Icon(Icons.edit, size: 18),
+              label: const Text("Edit"),
+              onPressed: () {
+                setState(() {
+                  _noteEditController.text = html;
+                  _isEditingNote = true;
+                });
+              },
+            )
+          else
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                TextButton(
+                  child: const Text("Cancel", style: TextStyle(color: Colors.red)),
+                  onPressed: () => setState(() { _isEditingNote = false; _noteEditController.clear(); }),
+                ),
+                const SizedBox(width: 8),
+                ElevatedButton.icon(
+                  icon: p.isSavingNote
+                      ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                      : const Icon(Icons.save, size: 18),
+                  label: Text(p.isSavingNote ? "Saving..." : "Save"),
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.green[700]),
+                  onPressed: p.isSavingNote ? null : () async {
+                    final newHtml = _noteEditController.text;
+                    final success = await p.saveNoteChanges(newHtml);
+                    if (success) {
+                      setState(() {
+                        _isEditingNote = false;
+                        _noteEditController.clear();
+                      });
+                    }
+                  },
+                ),
+              ],
+            ),
+
+          Expanded(
+            child: p.isLoadingNote
+                ? const Center(child: CircularProgressIndicator())
+                : _isEditingNote
+                    ? _buildNoteEditor()
+                    : _buildNoteViewer(html),
+          ),
+
+          if (!_isEditingNote) _noteActions(context, p, html),
+        ],
+      ),
+    );
+  }
+}
+
+
+// --- 4. MOBILE STUDY LAYOUT ---
+class MobileStudyLayout extends StatefulWidget {
+  const MobileStudyLayout({super.key});
+
+  @override
+  State<MobileStudyLayout> createState() => _MobileStudyLayoutState();
+}
+
+class _MobileStudyLayoutState extends State<MobileStudyLayout> with SingleTickerProviderStateMixin {
+  late TabController _tabController;
+  final TextEditingController _noteEditController = TextEditingController();
+  bool _isEditingNote = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _tabController = TabController(length: 3, vsync: this);
+  }
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    _noteEditController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final provider = context.watch<ProjectProvider>();
+    return Scaffold(
+      appBar: PreferredSize(
+        preferredSize: const Size.fromHeight(kToolbarHeight),
+        child: AppBar(
+          automaticallyImplyLeading: false,
+          backgroundColor: Colors.white,
+          elevation: 0,
+          title: TabBar(
+            controller: _tabController,
+            labelColor: Colors.indigo,
+            tabs: const [
+              Tab(icon: Icon(Icons.folder_open), text: "Sources"),
+              Tab(icon: Icon(Icons.smart_toy), text: "AI Chat"),
+              Tab(icon: Icon(Icons.edit_note), text: "Notes"),
+            ],
+          ),
+          actions: [
+            if (_tabController.index == 2)
+              if (provider.isSavingNote)
+                const Padding(padding: EdgeInsets.all(16.0), child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator()))
+              else
+                TextButton(
+                  onPressed: () async {
+                    if (_isEditingNote) {
+                      final success = await provider.saveNoteChanges(_noteEditController.text);
+                      if (success) setState(() => _isEditingNote = false);
+                    } else {
+                      setState(() {
+                        _noteEditController.text = provider.scratchpadContent;
+                        _isEditingNote = true;
+                      });
+                    }
+                  },
+                  child: Text(_isEditingNote ? "SAVE" : "EDIT", style: const TextStyle(color: Colors.indigo)),
+                )
+          ],
+        ),
+      ),
+      body: TabBarView(
+        controller: _tabController,
+        children: [
+          const SourcesPanel(),
+          const AiChatPanel(),
+          _buildMobileNotesPanel(provider),
+        ],
+      ),
+      floatingActionButton: _tabController.index == 2 && _isEditingNote
+        ? FloatingActionButton(onPressed: () async {
+            final currentText = _noteEditController.text;
+            final imageTag = await provider.getPhotoAsTag();
+            if (imageTag != null) {
+              setState(() {
+                _noteEditController.text = currentText + imageTag;
+                _noteEditController.selection = TextSelection.fromPosition(TextPosition(offset: _noteEditController.text.length));
+              });
+            }
+          }, child: const Icon(Icons.camera_alt))
+        : null,
+    );
+  }
+
+  Widget _buildMobileNotesPanel(ProjectProvider p) {
+      return Padding(
+        padding: const EdgeInsets.all(8.0),
+        child: _isEditingNote
+            ? TextField(
+                controller: _noteEditController,
+                maxLines: null,
+                expands: true,
+                keyboardType: TextInputType.multiline,
+                decoration: const InputDecoration(
+                  hintText: "Edit your notes...",
+                  border: InputBorder.none,
+                ),
+              )
+            : SingleChildScrollView(
+                child: Html(
+                  data: p.scratchpadContent,
+                  extensions: [
+                    TagExtension(
+                      tagsToExtend: {"firestore-image"},
+                      builder: (ExtensionContext context) {
+                        final buildContext = context.buildContext;
+                        if (buildContext == null) {
+                          return const SizedBox.shrink();
+                        }
+
+                        final String mediaId = context.attributes['src'] ?? '';
+                        if (mediaId.isEmpty) {
+                          return const Text("[Image Error: Missing ID]");
+                        }
+
+                        final provider = Provider.of<ProjectProvider>(
+                          buildContext,
+                          listen: false,
+                        );
+
+                        final cacheManager = FirestoreImageCacheManager(
+                          apiService: provider.apiService,
+                          projectId: provider.currentProject!.id,
+                        );
+
+                        final url = 'firestore_media:$mediaId';
+
+                        return FutureBuilder<FileInfo?>(
+                          // CHANGED: First check cache, if null then download
+                          future: _getOrDownloadImage(cacheManager, url),
+                          builder: (context, snapshot) {
+                            if (snapshot.connectionState == ConnectionState.waiting) {
+                              return const Center(
+                                child: Padding(
+                                  padding: EdgeInsets.all(8.0),
+                                  child: CircularProgressIndicator(),
+                                ),
+                              );
+                            }
+
+                            if (snapshot.hasError) {
+                              print("Image Loading Error: ${snapshot.error}");
+                              return const Padding(
+                                padding: EdgeInsets.all(8.0),
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(Icons.error, color: Colors.red, size: 32),
+                                    SizedBox(height: 4),
+                                    Text(
+                                      "Failed to load image",
+                                      style: TextStyle(color: Colors.red, fontSize: 12),
+                                    ),
+                                  ],
+                                ),
+                              );
+                            }
+
+                            if (snapshot.hasData && snapshot.data != null) {
+                              return Padding(
+                                padding: const EdgeInsets.symmetric(vertical: 8.0),
+                                child: Image.file(
+                                  snapshot.data!.file,
+                                  errorBuilder: (context, error, stackTrace) {
+                                    print("Image.file Error: $error");
+                                    return const Icon(
+                                      Icons.broken_image,
+                                      color: Colors.grey,
+                                      size: 48,
+                                    );
+                                  },
+                                ),
+                              );
+                            }
+
+                            // Fallback for null data
+                            return const Padding(
+                              padding: EdgeInsets.all(8.0),
+                              child: Icon(
+                                Icons.broken_image,
+                                color: Colors.grey,
+                                size: 48,
+                              ),
+                            );
+                          },
+                        );
+                      },
+                    ),
+                  ],
+                ),
+            ),
+          
+    );
+  }
+
+  Future<FileInfo?> _getOrDownloadImage(
+    CacheManager cacheManager,
+    String url,
+  ) async {
+    try {
+      // First, try to get the file info from the cache.
+      final fileInfo = await cacheManager.getFileFromCache(url);
+      
+      // If it's in the cache, return it immediately.
+      if (fileInfo != null) {
+        print("Image loaded from cache: $url");
+        return fileInfo;
+      }
+      
+      // If it's not in the cache, trigger a download.
+      // downloadFile will fetch it (using your custom FirestoreFileService),
+      // save it to the cache, and then return the FileInfo.
+      print("Image not in cache, downloading: $url");
+      return await cacheManager.downloadFile(url);
+      
+    } catch (e) {
+      print("Error in _getOrDownloadImage: $e");
+      // Rethrow the error so the FutureBuilder can display an error state.
+      rethrow;
+    }
+  }
+}
+
+
+// --- 5. PAPER SOLVER VIEW ---
 class PaperSolverView extends StatefulWidget {
   const PaperSolverView({super.key});
 
   @override
-  _PaperSolverViewState createState() => _PaperSolverViewState();
+  State<PaperSolverView> createState() => _PaperSolverViewState();
 }
 
 class _PaperSolverViewState extends State<PaperSolverView> {
   PastPaper? _selectedPaper;
+
+  final TextEditingController _noteEditController = TextEditingController();
+  final ScrollController _notesScrollController = ScrollController();
+
+  String markdownToHtml(String markdown) {
+    return md.markdownToHtml(markdown, extensionSet: md.ExtensionSet.gitHubWeb);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -483,8 +867,6 @@ class _PaperSolverViewState extends State<PaperSolverView> {
           elevation: 2,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
           child: ExpansionTile(
-            shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
-            collapsedShape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
             leading: CircleAvatar(child: Text('${index + 1}')),
             title: Text(qa.question, style: const TextStyle(fontWeight: FontWeight.w600)),
             children: [
@@ -493,84 +875,13 @@ class _PaperSolverViewState extends State<PaperSolverView> {
                 child: SelectionArea(
                   child: Html(
                     data: markdownToHtml(qa.answer),
-          if (!_isEditingNote)
-            TextButton.icon(
-              icon: const Icon(Icons.edit, size: 18),
-              label: const Text("Edit"),
-              onPressed: () {
-                setState(() {
-                  _noteEditController.text = html;
-                  _isEditingNote = true;
-                });
-              },
-            )
-          else
-            Row(
-              children: [
-                TextButton(
-                  child:
-                      const Text("Cancel", style: TextStyle(color: Colors.red)),
-                  onPressed: () {
-                    setState(() {
-                      _isEditingNote = false;
-                      _noteEditController.clear();
-                    });
-                  },
+                  ),
                 ),
-                ElevatedButton.icon(
-                  icon: p.isSavingNote
-                      ? SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: const CircularProgressIndicator(
-                              color: Colors.white, strokeWidth: 2))
-                      : const Icon(Icons.save, size: 18),
-                  label: Text(p.isSavingNote ? "Saving..." : "Save"),
-                  style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.green[700]),
-                  // Disable button while saving
-                  onPressed: p.isSavingNote
-                      ? null
-                      : () async {
-
-                        final newHtml = _noteEditController.text;
-
-                        final success = await p.saveNoteChanges(newHtml);
-
-                        if (success) {
-                          setState(() {
-                            _isEditingNote = false;
-                            _noteEditController.clear();
-                          });
-                        } else {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text("Error: Could not save note."),
-                              backgroundColor: Colors.red,
-                            ),
-                          );
-                        }
-                      },
-                ),
-              ],
-            ),
-
-          Expanded(
-            child: p.isLoadingNote
-                ? const Center(
-                    child: Column(mainAxisSize: MainAxisSize.min, children: [
-                    CircularProgressIndicator(),
-                    Text("Generating...")
-                  ]))
-                : _isEditingNote
-                    ? _buildNoteEditor()
-                    : _buildNoteViewer(html),
+              ),
+            ],
           ),
-
-          // Actions (This part remains the same)
-          if (!_isEditingNote) _noteActions(context, p, html),
-        ],
-      ),
+        );
+      },
     );
   }
 
@@ -683,292 +994,29 @@ class _PaperSolverViewState extends State<PaperSolverView> {
               label: const Text("Generate")),
         ]),
       );
-}
 
-class MobileWorkspaceLayout extends StatefulWidget {
-  const MobileWorkspaceLayout({super.key});
-
-  @override
-  State<MobileWorkspaceLayout> createState() => _MobileWorkspaceLayoutState();
-}
-
-class _MobileWorkspaceLayoutState extends State<MobileWorkspaceLayout> {
-  int _selectedIndex = 0; // 0 for Sources, 1 for Chat, 2 for Notes
-
-  final TextEditingController _noteEditController = TextEditingController();
-  bool _isEditingNote = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final provider = context.watch<ProjectProvider>();
-    final project = provider.currentProject!;
-
-    final List<Widget> pages = <Widget>[
-      const SourcesPanel(),
-      const AiChatPanel(),
-      _buildMobileNotesPanel(provider),
-    ];
-
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(project.name),
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: () => Navigator.pop(context),
-        ),
-        // Add Save/Edit button for notes tab
-        actions: [
-          if (_selectedIndex == 2)
-            // Show a loading indicator while saving
-            if (provider.isSavingNote)
-              const Padding(
-                padding: EdgeInsets.all(16.0),
-                child: SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(color: Colors.white)),
-              )
-            else
-              TextButton(
-                onPressed: () async {
-                  // Make this async
-                  if (_isEditingNote) {
-                    // --- SAVE ---
-                    // Call the real save method from the provider
-                    final success = await provider
-                        .saveNoteChanges(_noteEditController.text);
-                    if (success) {
-                      // Only exit edit mode if save was successful
-                      setState(() {
-                        _isEditingNote = false;
-                      });
-                    } else {
-                      // Show error snackbar
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                            content: Text("Error saving note"),
-                            backgroundColor: Colors.red),
-                      );
-                    }
-                  } else {
-                    // --- EDIT ---
-                    // When entering edit mode, set the controller text ONCE.
-                    setState(() {
-                      _noteEditController.text = provider.scratchpadContent;
-                      _isEditingNote = true;
-                    });
-                  }
-                },
-                child: Text(
-                  _isEditingNote ? "SAVE" : "EDIT",
-                  style: const TextStyle(color: Colors.white),
-                ),
-              ),
-        ],
-      ),
-      body: IndexedStack(
-        index: _selectedIndex,
-        children: pages,
-      ),
-      // --- NEW: Add Floating Action Button for Camera ---
-      floatingActionButton: _selectedIndex == 2 && _isEditingNote
-          ? FloatingActionButton(
-              onPressed: () async {
-                // Get the current text FROM THE CONTROLLER
-              final currentText = _noteEditController.text;
-
-              // Get the image tag from the provider
-              // IMPORTANT: We modify takePhotoAndInsertToNote to ONLY do the upload
-              // and return the tag. It should NOT modify any state itself.
-              final imageTag = await provider.getPhotoAsTag();
-
-              // Update the controller with the new text
-              if (imageTag != null) {
-                setState(() {
-                  _noteEditController.text = currentText + imageTag;
-                  _noteEditController.selection = TextSelection.fromPosition(
-                    TextPosition(offset: _noteEditController.text.length),
-                  );
-                });
-              }
-              },
-              child: const Icon(Icons.camera_alt),
-            )
-          : null,
-      bottomNavigationBar: BottomNavigationBar(
-        currentIndex: _selectedIndex,
-        onTap: (index) async {
-          // Make it async
-          if (_isEditingNote) {
-            // Auto-save when switching tabs.
-            await provider.saveNoteChanges(_noteEditController.text);
-            _isEditingNote = false;
-          }
-          setState(() {
-            _selectedIndex = index;
-          });
-        },
-        items: const <BottomNavigationBarItem>[
-          BottomNavigationBarItem(
-            icon: Icon(Icons.folder_open),
-            label: 'Sources',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.chat_bubble_outline),
-            label: 'Chat',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.note_alt),
-            label: 'Notes',
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildMobileNotesPanel(ProjectProvider p) {
-    return Padding(
-      padding: const EdgeInsets.all(8.0),
-      child: _isEditingNote
-          ? TextField(
-              controller: _noteEditController,
-              maxLines: null,
-              expands: true,
-              keyboardType: TextInputType.multiline,
-              decoration: const InputDecoration(
-                hintText: "Edit your notes...",
-                border: InputBorder.none,
-              ),
-            )
-          : SingleChildScrollView(
-              child: Html(
-                data: p.scratchpadContent,
-                extensions: [
-                  TagExtension(
-                    tagsToExtend: {"firestore-image"},
-                    builder: (ExtensionContext context) {
-                      final buildContext = context.buildContext;
-                      if (buildContext == null) {
-                        return const SizedBox.shrink();
-                      }
-
-                      final String mediaId = context.attributes['src'] ?? '';
-                      if (mediaId.isEmpty) {
-                        return const Text("[Image Error: Missing ID]");
-                      }
-
-                      final provider = Provider.of<ProjectProvider>(
-                        buildContext,
-                        listen: false,
-                      );
-
-                      final cacheManager = FirestoreImageCacheManager(
-                        apiService: provider.apiService,
-                        projectId: provider.currentProject!.id,
-                      );
-
-                      final url = 'firestore_media:$mediaId';
-
-                      return FutureBuilder<FileInfo?>(
-                        // CHANGED: First check cache, if null then download
-                        future: _getOrDownloadImage(cacheManager, url),
-                        builder: (context, snapshot) {
-                          if (snapshot.connectionState == ConnectionState.waiting) {
-                            return const Center(
-                              child: Padding(
-                                padding: EdgeInsets.all(8.0),
-                                child: CircularProgressIndicator(),
-                              ),
-                            );
-                          }
-
-                          if (snapshot.hasError) {
-                            print("Image Loading Error: ${snapshot.error}");
-                            return const Padding(
-                              padding: EdgeInsets.all(8.0),
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(Icons.error, color: Colors.red, size: 32),
-                                  SizedBox(height: 4),
-                                  Text(
-                                    "Failed to load image",
-                                    style: TextStyle(color: Colors.red, fontSize: 12),
-                                  ),
-                                ],
-                              ),
-                            );
-                          }
-
-                          if (snapshot.hasData && snapshot.data != null) {
-                            return Padding(
-                              padding: const EdgeInsets.symmetric(vertical: 8.0),
-                              child: Image.file(
-                                snapshot.data!.file,
-                                errorBuilder: (context, error, stackTrace) {
-                                  print("Image.file Error: $error");
-                                  return const Icon(
-                                    Icons.broken_image,
-                                    color: Colors.grey,
-                                    size: 48,
-                                  );
-                                },
-                              ),
-                            );
-                          }
-
-                          // Fallback for null data
-                          return const Padding(
-                            padding: EdgeInsets.all(8.0),
-                            child: Icon(
-                              Icons.broken_image,
-                              color: Colors.grey,
-                              size: 48,
-                            ),
-                          );
-                        },
-                      );
-                    },
-                  ),
-                ),
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  Future<FileInfo?> _getOrDownloadImage(
-    CacheManager cacheManager,
-    String url,
-  ) async {
-    try {
-      // First, try to get from cache
-      var fileInfo = await cacheManager.getFileFromCache(url);
-
-      if (fileInfo != null) {
-        print("Image loaded from cache: $url");
-        return fileInfo;
-      }
-
-      // If not in cache, download it
-      print("Image not in cache, downloading: $url");
-      fileInfo = await cacheManager.downloadFile(url);
-
-      return fileInfo;
-    } catch (e) {
-      print("Error in _getOrDownloadImage: $e");
-      rethrow;
+    Future<void> _copyRichTextToClipboard(BuildContext context, String html) async {
+    final item = DataWriterItem();
+    item.add(Formats.htmlText(html));
+    
+    // Helper to create a plain text fallback
+    String stripHtmlTags(String html) {
+      final RegExp exp = RegExp(r"<[^>]*>", multiLine: true, caseSensitive: true);
+      return html.replaceAll(exp, '').replaceAll('&nbsp;', ' ');
     }
-  }
-}
 
-  // ADDED BACK THIS MISSING HELPER FUNCTION
-  String markdownToHtml(String text) {
-      text = text.replaceAllMapped(RegExp(r'\*\*(.*?)\*\*'), (match) => '<b>${match.group(1)}</b>');
-      text = text.replaceAllMapped(RegExp(r'\*(.*?)\*'), (match) => '<i>${match.group(1)}</i>');
-      text = text.replaceAll('\n', '<br>');
-      return text;
+    final plainText = stripHtmlTags(html).trim();
+    item.add(Formats.plainText(plainText));
+    
+    await SystemClipboard.instance?.write([item]);
+    
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Formatted note copied!"),
+          backgroundColor: Colors.green,
+        ),
+      );
+    }
   }
 }
