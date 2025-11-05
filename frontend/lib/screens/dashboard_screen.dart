@@ -87,8 +87,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     // Set the current project and navigate to the workspace
                     provider.setCurrentProject(project);
                     Navigator.of(context).push(MaterialPageRoute(
-                      builder: (_) => WorkspaceScreen(),
-                    ));
+                        builder: (context) => const WorkspaceScreen())
+                    );
                   },
                 ),
               );
