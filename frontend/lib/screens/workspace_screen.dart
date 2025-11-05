@@ -1,55 +1,338 @@
+// lib/screens/workspace_screen.dart
+import 'dart:math';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:study_assistance/provider/project_provider.dart';
 import 'package:flutter_html/flutter_html.dart';
-import 'package:flutter/services.dart';
 import 'package:super_clipboard/super_clipboard.dart';
-
+import 'package:html2md/html2md.dart' as html2md;
+import 'package:markdown/markdown.dart' as md;
+import 'dart:typed_data';
+import 'package:study_assistance/screens/workspace_panels.dart';
 
 class WorkspaceScreen extends StatelessWidget {
+  const WorkspaceScreen({super.key});
+
+  // Define a breakpoint. Anything narrower than this will be considered "mobile".
+  static const double mobileBreakpoint = 600.0;
+
   @override
   Widget build(BuildContext context) {
-    return Consumer<ProjectProvider>(
-      builder: (context, provider, child) {
-        final project = provider.currentProject!;
-        final sources = provider.sources;
-        final selected = provider.selectedSource;
-        final scratchpad = provider.scratchpadContent;
-        final chat = provider.chatHistory;
-        final thinking = provider.isBotThinking;
-
-        return Scaffold(
-          appBar: AppBar(
-            title: Text(project.name),
-            leading: IconButton(
-              icon: const Icon(Icons.arrow_back),
-              onPressed: () => Navigator.pop(context),
-            ),
-          ),
-          body: Row(
-            children: [
-              // LEFT: Sources
-              _buildSourcesPanel(context, provider, sources, selected),
-              _buildResizer(),
-              // CENTER: Chat
-              _buildChatPanel(context, provider, chat, thinking),
-              _buildResizer(),
-              // RIGHT: Scratchpad + Topic Generator
-              _buildScratchpadPanel(context, provider, scratchpad),
-            ],
-          ),
-        );
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxWidth < mobileBreakpoint) {
+          // If the screen is narrow, show the mobile layout
+          return const MobileWorkspaceLayout();
+        } else {
+          // If the screen is wide, show the desktop layout
+          return const DesktopWorkspaceLayout();
+        }
       },
     );
   }
+}
 
-  Widget _buildSourcesPanel(BuildContext context, ProjectProvider p, List<Source> sources, Source? selected) {
-    return Container(
-      width: 280,
-      decoration: BoxDecoration(
-        color: Colors.white,
-        border: Border(right: BorderSide(color: Colors.grey[300]!, width: 1)),
+class DesktopWorkspaceLayout extends StatefulWidget {
+  const DesktopWorkspaceLayout({super.key});
+
+  @override
+  State<DesktopWorkspaceLayout> createState() => _DesktopWorkspaceLayoutState();
+}
+
+class _DesktopWorkspaceLayoutState extends State<DesktopWorkspaceLayout> {
+  // State variables to manage panel widths and visibility
+  double _sourcesWidth = 280.0;
+  double _notesWidth = 400.0;
+  bool _isSourcesVisible = true;
+  bool _isChatVisible = true;
+  bool _isNotesVisible = true;
+  final double _minPanelWidth = 150.0; // Minimum width before a panel is useful
+  final double _collapseThreshold = 50.0; // Width at which panels auto-hide
+  final double _minChatPanelWidth = 200.0;
+
+  bool _isEditingNote = false;
+  final TextEditingController _noteEditController = TextEditingController();
+
+  final ScrollController _sourcesScrollController = ScrollController();
+  final ScrollController _notesScrollController = ScrollController();
+
+  @override
+  void dispose() {
+    _sourcesScrollController.dispose();
+    _notesScrollController.dispose();
+    _noteEditController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final provider = context.watch<ProjectProvider>();
+    final project = provider.currentProject!;
+    final int visibleCount = (_isSourcesVisible ? 1 : 0) +
+        (_isChatVisible ? 1 : 0) +
+        (_isNotesVisible ? 1 : 0);
+    final double screenWidth = MediaQuery.of(context).size.width;
+
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(project.name),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () => Navigator.pop(context),
+        ),
+        // --- RESTORED AppBar actions ---
+        actions: [
+          _buildVisibilityToggleButton(
+            tooltip: 'Toggle Sources',
+            icon: Icons.folder_open,
+            color: Colors.blue[300]!,
+            isVisible: _isSourcesVisible,
+            onPressed: () => _togglePanelVisibility('sources'),
+            isDisabled: _isSourcesVisible && visibleCount == 1,
+          ),
+          _buildVisibilityToggleButton(
+            tooltip: 'Toggle AI Chat',
+            icon: Icons.chat_bubble_outline,
+            color: Colors.purple[300]!,
+            isVisible: _isChatVisible,
+            onPressed: () => _togglePanelVisibility('chat'),
+            isDisabled: _isChatVisible && visibleCount == 1,
+          ),
+          _buildVisibilityToggleButton(
+            tooltip: 'Toggle Notes',
+            icon: Icons.note_alt,
+            color: Colors.green[300]!,
+            isVisible: _isNotesVisible,
+            onPressed: () => _togglePanelVisibility('notes'),
+            isDisabled: _isNotesVisible && visibleCount == 1,
+          ),
+          const SizedBox(width: 8),
+        ],
       ),
+
+      // In your build method...
+
+      body: Row(
+        children: [
+          // --- SOURCES PANEL (Left) ---
+          if (_isSourcesVisible)
+            _isChatVisible
+                ? SizedBox(
+                    width: _sourcesWidth,
+                    // PASS THE CONTROLLER HERE
+                    child: SourcesPanel(
+                        scrollController: _sourcesScrollController),
+                  )
+                : Expanded(
+                    flex: _sourcesWidth.round(),
+                    // AND PASS IT HERE
+                    child: SourcesPanel(
+                        scrollController: _sourcesScrollController),
+                  ),
+
+          // --- RESIZER 1 ---
+          if (_isSourcesVisible && _isChatVisible)
+            _buildResizer(
+              onDrag: (details) {
+                setState(() {
+                  _sourcesWidth =
+                      max(_collapseThreshold, _sourcesWidth + details.delta.dx);
+                  if (_sourcesWidth < _minPanelWidth) _isSourcesVisible = false;
+                  final chatWidth = screenWidth -
+                      _sourcesWidth -
+                      (_isNotesVisible ? _notesWidth + 8 : 0) -
+                      8;
+                  if (chatWidth < _minChatPanelWidth && visibleCount > 1)
+                    _isChatVisible = false;
+                });
+              },
+            ),
+
+          // --- CHAT PANEL (Center) ---
+          if (_isChatVisible) const Expanded(child: AiChatPanel()),
+
+          // --- RESIZER 2 ---
+          if (_isChatVisible && _isNotesVisible)
+            _buildResizer(
+              onDrag: (details) {
+                setState(() {
+                  _notesWidth =
+                      max(_collapseThreshold, _notesWidth - details.delta.dx);
+                  if (_notesWidth < _minPanelWidth) _isNotesVisible = false;
+                  final chatWidth = screenWidth -
+                      _notesWidth -
+                      (_isSourcesVisible ? _sourcesWidth + 8 : 0) -
+                      8;
+                  if (chatWidth < _minChatPanelWidth && visibleCount > 1)
+                    _isChatVisible = false;
+                });
+              },
+            ),
+
+          // --- NOTES PANEL (Right) ---
+          if (_isNotesVisible)
+            _isChatVisible
+                ? SizedBox(
+                    width: _notesWidth,
+                    child: _buildScratchpadPanel(context, provider),
+                  )
+                : Expanded(
+                    flex: _notesWidth.round(),
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        return SizedBox(
+                          width: constraints.maxWidth,
+                          height: constraints.maxHeight,
+                          child: _buildScratchpadPanel(context, provider),
+                        );
+                      },
+                    ),
+                  ),
+        ],
+      ),
+    );
+  }
+
+  // In _WorkspaceScreenState
+
+  void _togglePanelVisibility(String panel) {
+    setState(() {
+      // --- Logic for enabling the chat panel ---
+      if (panel == 'chat' && !_isChatVisible) {
+        _isChatVisible = true;
+
+        // Get total screen width to perform calculations
+        final double screenWidth = MediaQuery.of(context).size.width;
+
+        // Define a target width for the re-opened chat panel
+        const double targetChatWidth = 400.0;
+
+        // Calculate the current combined width of the side panels
+        final currentSidePanelsWidth = (_isSourcesVisible ? _sourcesWidth : 0) +
+            (_isNotesVisible ? _notesWidth : 0);
+
+        // Calculate the available space for the side panels
+        final availableSpaceForSidePanels =
+            screenWidth - targetChatWidth - 16; // 16 for 2 resizers
+
+        // If the side panels are too big for the chat to re-open comfortably...
+        if (currentSidePanelsWidth > availableSpaceForSidePanels) {
+          // Calculate the overflow amount
+          final overflow = currentSidePanelsWidth - availableSpaceForSidePanels;
+
+          // Shrink the visible side panels proportionally
+          if (_isSourcesVisible && _isNotesVisible) {
+            double sourcesProportion = _sourcesWidth / currentSidePanelsWidth;
+            double notesProportion = _notesWidth / currentSidePanelsWidth;
+            _sourcesWidth -= overflow * sourcesProportion;
+            _notesWidth -= overflow * notesProportion;
+          } else if (_isSourcesVisible) {
+            _sourcesWidth -= overflow;
+          } else if (_isNotesVisible) {
+            _notesWidth -= overflow;
+          }
+        }
+        return; // Exit after handling this special case
+      }
+
+      // --- Original logic for all other cases ---
+      bool isDisablingSources = (panel == 'sources' && _isSourcesVisible);
+      bool isDisablingChat = (panel == 'chat' && _isChatVisible);
+      bool isDisablingNotes = (panel == 'notes' && _isNotesVisible);
+
+      int visibleCount = (_isSourcesVisible ? 1 : 0) +
+          (_isChatVisible ? 1 : 0) +
+          (_isNotesVisible ? 1 : 0);
+
+      if (visibleCount > 1) {
+        if (isDisablingSources) _isSourcesVisible = false;
+        if (isDisablingChat) _isChatVisible = false;
+        if (isDisablingNotes) _isNotesVisible = false;
+      }
+
+      if (panel == 'sources' && !_isSourcesVisible) {
+        _isSourcesVisible = true;
+        _sourcesWidth = 280.0;
+      }
+      if (panel == 'notes' && !_isNotesVisible) {
+        _isNotesVisible = true;
+        _notesWidth = 400.0;
+      }
+    });
+  }
+
+  // Replace the old helper method with this one
+  // In _WorkspaceScreenState
+
+  Widget _buildVisibilityToggleButton({
+    required String tooltip,
+    required IconData icon,
+    required Color color,
+    required bool isVisible,
+    required VoidCallback onPressed,
+    required bool isDisabled,
+  }) {
+    return IconButton(
+      tooltip: tooltip,
+      icon: Icon(icon), // Icon color is now managed by the style
+      // Style the button itself
+      style: IconButton.styleFrom(
+        foregroundColor: color,
+        backgroundColor:
+            isVisible ? color.withOpacity(0.20) : Colors.transparent,
+        // Make the disabled state more obvious
+        disabledForegroundColor: color.withOpacity(0.3),
+      ),
+      // Disable the button if it's the last one visible
+      onPressed: isDisabled ? null : onPressed,
+    );
+  }
+
+  Widget _buildResizer({required GestureDragUpdateCallback onDrag}) {
+    return GestureDetector(
+      onHorizontalDragUpdate: onDrag,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.resizeLeftRight,
+        child: Container(
+          width: 8,
+          color: Colors.grey[300],
+        ),
+      ),
+    );
+  }
+
+  String _stripHtmlTags(String html) {
+    final RegExp exp = RegExp(r"<[^>]*>", multiLine: true, caseSensitive: true);
+    return html.replaceAll(exp, '');
+  }
+
+  Future<void> _copyRichTextToClipboard(
+      BuildContext context, String html) async {
+    final item = DataWriterItem();
+    item.add(Formats.htmlText(html));
+    final plainText = _stripHtmlTags(html).trim();
+    item.add(Formats.plainText(plainText));
+    await SystemClipboard.instance?.write([item]);
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Formatted note copied!"),
+          backgroundColor: Colors.green,
+        ),
+      );
+    }
+  }
+
+  // --- EXISTING PANEL BUILDERS (Slightly modified to accept provider) ---
+
+  Widget _buildSourcesPanel(BuildContext context, ProjectProvider p) {
+    final sources = p.sources;
+    final selected = p.selectedSource;
+
+    return Container(
+      color: Colors.white,
       child: Column(
         children: [
           // Header
@@ -59,172 +342,86 @@ class WorkspaceScreen extends StatelessWidget {
               color: Colors.blue[50],
               border: Border(bottom: BorderSide(color: Colors.grey[300]!)),
             ),
-            child: Row(
-              children: [
-                Icon(Icons.folder_open, color: Colors.blue[700]),
-                const SizedBox(width: 8),
-                const Text(
-                  "Sources",
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                ),
-              ],
-            ),
+            child: Row(children: [
+              Icon(Icons.folder_open, color: Colors.blue[700]),
+              const SizedBox(width: 8),
+              const Text("Sources",
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            ]),
           ),
-          
-          // Sources List
+
+          // SCROLLABLE LIST with controller
           Expanded(
             child: p.isLoadingSources
                 ? const Center(child: CircularProgressIndicator())
                 : sources.isEmpty
-                    ? Center(
-                        child: Padding(
-                          padding: const EdgeInsets.all(20),
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(Icons.upload_file, size: 64, color: Colors.grey[400]),
-                              const SizedBox(height: 16),
-                              Text(
-                                "No PDFs uploaded yet",
-                                style: TextStyle(color: Colors.grey[600], fontSize: 16),
-                                textAlign: TextAlign.center,
+                    ? _emptySources()
+                    : Scrollbar(
+                        controller: _sourcesScrollController, // Add controller
+                        thumbVisibility: true,
+                        thickness: 8.0,
+                        radius: const Radius.circular(4),
+                        child: ListView.builder(
+                          controller:
+                              _sourcesScrollController, // Add controller here too
+                          padding: const EdgeInsets.symmetric(vertical: 8),
+                          itemBuilder: (ctx, i) {
+                            final s = sources[i];
+                            final active = s.id == selected?.id;
+                            return Card(
+                              margin: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 4),
+                              color: active ? Colors.blue[600] : null,
+                              child: ListTile(
+                                leading: Icon(Icons.picture_as_pdf,
+                                    color: active
+                                        ? Colors.white
+                                        : Colors.red[700]),
+                                title: Text(s.filename,
+                                    style: TextStyle(
+                                        color: active ? Colors.white : null)),
+                                onTap: () => p.selectSource(s),
                               ),
-                              const SizedBox(height: 8),
-                              Text(
-                                "Click below to upload",
-                                style: TextStyle(color: Colors.grey[500], fontSize: 14),
-                              ),
-                            ],
-                          ),
+                            );
+                          },
+                          itemCount: sources.length,
                         ),
-                      )
-                    : ListView.builder(
-                        itemCount: sources.length,
-                        padding: const EdgeInsets.symmetric(vertical: 8),
-                        itemBuilder: (ctx, i) {
-                          final s = sources[i];
-                          final isSelected = s.id == selected?.id;
-                          
-                          return Container(
-                            margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                            decoration: BoxDecoration(
-                              color: isSelected ? Colors.blue[500] : Colors.white,
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(
-                                color: isSelected ? Colors.blue[700]! : Colors.grey[300]!,
-                                width: isSelected ? 2 : 1,
-                              ),
-                              boxShadow: isSelected
-                                  ? [
-                                      BoxShadow(
-                                        color: Colors.blue.withOpacity(0.3),
-                                        blurRadius: 8,
-                                        offset: const Offset(0, 2),
-                                      )
-                                    ]
-                                  : [],
-                            ),
-                            child: ListTile(
-                              leading: Icon(
-                                Icons.picture_as_pdf,
-                                color: isSelected ? Colors.white : Colors.red[700],
-                              ),
-                              title: Text(
-                                s.filename,
-                                style: TextStyle(
-                                  color: isSelected ? Colors.white : Colors.black87,
-                                  fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                                  fontSize: 14,
-                                ),
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                              trailing: isSelected
-                                  ? const Icon(Icons.check_circle, color: Colors.white)
-                                  : Icon(Icons.chevron_right, color: Colors.grey[400]),
-                              onTap: () => p.selectSource(s),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                            ),
-                          );
-                        },
                       ),
           ),
-          
-          const Divider(height: 1),
-          
-          // Upload Button
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: Colors.grey[50],
-              border: Border(top: BorderSide(color: Colors.grey[300]!)),
-            ),
-            child: Column(
-              children: [
-                ElevatedButton.icon(
-                  onPressed: p.isUploading ? null : () => p.pickAndUploadFiles(),
-                  icon: p.isUploading
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                          ),
-                        )
-                      : const Icon(Icons.upload_file),
-                  label: Text(p.isUploading ? "Uploading..." : "Upload PDFs"),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.blue[600],
-                    foregroundColor: Colors.white,
-                    minimumSize: const Size(double.infinity, 50),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    elevation: p.isUploading ? 0 : 2,
-                  ),
-                ),
-                if (sources.isNotEmpty) ...[
-                  const SizedBox(height: 8),
-                  Text(
-                    "${sources.length} source${sources.length > 1 ? 's' : ''} uploaded",
-                    style: TextStyle(color: Colors.grey[600], fontSize: 12),
-                  ),
-                ],
-              ],
-            ),
-          ),
+
+          // Upload Footer
+          _uploadFooter(p, sources),
         ],
       ),
     );
   }
 
-  Widget _buildChatPanel(BuildContext context, ProjectProvider p, List<ChatMessage> chat, bool thinking) {
-    return Expanded(
-      child: Column(
-        children: [
-          const Padding(
-            padding: EdgeInsets.all(16),
-            child: Text("AI Chat", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+  Widget _buildChatPanel(BuildContext context, ProjectProvider p) {
+    final chat = p.chatHistory;
+    final thinking = p.isBotThinking;
+    // The rest of this method's content is EXACTLY the same as your previous version.
+    return Column(
+      children: [
+        const Padding(
+          padding: EdgeInsets.all(16),
+          child: Text("AI Chat",
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+        ),
+        Expanded(
+          child: ListView.builder(
+            padding: const EdgeInsets.all(16),
+            itemCount: chat.length + (thinking ? 1 : 0),
+            itemBuilder: (ctx, i) {
+              if (i == chat.length && thinking) {
+                return _chatBubble("Thinking...", false);
+              }
+              final msg = chat[i];
+              return _chatBubble(msg.content, msg.isUser);
+            },
           ),
-          Expanded(
-            child: ListView.builder(
-              padding: const EdgeInsets.all(16),
-              itemCount: chat.length + (thinking ? 1 : 0),
-              itemBuilder: (ctx, i) {
-                if (i == chat.length && thinking) {
-                  return _chatBubble("Thinking...", false);
-                }
-                final msg = chat[i];
-                return _chatBubble(msg.content, msg.isUser);
-              },
-            ),
-          ),
-          _chatInput(p),
-        ],
-      ),
+        ),
+        _chatInput(p),
+      ],
     );
   }
 
@@ -256,7 +453,8 @@ class WorkspaceScreen extends StatelessWidget {
               controller: p.chatController,
               decoration: InputDecoration(
                 hintText: "Ask a question...",
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(25)),
+                border:
+                    OutlineInputBorder(borderRadius: BorderRadius.circular(25)),
                 filled: true,
                 fillColor: Colors.white,
               ),
@@ -280,192 +478,445 @@ class WorkspaceScreen extends StatelessWidget {
     }
   }
 
-  Widget _buildScratchpadPanel(BuildContext context, ProjectProvider p, String html) {
+  Widget _buildScratchpadPanel(BuildContext context, ProjectProvider p) {
+    final html = p.scratchpadContent;
+
+    if (_isEditingNote && _noteEditController.text.isEmpty) {
+      _noteEditController.text = html;
+    }
+
     return Container(
-      width: 400,
-      decoration: BoxDecoration(
-        color: Colors.white,
-        border: Border(left: BorderSide(color: Colors.grey[300]!, width: 1)),
-      ),
+      color: Colors.white,
       child: Column(
         children: [
           // Header
           Container(
             padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: Colors.green[50],
-              border: Border(bottom: BorderSide(color: Colors.grey[300]!)),
-            ),
-            child: Row(
-              children: [
-                Icon(Icons.note_alt, color: Colors.green[700]),
-                const SizedBox(width: 8),
-                const Text(
-                  "Study Notes",
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                ),
-              ],
-            ),
+            color: Colors.green[50],
+            child: Row(children: [
+              Icon(Icons.note_alt, color: Colors.green[700]),
+              const SizedBox(width: 8),
+              const Text("Study Notes",
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            ]),
           ),
-          
-          // Note Content
-          Expanded(
-            child: Container(
-              color: Colors.grey[50],
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.all(16),
-                child: p.isLoadingNote
-                    ? Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            const CircularProgressIndicator(),
-                            const SizedBox(height: 16),
-                            Text(
-                              "Generating AI study note...",
-                              style: TextStyle(color: Colors.grey[600]),
-                            ),
-                          ],
-                        ),
-                      )
-                    : Container(
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: Colors.grey[300]!),
-                        ),
-                        padding: const EdgeInsets.all(16),
-                        child: Html(data: html),
-                      ),
-              ),
-            ),
-          ),
-          
-          // Actions
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              border: Border(top: BorderSide(color: Colors.grey[300]!)),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
+
+          if (!_isEditingNote)
+            TextButton.icon(
+              icon: const Icon(Icons.edit, size: 18),
+              label: const Text("Edit"),
+              onPressed: () {
+                setState(() {
+                  // --- CONVERT HTML to MARKDOWN for the editor ---
+                  final markdown = html2md.convert(html);
+                  _noteEditController.text = markdown;
+                  _isEditingNote = true;
+                });
+              },
+            )
+          else
+            Row(
               children: [
-                // Show Source Note Button
-                ElevatedButton.icon(
-                  onPressed: p.selectedSource == null ? null : () => p.getNoteForSelectedSource(),
-                  icon: const Icon(Icons.refresh),
-                  label: const Text("Reload Source Note"),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.blue[600],
-                    foregroundColor: Colors.white,
-                    minimumSize: const Size(double.infinity, 45),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                  ),
-                ),
-                
-                const SizedBox(height: 8),
-                
-                // Copy Note Button
-                OutlinedButton.icon(
-                  // 2. CALL THE NEW COPY FUNCTION
-                  onPressed: () => _copyRichTextToClipboard(context, html),
-                  icon: const Icon(Icons.copy),
-                  label: const Text("Copy Note"),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: Colors.green[700],
-                    minimumSize: const Size(double.infinity, 45),
-                    side: BorderSide(color: Colors.green[300]!),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                  ),
-                ),
-                
-                const Divider(height: 24),
-                
-                // Custom Topic Generator
-                Text(
-                  "Generate Custom Note",
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: Colors.grey[700],
-                  ),
-                ),
-                const SizedBox(height: 8),
-                
-                TextField(
-                  controller: p.topicController,
-                  maxLines: 3,
-                  decoration: InputDecoration(
-                    hintText: "e.g., Summarize key concepts about object-oriented programming",
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    filled: true,
-                    fillColor: Colors.yellow[50],
-                  ),
-                ),
-                
-                const SizedBox(height: 8),
-                
-                ElevatedButton.icon(
+                TextButton(
+                  child:
+                      const Text("Cancel", style: TextStyle(color: Colors.red)),
                   onPressed: () {
-                    final topic = p.topicController.text.trim();
-                    if (topic.isNotEmpty) p.generateTopicNote(topic);
+                    setState(() {
+                      _isEditingNote = false;
+                      _noteEditController.clear();
+                    });
                   },
-                  icon: const Icon(Icons.auto_awesome),
-                  label: const Text("Generate Custom Note"),
+                ),
+                ElevatedButton.icon(
+                  icon: p.isSavingNote
+                      ? Container(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                              color: Colors.white, strokeWidth: 2))
+                      : const Icon(Icons.save, size: 18),
+                  label: Text(p.isSavingNote ? "Saving..." : "Save"),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.amber[600],
-                    foregroundColor: Colors.white,
-                    minimumSize: const Size(double.infinity, 45),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                  ),
+                      backgroundColor: Colors.green[700]),
+                  // Disable button while saving
+                  onPressed: p.isSavingNote
+                      ? null
+                      : () async {
+                          final editedMarkdown = _noteEditController.text;
+                          final newHtml = md.markdownToHtml(editedMarkdown,
+                              extensionSet: md.ExtensionSet.gitHubWeb);
+
+                          // --- CALL THE REAL SAVE METHOD ---
+                          final success = await p.saveNoteChanges(newHtml);
+
+                          if (success) {
+                            setState(() {
+                              _isEditingNote = false;
+                              _noteEditController.clear();
+                            });
+                          } else {
+                            // Optionally show a "Save Failed" snackbar
+                            ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                    content:
+                                        Text("Error: Could not save note."),
+                                    backgroundColor: Colors.red));
+                          }
+                        },
                 ),
               ],
             ),
+
+          Expanded(
+            child: p.isLoadingNote
+                ? const Center(
+                    child: Column(mainAxisSize: MainAxisSize.min, children: [
+                    CircularProgressIndicator(),
+                    Text("Generating...")
+                  ]))
+                : _isEditingNote
+                    ? _buildNoteEditor()
+                    : _buildNoteViewer(html),
+          ),
+
+          // Actions (This part remains the same)
+          if (!_isEditingNote) _noteActions(context, p, html),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildNoteViewer(String html) {
+    return Scrollbar(
+      controller: _notesScrollController,
+      thumbVisibility: true,
+      child: SingleChildScrollView(
+        controller: _notesScrollController,
+        padding: const EdgeInsets.all(16),
+        child: Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Html(data: html),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildNoteEditor() {
+    return Padding(
+      padding: const EdgeInsets.all(16.0),
+      child: TextField(
+        controller: _noteEditController,
+        maxLines: null, // Allows the text field to expand vertically
+        expands: true, // Fills the available space
+        keyboardType: TextInputType.multiline,
+        decoration: const InputDecoration(
+          hintText: "Edit your notes here...",
+          border: OutlineInputBorder(),
+          isDense: true,
+        ),
+        textAlignVertical: TextAlignVertical.top,
+      ),
+    );
+  }
+
+  Widget _emptySources() => Center(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Icon(Icons.upload_file, size: 64, color: Colors.grey[400]),
+          Text("No PDFs yet", style: TextStyle(color: Colors.grey[600])),
+          Text("Tap below to upload",
+              style: TextStyle(color: Colors.grey[500])),
+        ]),
+      );
+
+  Widget _uploadFooter(ProjectProvider p, List<Source> s) => Container(
+        padding: const EdgeInsets.all(12),
+        color: Colors.grey[50],
+        child: Column(children: [
+          ElevatedButton.icon(
+            onPressed: p.isUploading ? null : p.pickAndUploadFiles,
+            icon: p.isUploading
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(color: Colors.white))
+                : const Icon(Icons.upload_file),
+            label: Text(p.isUploading ? "Uploading..." : "Upload PDFs"),
+            style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.blue[600],
+                minimumSize: const Size(double.infinity, 50)),
+          ),
+          if (s.isNotEmpty)
+            Text("${s.length} source${s.length > 1 ? 's' : ''}",
+                style: const TextStyle(fontSize: 12, color: Colors.grey)),
+        ]),
+      );
+
+  Widget _noteActions(BuildContext ctx, ProjectProvider p, String html) =>
+      Container(
+        padding: const EdgeInsets.all(12),
+        child: Column(children: [
+          ElevatedButton.icon(
+              onPressed:
+                  p.selectedSource == null ? null : p.getNoteForSelectedSource,
+              icon: const Icon(Icons.refresh),
+              label: const Text("Reload")),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+              onPressed: () => _copyRichTextToClipboard(ctx, html),
+              icon: const Icon(Icons.copy),
+              label: const Text("Copy Note")),
+          const Divider(height: 24),
+          TextField(
+              controller: p.topicController,
+              maxLines: 2,
+              decoration: const InputDecoration(hintText: "e.g. Explain OOP")),
+          ElevatedButton.icon(
+              onPressed: () {
+                final t = p.topicController.text.trim();
+                if (t.isNotEmpty) p.generateTopicNote(t);
+              },
+              icon: const Icon(Icons.auto_awesome),
+              label: const Text("Generate")),
+        ]),
+      );
+}
+
+class MobileWorkspaceLayout extends StatefulWidget {
+  const MobileWorkspaceLayout({super.key});
+
+  @override
+  State<MobileWorkspaceLayout> createState() => _MobileWorkspaceLayoutState();
+}
+
+class _MobileWorkspaceLayoutState extends State<MobileWorkspaceLayout> {
+  int _selectedIndex = 0; // 0 for Sources, 1 for Chat, 2 for Notes
+
+  final TextEditingController _noteEditController = TextEditingController();
+  bool _isEditingNote = false;
+
+  // In _MobileWorkspaceLayoutState
+
+  Widget _buildFirestoreImage(ExtensionContext context) {
+    // --- ADD THIS NULL CHECK ---
+    final buildContext = context.buildContext;
+    if (buildContext == null) {
+      // This should rarely happen, but it's a good safeguard.
+      return const SizedBox.shrink();
+    }
+
+    final String src = context.attributes['src'] ?? '';
+    if (!src.startsWith('firestore_media:')) {
+      return const SizedBox.shrink();
+    }
+
+    final mediaId = src.substring('firestore_media:'.length);
+    // Now we can safely use the non-nullable 'buildContext'
+    final provider = Provider.of<ProjectProvider>(buildContext, listen: false);
+
+    return FutureBuilder<Uint8List?>(
+      future: provider.apiService
+          .getMediaBytes(mediaId, provider.currentProject!.id),
+      builder: (ctx, snapshot) {
+        if (snapshot.connectionState == ConnectionState.done &&
+            snapshot.hasData &&
+            snapshot.data != null) {
+          return Image.memory(snapshot.data!);
+        }
+        return const Padding(
+          padding: EdgeInsets.all(8.0),
+          child: Center(child: CircularProgressIndicator()),
+        );
+      },
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final provider = context.watch<ProjectProvider>();
+    final project = provider.currentProject!;
+
+    final List<Widget> _pages = <Widget>[
+      const SourcesPanel(),
+      const AiChatPanel(),
+      _buildMobileNotesPanel(provider),
+    ];
+
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(project.name),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () => Navigator.pop(context),
+        ),
+        // Add Save/Edit button for notes tab
+        actions: [
+          if (_selectedIndex == 2)
+            // Show a loading indicator while saving
+            if (provider.isSavingNote)
+              const Padding(
+                padding: EdgeInsets.all(16.0),
+                child: SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(color: Colors.white)),
+              )
+            else
+              TextButton(
+                onPressed: () async {
+                  // Make this async
+                  if (_isEditingNote) {
+                    // --- SAVE ---
+                    // Call the real save method from the provider
+                    final success = await provider
+                        .saveNoteChanges(_noteEditController.text);
+                    if (success) {
+                      // Only exit edit mode if save was successful
+                      setState(() {
+                        _isEditingNote = false;
+                      });
+                    } else {
+                      // Show error snackbar
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                            content: Text("Error saving note"),
+                            backgroundColor: Colors.red),
+                      );
+                    }
+                  } else {
+                    // --- EDIT ---
+                    // When entering edit mode, set the controller text ONCE.
+                    setState(() {
+                      _noteEditController.text = provider.scratchpadContent;
+                      _isEditingNote = true;
+                    });
+                  }
+                },
+                child: Text(
+                  _isEditingNote ? "SAVE" : "EDIT",
+                  style: const TextStyle(color: Colors.white),
+                ),
+              ),
+        ],
+      ),
+      body: IndexedStack(
+        index: _selectedIndex,
+        children: _pages,
+      ),
+      // --- NEW: Add Floating Action Button for Camera ---
+      floatingActionButton: _selectedIndex == 2 && _isEditingNote
+          ? FloatingActionButton(
+              onPressed: () async {
+                // Get the current text from the editor
+                final currentText = _noteEditController.text;
+                // Pass it to the provider, which returns the new combined text
+                final newText =
+                    await provider.takePhotoAndInsertToNote(currentText);
+
+                // Update the controller with the new text
+                if (newText != null) {
+                  setState(() {
+                    // Use setState to ensure UI updates if needed
+                    _noteEditController.text = newText;
+                    _noteEditController.selection = TextSelection.fromPosition(
+                      TextPosition(offset: _noteEditController.text.length),
+                    );
+                  });
+                }
+              },
+              child: const Icon(Icons.camera_alt),
+            )
+          : null,
+      bottomNavigationBar: BottomNavigationBar(
+        currentIndex: _selectedIndex,
+        onTap: (index) async {
+          // Make it async
+          if (_isEditingNote) {
+            // Auto-save when switching tabs.
+            await provider.saveNoteChanges(_noteEditController.text);
+            _isEditingNote = false;
+          }
+          setState(() {
+            _selectedIndex = index;
+          });
+        },
+        items: const <BottomNavigationBarItem>[
+          BottomNavigationBarItem(
+            icon: Icon(Icons.folder_open),
+            label: 'Sources',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.chat_bubble_outline),
+            label: 'Chat',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.note_alt),
+            label: 'Notes',
           ),
         ],
       ),
     );
   }
 
-  String _stripHtmlTags(String html) {
-    // This is a simple regex to remove HTML tags.
-    // For more complex HTML, a dedicated package might be better,
-    // but this is often sufficient.
-    final RegExp exp = RegExp(r"<[^>]*>", multiLine: true, caseSensitive: true);
-    return html.replaceAll(exp, '');
-  }
+  Widget _buildMobileNotesPanel(ProjectProvider p) {
+    return Padding(
+      padding: const EdgeInsets.all(8.0),
+      child: _isEditingNote
+          ? TextField(
+              controller: _noteEditController,
+              maxLines: null,
+              expands: true,
+              keyboardType: TextInputType.multiline,
+              decoration: const InputDecoration(
+                hintText: "Edit your notes...",
+                border: InputBorder.none,
+              ),
+            )
+          : SingleChildScrollView(
+              child: Html(
+                data: p.scratchpadContent,
+                extensions: [
+                  TagExtension(
+                    // --- CHANGE THIS: Look for our new custom tag ---
+                    tagsToExtend: {"firestore-image"},
+                    builder: (ExtensionContext context) {
+                      final buildContext = context.buildContext;
+                      if (buildContext == null) {
+                        return const SizedBox.shrink();
+                      }
 
-  Future<void> _copyRichTextToClipboard(BuildContext context, String html) async {
-      final item = DataWriterItem();
-      item.add(Formats.htmlText(html));
-      final plainText = _stripHtmlTags(html).trim();
-      item.add(Formats.plainText(plainText));
-      
-      await SystemClipboard.instance?.write([item]);
-      
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text("Formatted note copied!"),
-          backgroundColor: Colors.green,
-        ),
-      );
-  }
+                      // We are now guaranteed that this builder only runs for our custom tag.
+                      // The 'src' attribute will contain just the mediaId.
+                      final String mediaId = context.attributes['src'] ?? '';
 
-  Widget _buildResizer() {
-    return MouseRegion(
-      cursor: SystemMouseCursors.resizeLeftRight,
-      child: Container(
-        width: 8,
-        color: Colors.grey[300],
-      ),
+                      if (mediaId.isEmpty) {
+                        return const Text("[Image Error: Missing ID]");
+                      }
+
+                      final provider = Provider.of<ProjectProvider>(
+                          buildContext,
+                          listen: false);
+
+                      return FutureBuilder<Uint8List?>(
+                        future: provider.getCachedMediaBytes(mediaId), 
+                        builder: (ctx, snapshot) {
+                          if (snapshot.connectionState == ConnectionState.done && snapshot.hasData && snapshot.data != null) {
+                            return Image.memory(snapshot.data!);
+                          }
+                          // Only show the spinner on the very first load.
+                          // On subsequent rebuilds, the FutureBuilder will resolve instantly with cached data.
+                          return const Padding(
+                            padding: EdgeInsets.all(8.0),
+                            child: Center(child: CircularProgressIndicator()),
+                          );
+                        },
+                      );
+                    },
+                  ),
+                ],
+              ),
+            ),
     );
   }
 }

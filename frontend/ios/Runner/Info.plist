@@ -45,5 +45,9 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+
+	<key>NSCameraUsageDescription</key>
+    <string>This app needs access to the camera to add photos to your notes.</string>
+
 </dict>
 </plist>
