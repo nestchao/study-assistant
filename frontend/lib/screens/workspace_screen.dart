@@ -19,8 +19,12 @@ class WorkspaceScreen extends StatelessWidget {
         final thinking = provider.isBotThinking;
 
         return Scaffold(
+          backgroundColor: Colors.grey[100], // Consistent background
           appBar: AppBar(
-            title: Text(project.name),
+            title: Text(project.name, style: const TextStyle(color: Colors.black87)),
+            backgroundColor: Colors.white,
+            elevation: 1.0,
+            iconTheme: const IconThemeData(color: Colors.black54), // Back button color
             leading: IconButton(
               icon: const Icon(Icons.arrow_back),
               onPressed: () => Navigator.pop(context),

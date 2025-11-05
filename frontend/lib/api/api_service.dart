@@ -97,6 +97,16 @@ class ApiService {
     return json.decode(response.body)['answer'] ?? 'No response';
   }
 
+  Future<void> deleteProject(String projectId) async {
+    final response = await http.delete(
+      Uri.parse('$baseUrl/delete-project/$projectId'),
+    );
+
+    if (response.statusCode != 200) {
+      throw Exception('Failed to delete project');
+    }
+  }
+
   // ADD THIS METHOD
   Future<Map<String, dynamic>> hello() async {
     final response = await http.get(Uri.parse('$baseUrl/api/hello'));

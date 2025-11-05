@@ -1,10 +1,14 @@
-import 'dart:developer';
+// frontend/lib/provider/project_provider.dart
 
-import 'package:flutter/material.dart';
+import 'dart:convert';
+import 'dart:developer';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:study_assistance/api/api_service.dart';
 import 'package:study_assistance/models/project.dart';
 
+// Your Source and ChatMessage classes remain the same
 class Source {
   final String id;
   final String filename;
@@ -24,6 +28,13 @@ class ProjectProvider with ChangeNotifier {
   final projectNameController = TextEditingController();
   final chatController = TextEditingController();
   final topicController = TextEditingController();
+
+  // NEW: Add a constructor to load from cache immediately
+  ProjectProvider() {
+    _loadProjectsFromCache();
+    // Start fetching from the API immediately after loading cache
+    fetchProjects();
+  }
 
   @override
   void dispose() {
@@ -52,7 +63,8 @@ class ProjectProvider with ChangeNotifier {
   Source? _selectedSource;
   Source? get selectedSource => _selectedSource;
 
-  String _scratchpadContent = "<p>Select a source and click 'Show Source Note'.</p>";
+  String _scratchpadContent =
+      "<p>Select a source and click 'Show Source Note'.</p>";
   String get scratchpadContent => _scratchpadContent;
   bool _isLoadingNote = false;
   bool get isLoadingNote => _isLoadingNote;
@@ -63,41 +75,113 @@ class ProjectProvider with ChangeNotifier {
   List<ChatMessage> get chatHistory => _chatHistory;
   bool _isBotThinking = false;
   bool get isBotThinking => _isBotThinking;
-  bool _hasFetched = false;
 
-  Future<void> fetchProjects() async {
-    if (_hasFetched || _isLoadingProjects) return;
-    _hasFetched = true;
+  // Add a state variable to track the ID of the project being deleted.
+  String? _deletingProjectId;
+  String? get deletingProjectId => _deletingProjectId;
+
+  // --- NEW CACHING LOGIC ---
+
+  Future<void> _loadProjectsFromCache() async {
+    final prefs = await SharedPreferences.getInstance();
+    final String? projectsJson = prefs.getString('cached_projects');
+
+    if (projectsJson != null) {
+      final List<dynamic> projectList = jsonDecode(projectsJson);
+      _projects = projectList.map((map) => Project.fromMap(map)).toList();
+      print("✅ Loaded ${_projects.length} projects from cache.");
+      notifyListeners(); // Show cached data on the UI immediately
+    }
+  }
+
+  Future<void> _saveProjectsToCache() async {
+    final prefs = await SharedPreferences.getInstance();
+    final List<Map<String, dynamic>> projectList =
+        _projects.map((p) => p.toMap()).toList();
+    await prefs.setString('cached_projects', jsonEncode(projectList));
+    print("💾 Saved ${_projects.length} projects to cache.");
+  }
+
+  // --- UPDATED DATA FETCHING METHODS ---
+
+  /// Fetches projects from the API.
+  /// If `forceRefresh` is false, it won't fetch if a list is already present
+  /// and not loading (this is mostly for the constructor call).
+  Future<void> fetchProjects({bool forceRefresh = false}) async {
+    // Prevent simultaneous fetches or redundant fetches if not forcing a refresh
+    if (_isLoadingProjects) return;
+
+    // Only prevent fetch if we have data AND we are not forcing a refresh
+    if (_projects.isNotEmpty && !forceRefresh) {
+      // If we have data, we assume it came from cache, so we still start loading
+      // to refresh it in the background, but we don't return here.
+    }
+    
     _isLoadingProjects = true;
-    notifyListeners();
+    // Only show the full-screen loading spinner if the cache was empty
+    if (_projects.isEmpty || forceRefresh) {
+      notifyListeners();
+    }
 
     try {
       final data = await _api.getProjects();
-      _projects = data.map((map) => Project.fromMap(map)).toList();
+      final newProjects = data.map((map) => Project.fromMap(map)).toList();
+      
+      // Only update and save if the data actually changed
+      if (jsonEncode(newProjects.map((p) => p.toMap()).toList()) != jsonEncode(_projects.map((p) => p.toMap()).toList())) {
+          _projects = newProjects;
+          await _saveProjectsToCache(); // Save fresh data to cache
+      }
     } catch (e) {
-      print("Error: $e");
+      print("Error fetching projects: $e");
+      // If fetching fails, we keep the cached list, but still need to stop loading.
     } finally {
       _isLoadingProjects = false;
       notifyListeners();
     }
   }
 
+  // UPDATED: Now refreshes the project list and saves to cache
   Future<void> createProject(String name) async {
     if (name.isEmpty) return;
     try {
-      await _api.createProject(name);  // Use ApiService
-      await fetchProjects(); // ADD THIS LINE
-      notifyListeners();
+      await _api.createProject(name);
+      // Force a refresh to get the new project from the server and update cache
+      await fetchProjects(forceRefresh: true);
     } catch (e) {
       print("Error creating project: $e");
     }
   }
 
+  // UPDATED: Now updates the cache after deleting
+  Future<void> deleteProject(String projectId) async {
+    _deletingProjectId = projectId;
+    notifyListeners(); // Tell the UI to show a loading indicator for this project
+
+    try {
+      await _api.deleteProject(projectId); // Call the API
+      _projects.removeWhere((project) => project.id == projectId); // Remove from local list
+      await _saveProjectsToCache(); // Update the cache
+    } catch (e) {
+      print("Error deleting project: $e");
+      // Re-throw the error so the UI can catch it and show a message
+      rethrow;
+    } finally {
+      // This block runs whether the deletion succeeded or failed.
+      _deletingProjectId = null;
+      notifyListeners(); // Tell the UI to remove the loading indicator
+    }
+  }
+
+  // --- REST OF YOUR METHODS (Unchanged functionality) ---
+
   void setCurrentProject(Project project) {
     _currentProject = project;
     _sources = [];
     _selectedSource = null;
-    _chatHistory = [ChatMessage(content: "Hello! Ask a question to get started.", isUser: false)];
+    _chatHistory = [
+      ChatMessage(content: "Hello! Ask a question to get started.", isUser: false)
+    ];
     _scratchpadContent = "<p>Select a source and click 'Show Source Note'.</p>";
     fetchSources();
     notifyListeners();
@@ -109,10 +193,9 @@ class ProjectProvider with ChangeNotifier {
     notifyListeners();
     try {
       final data = await _api.getSources(_currentProject!.id);
-      _sources = data.map((s) => Source(
-        id: s['id'],           // ← THIS IS SAFE ID
-        filename: s['filename']
-      )).toList();
+      _sources = data
+          .map((s) => Source(id: s['id'], filename: s['filename']))
+          .toList();
     } catch (e) {
       // print("Error fetching sources: $e");
     }
@@ -133,7 +216,7 @@ class ProjectProvider with ChangeNotifier {
       notifyListeners();
       try {
         await _api.uploadSources(_currentProject!.id, result.files);
-        await fetchSources();     
+        await fetchSources();
         notifyListeners();
         log("Uploading...");
       } catch (e) {
@@ -141,17 +224,12 @@ class ProjectProvider with ChangeNotifier {
       }
       _isUploading = false;
       notifyListeners();
-
-      
     }
   }
 
   void selectSource(Source? source) {
-    // Prevent duplicate selection
     if (_selectedSource?.id == source?.id) return;
-    
     _selectedSource = source;
-    
     if (source == null) {
       _chatHistory.add(ChatMessage(
         content: "You are now chatting with all sources.",
@@ -162,11 +240,8 @@ class ProjectProvider with ChangeNotifier {
         content: "📄 Conversation started for <b>${source.filename}</b>",
         isUser: false,
       ));
-      
-      // Auto-load the note
       getNoteForSelectedSource();
     }
-    
     notifyListeners();
   }
 
@@ -176,7 +251,8 @@ class ProjectProvider with ChangeNotifier {
     _scratchpadContent = "<p>Loading note...</p>";
     notifyListeners();
     try {
-      _scratchpadContent = await _api.getNote(_currentProject!.id, _selectedSource!.id);
+      _scratchpadContent =
+          await _api.getNote(_currentProject!.id, _selectedSource!.id);
     } catch (e) {
       _scratchpadContent = "<p>Error fetching note.</p>";
     }
@@ -190,7 +266,8 @@ class ProjectProvider with ChangeNotifier {
     _scratchpadContent = "<p>Generating note...</p>";
     notifyListeners();
     try {
-      _scratchpadContent = await _api.generateTopicNote(_currentProject!.id, topic);
+      _scratchpadContent =
+          await _api.generateTopicNote(_currentProject!.id, topic);
       topicController.clear();
     } catch (e) {
       _scratchpadContent = "<p>Error generating note.</p>";
@@ -204,12 +281,14 @@ class ProjectProvider with ChangeNotifier {
     _chatHistory.add(ChatMessage(content: question, isUser: true));
     _isBotThinking = true;
     notifyListeners();
-
     try {
-      final historyForApi = _chatHistory.where((m) => !m.isUser || m != _chatHistory.last)
+      // Prepare history: all messages except the last user message (which is `question`)
+      // The API call expects the current question separately.
+      final historyForApi = _chatHistory
+          .where((m) => !m.isUser || m != _chatHistory.last)
           .map((m) => {'role': m.isUser ? 'user' : 'bot', 'content': m.content})
           .toList();
-
+          
       final answer = await _api.askChatbot(
         _currentProject!.id,
         question,
@@ -218,9 +297,9 @@ class ProjectProvider with ChangeNotifier {
       );
       _chatHistory.add(ChatMessage(content: answer, isUser: false));
     } catch (e) {
-      _chatHistory.add(ChatMessage(content: "Error: Could not get response.", isUser: false));
+      _chatHistory.add(
+          ChatMessage(content: "Error: Could not get response.", isUser: false));
     }
-
     _isBotThinking = false;
     notifyListeners();
   }
