@@ -6,10 +6,10 @@ import 'package:provider/provider.dart';
 import 'package:study_assistance/provider/project_provider.dart';
 import 'package:flutter_html/flutter_html.dart';
 import 'package:super_clipboard/super_clipboard.dart';
-import 'package:html2md/html2md.dart' as html2md;
-import 'package:markdown/markdown.dart' as md;
-import 'dart:typed_data';
 import 'package:study_assistance/screens/workspace_panels.dart';
+import 'package:flutter_cache_manager/flutter_cache_manager.dart';
+import 'package:study_assistance/services/firestore_image_service.dart';
+import 'package:study_assistance/widgets/firestore_image.dart';
 
 class WorkspaceScreen extends StatelessWidget {
   const WorkspaceScreen({super.key});
@@ -50,6 +50,9 @@ class _DesktopWorkspaceLayoutState extends State<DesktopWorkspaceLayout> {
   final double _minPanelWidth = 150.0; // Minimum width before a panel is useful
   final double _collapseThreshold = 50.0; // Width at which panels auto-hide
   final double _minChatPanelWidth = 200.0;
+
+  static const String _firestoreImagePlaceholderPrefix = '%%FIRESTORE_IMAGE_';
+  static const String _firestoreImagePlaceholderSuffix = '%%';
 
   bool _isEditingNote = false;
   final TextEditingController _noteEditController = TextEditingController();
@@ -143,8 +146,9 @@ class _DesktopWorkspaceLayoutState extends State<DesktopWorkspaceLayout> {
                       _sourcesWidth -
                       (_isNotesVisible ? _notesWidth + 8 : 0) -
                       8;
-                  if (chatWidth < _minChatPanelWidth && visibleCount > 1)
+                  if (chatWidth < _minChatPanelWidth && visibleCount > 1) {
                     _isChatVisible = false;
+                  }
                 });
               },
             ),
@@ -164,8 +168,9 @@ class _DesktopWorkspaceLayoutState extends State<DesktopWorkspaceLayout> {
                       _notesWidth -
                       (_isSourcesVisible ? _sourcesWidth + 8 : 0) -
                       8;
-                  if (chatWidth < _minChatPanelWidth && visibleCount > 1)
+                  if (chatWidth < _minChatPanelWidth && visibleCount > 1) {
                     _isChatVisible = false;
+                  }
                 });
               },
             ),
@@ -507,10 +512,8 @@ class _DesktopWorkspaceLayoutState extends State<DesktopWorkspaceLayout> {
               label: const Text("Edit"),
               onPressed: () {
                 setState(() {
-                  // --- CONVERT HTML to MARKDOWN for the editor ---
-                  final markdown = html2md.convert(html);
-                  _noteEditController.text = markdown;
-                  _isEditingNote = true;
+                  _noteEditController.text = html; 
+                  _isEditingNote = true;    
                 });
               },
             )
@@ -529,10 +532,10 @@ class _DesktopWorkspaceLayoutState extends State<DesktopWorkspaceLayout> {
                 ),
                 ElevatedButton.icon(
                   icon: p.isSavingNote
-                      ? Container(
+                      ? SizedBox(
                           width: 18,
                           height: 18,
-                          child: CircularProgressIndicator(
+                          child: const CircularProgressIndicator(
                               color: Colors.white, strokeWidth: 2))
                       : const Icon(Icons.save, size: 18),
                   label: Text(p.isSavingNote ? "Saving..." : "Save"),
@@ -542,27 +545,25 @@ class _DesktopWorkspaceLayoutState extends State<DesktopWorkspaceLayout> {
                   onPressed: p.isSavingNote
                       ? null
                       : () async {
-                          final editedMarkdown = _noteEditController.text;
-                          final newHtml = md.markdownToHtml(editedMarkdown,
-                              extensionSet: md.ExtensionSet.gitHubWeb);
 
-                          // --- CALL THE REAL SAVE METHOD ---
-                          final success = await p.saveNoteChanges(newHtml);
+                        final newHtml = _noteEditController.text;
 
-                          if (success) {
-                            setState(() {
-                              _isEditingNote = false;
-                              _noteEditController.clear();
-                            });
-                          } else {
-                            // Optionally show a "Save Failed" snackbar
-                            ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                    content:
-                                        Text("Error: Could not save note."),
-                                    backgroundColor: Colors.red));
-                          }
-                        },
+                        final success = await p.saveNoteChanges(newHtml);
+
+                        if (success) {
+                          setState(() {
+                            _isEditingNote = false;
+                            _noteEditController.clear();
+                          });
+                        } else {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text("Error: Could not save note."),
+                              backgroundColor: Colors.red,
+                            ),
+                          );
+                        }
+                      },
                 ),
               ],
             ),
@@ -596,7 +597,21 @@ class _DesktopWorkspaceLayoutState extends State<DesktopWorkspaceLayout> {
         child: Card(
           child: Padding(
             padding: const EdgeInsets.all(16),
-            child: Html(data: html),
+            // --- THIS IS THE CLEANED-UP IMPLEMENTATION ---
+            child: Html(
+              data: html,
+              extensions: [
+                TagExtension(
+                  tagsToExtend: {"firestore-image"},
+                  builder: (ExtensionContext context) {
+                    final String mediaId = context.attributes['src'] ?? '';
+                    // Just return the new reusable widget. No complex logic here.
+                    return FirestoreImage(mediaId: mediaId);
+                  },
+                ),
+              ],
+            ),
+            // --- END OF FIX ---
           ),
         ),
       ),
@@ -696,48 +711,12 @@ class _MobileWorkspaceLayoutState extends State<MobileWorkspaceLayout> {
   final TextEditingController _noteEditController = TextEditingController();
   bool _isEditingNote = false;
 
-  // In _MobileWorkspaceLayoutState
-
-  Widget _buildFirestoreImage(ExtensionContext context) {
-    // --- ADD THIS NULL CHECK ---
-    final buildContext = context.buildContext;
-    if (buildContext == null) {
-      // This should rarely happen, but it's a good safeguard.
-      return const SizedBox.shrink();
-    }
-
-    final String src = context.attributes['src'] ?? '';
-    if (!src.startsWith('firestore_media:')) {
-      return const SizedBox.shrink();
-    }
-
-    final mediaId = src.substring('firestore_media:'.length);
-    // Now we can safely use the non-nullable 'buildContext'
-    final provider = Provider.of<ProjectProvider>(buildContext, listen: false);
-
-    return FutureBuilder<Uint8List?>(
-      future: provider.apiService
-          .getMediaBytes(mediaId, provider.currentProject!.id),
-      builder: (ctx, snapshot) {
-        if (snapshot.connectionState == ConnectionState.done &&
-            snapshot.hasData &&
-            snapshot.data != null) {
-          return Image.memory(snapshot.data!);
-        }
-        return const Padding(
-          padding: EdgeInsets.all(8.0),
-          child: Center(child: CircularProgressIndicator()),
-        );
-      },
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final provider = context.watch<ProjectProvider>();
     final project = provider.currentProject!;
 
-    final List<Widget> _pages = <Widget>[
+    final List<Widget> pages = <Widget>[
       const SourcesPanel(),
       const AiChatPanel(),
       _buildMobileNotesPanel(provider),
@@ -802,28 +781,29 @@ class _MobileWorkspaceLayoutState extends State<MobileWorkspaceLayout> {
       ),
       body: IndexedStack(
         index: _selectedIndex,
-        children: _pages,
+        children: pages,
       ),
       // --- NEW: Add Floating Action Button for Camera ---
       floatingActionButton: _selectedIndex == 2 && _isEditingNote
           ? FloatingActionButton(
               onPressed: () async {
-                // Get the current text from the editor
-                final currentText = _noteEditController.text;
-                // Pass it to the provider, which returns the new combined text
-                final newText =
-                    await provider.takePhotoAndInsertToNote(currentText);
+                // Get the current text FROM THE CONTROLLER
+              final currentText = _noteEditController.text;
+              
+              // Get the image tag from the provider
+              // IMPORTANT: We modify takePhotoAndInsertToNote to ONLY do the upload
+              // and return the tag. It should NOT modify any state itself.
+              final imageTag = await provider.getPhotoAsTag();
 
-                // Update the controller with the new text
-                if (newText != null) {
-                  setState(() {
-                    // Use setState to ensure UI updates if needed
-                    _noteEditController.text = newText;
-                    _noteEditController.selection = TextSelection.fromPosition(
-                      TextPosition(offset: _noteEditController.text.length),
-                    );
-                  });
-                }
+              // Update the controller with the new text
+              if (imageTag != null) {
+                setState(() {
+                  _noteEditController.text = currentText + imageTag;
+                  _noteEditController.selection = TextSelection.fromPosition(
+                    TextPosition(offset: _noteEditController.text.length),
+                  );
+                });
+              }
               },
               child: const Icon(Icons.camera_alt),
             )
@@ -878,7 +858,6 @@ class _MobileWorkspaceLayoutState extends State<MobileWorkspaceLayout> {
                 data: p.scratchpadContent,
                 extensions: [
                   TagExtension(
-                    // --- CHANGE THIS: Look for our new custom tag ---
                     tagsToExtend: {"firestore-image"},
                     builder: (ExtensionContext context) {
                       final buildContext = context.buildContext;
@@ -886,29 +865,79 @@ class _MobileWorkspaceLayoutState extends State<MobileWorkspaceLayout> {
                         return const SizedBox.shrink();
                       }
 
-                      // We are now guaranteed that this builder only runs for our custom tag.
-                      // The 'src' attribute will contain just the mediaId.
                       final String mediaId = context.attributes['src'] ?? '';
-
                       if (mediaId.isEmpty) {
                         return const Text("[Image Error: Missing ID]");
                       }
 
                       final provider = Provider.of<ProjectProvider>(
-                          buildContext,
-                          listen: false);
+                        buildContext,
+                        listen: false,
+                      );
 
-                      return FutureBuilder<Uint8List?>(
-                        future: provider.getCachedMediaBytes(mediaId), 
-                        builder: (ctx, snapshot) {
-                          if (snapshot.connectionState == ConnectionState.done && snapshot.hasData && snapshot.data != null) {
-                            return Image.memory(snapshot.data!);
+                      final cacheManager = FirestoreImageCacheManager(
+                        apiService: provider.apiService,
+                        projectId: provider.currentProject!.id,
+                      );
+
+                      final url = 'firestore_media:$mediaId';
+
+                      return FutureBuilder<FileInfo?>(
+                        // CHANGED: First check cache, if null then download
+                        future: _getOrDownloadImage(cacheManager, url),
+                        builder: (context, snapshot) {
+                          if (snapshot.connectionState == ConnectionState.waiting) {
+                            return const Center(
+                              child: Padding(
+                                padding: EdgeInsets.all(8.0),
+                                child: CircularProgressIndicator(),
+                              ),
+                            );
                           }
-                          // Only show the spinner on the very first load.
-                          // On subsequent rebuilds, the FutureBuilder will resolve instantly with cached data.
+                          
+                          if (snapshot.hasError) {
+                            print("Image Loading Error: ${snapshot.error}");
+                            return const Padding(
+                              padding: EdgeInsets.all(8.0),
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(Icons.error, color: Colors.red, size: 32),
+                                  SizedBox(height: 4),
+                                  Text(
+                                    "Failed to load image",
+                                    style: TextStyle(color: Colors.red, fontSize: 12),
+                                  ),
+                                ],
+                              ),
+                            );
+                          }
+                          
+                          if (snapshot.hasData && snapshot.data != null) {
+                            return Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 8.0),
+                              child: Image.file(
+                                snapshot.data!.file,
+                                errorBuilder: (context, error, stackTrace) {
+                                  print("Image.file Error: $error");
+                                  return const Icon(
+                                    Icons.broken_image,
+                                    color: Colors.grey,
+                                    size: 48,
+                                  );
+                                },
+                              ),
+                            );
+                          }
+                          
+                          // Fallback for null data
                           return const Padding(
                             padding: EdgeInsets.all(8.0),
-                            child: Center(child: CircularProgressIndicator()),
+                            child: Icon(
+                              Icons.broken_image,
+                              color: Colors.grey,
+                              size: 48,
+                            ),
                           );
                         },
                       );
@@ -918,5 +947,29 @@ class _MobileWorkspaceLayoutState extends State<MobileWorkspaceLayout> {
               ),
             ),
     );
+  }
+
+  Future<FileInfo?> _getOrDownloadImage(
+    CacheManager cacheManager,
+    String url,
+  ) async {
+    try {
+      // First, try to get from cache
+      var fileInfo = await cacheManager.getFileFromCache(url);
+      
+      if (fileInfo != null) {
+        print("Image loaded from cache: $url");
+        return fileInfo;
+      }
+      
+      // If not in cache, download it
+      print("Image not in cache, downloading: $url");
+      fileInfo = await cacheManager.downloadFile(url);
+      
+      return fileInfo;
+    } catch (e) {
+      print("Error in _getOrDownloadImage: $e");
+      rethrow;
+    }
   }
 }

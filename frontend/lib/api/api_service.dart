@@ -130,17 +130,18 @@ class ApiService {
     return null;
   }
 
-  // NEW: Gets the media content as raw bytes
   Future<Uint8List?> getMediaBytes(String mediaId, String projectId) async {
     final response = await http.get(
       Uri.parse('$baseUrl/media/get/$mediaId'),
-      headers: { 'X-User-ID': projectId }, // Auth
+      headers: { 'X-User-ID': projectId },
     );
 
     if (response.statusCode == 200) {
-      final String base64Content = json.decode(response.body)['content'];
-      return base64Decode(base64Content);
+      // THIS IS CORRECT: Return the raw bytes of the response body.
+      return response.bodyBytes;
     }
+
+    print("Failed to get media bytes: ${response.statusCode}");
     return null;
   }
 

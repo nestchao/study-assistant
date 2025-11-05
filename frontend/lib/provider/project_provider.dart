@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:study_assistance/api/api_service.dart';
 import 'package:study_assistance/models/project.dart';
-import 'dart:convert'; // Import
 import 'dart:typed_data'; // Import
 import 'package:image_picker/image_picker.dart';
 
@@ -28,33 +27,6 @@ class ProjectProvider with ChangeNotifier {
   final chatController = TextEditingController();
   final topicController = TextEditingController();
   final ImagePicker _picker = ImagePicker();
-
-  final Map<String, Uint8List> _mediaCache = {};
-
-  Future<Uint8List?> getCachedMediaBytes(String mediaId) async {
-    // 1. Check if the image is already in the cache.
-    if (_mediaCache.containsKey(mediaId)) {
-      print("CACHE HIT for mediaId: $mediaId");
-      // If yes, return it instantly from memory.
-      return _mediaCache[mediaId];
-    }
-
-    // 2. If not in the cache, fetch it from the backend.
-    print("CACHE MISS for mediaId: $mediaId. Fetching from network...");
-    if (_currentProject == null) return null;
-    
-    final imageBytes = await _api.getMediaBytes(mediaId, _currentProject!.id);
-
-    // 3. If the download was successful...
-    if (imageBytes != null) {
-      print("...fetched successfully. Storing in cache.");
-      // ...store the data in the cache for next time.
-      _mediaCache[mediaId] = imageBytes;
-    }
-
-    // 4. Return the newly fetched data.
-    return imageBytes;
-  }
 
   bool _isSavingNote = false;
   bool get isSavingNote => _isSavingNote;
@@ -170,7 +142,6 @@ class ProjectProvider with ChangeNotifier {
     _selectedSource = null;
     _chatHistory = [ChatMessage(content: "Hello! Ask a question to get started.", isUser: false)];
     _scratchpadContent = "<p>Select a source and click 'Show Source Note'.</p>";
-    _mediaCache.clear();
     fetchSources();
     notifyListeners();
   }
@@ -324,4 +295,32 @@ class ProjectProvider with ChangeNotifier {
     }
     return null; // Return null on failure
   }
+
+  Future<String?> getPhotoAsTag() async {
+  if (_currentProject == null) return null;
+
+  try {
+    final XFile? photo = await _picker.pickImage(source: ImageSource.camera);
+
+    if (photo != null) {
+      final Uint8List imageBytes = await photo.readAsBytes();
+      final String fileName = photo.name;
+
+      // This part just does the upload
+      final String? mediaId = await _api.uploadImageBytes(
+        _currentProject!.id,
+        imageBytes,
+        fileName,
+      );
+
+      // This part just returns the tag as a string
+      if (mediaId != null) {
+        return '\n\n<firestore-image src="$mediaId"></firestore-image>\n\n';
+      }
+    }
+  } catch (e) {
+    print("Error taking photo: $e");
+  }
+  return null;
+}
 }
