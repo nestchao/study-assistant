@@ -3,15 +3,12 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:study_assistance/provider/project_provider.dart';
 import 'package:flutter_html/flutter_html.dart';
+import 'package:super_clipboard/super_clipboard.dart';
+import 'package:study_assistance/screens/workspace_screen.dart'; 
 
 // --- PANEL 1: SOURCES ---
 class SourcesPanel extends StatelessWidget {
-
-  final ScrollController? scrollController;
-  const SourcesPanel({
-    super.key,
-    this.scrollController, // Make the controller optional
-  });
+  const SourcesPanel({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -19,26 +16,7 @@ class SourcesPanel extends StatelessWidget {
     final sources = p.sources;
     final selected = p.selectedSource;
 
-    final scrollableList = ListView.builder(
-      controller: scrollController, // <-- USE THE PASSED-IN CONTROLLER
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      itemBuilder: (ctx, i) {
-        final s = sources[i];
-        final active = s.id == selected?.id;
-        return Card(
-          margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          color: active ? Colors.blue[600] : null,
-          child: ListTile(
-            leading: Icon(Icons.picture_as_pdf, color: active ? Colors.white : Colors.red[700]),
-            title: Text(s.filename, style: TextStyle(color: active ? Colors.white : null)),
-            onTap: () => p.selectSource(s),
-          ),
-        );
-      },
-      itemCount: sources.length,
-    );
-
-    // This is the exact UI code from your old _buildSourcesPanel method
+    // This is the UI code that needs correction
     return Container(
       color: Colors.white,
       child: Column(
@@ -53,25 +31,45 @@ class SourcesPanel extends StatelessWidget {
             child: Row(children: [
               Icon(Icons.folder_open, color: Colors.blue[700]),
               const SizedBox(width: 8),
-              const Text("Sources", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              const Text("Sources",
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
             ]),
           ),
           // Scrollable List
           Expanded(
             child: p.isLoadingSources
                 ? const Center(child: CircularProgressIndicator())
-                : sources.isEmpty
-                ? _emptySources()
-            // --- UPDATE THE LOGIC HERE ---
-            // If a controller was provided, wrap the list in a Scrollbar
-                : scrollController != null
-                ? Scrollbar(
-              controller: scrollController,
-              thumbVisibility: true,
-              child: scrollableList,
-            )
-            // Otherwise, just show the list
-                : scrollableList,
+                : sources.isEmpty && !p.isLoadingSources
+                    ? _emptySources()
+                    : ListView.builder(
+                        // Increase itemCount by 1 to accommodate "All Sources"
+                        itemCount: sources.length + 1,
+                        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
+                        itemBuilder: (ctx, i) {
+                          // --- ADDED LOGIC FOR "ALL SOURCES" ---
+                          if (i == 0) {
+                            // This is the first item, build the "All Sources" tile
+                            return SourceTile(
+                              title: 'All Sources',
+                              icon: Icons.all_inclusive,
+                              isSelected: selected == null, // Selected if no specific source is chosen
+                              onTap: () => p.selectSource(null),
+                            );
+                          }
+
+                          // For all other items, subtract 1 from the index to get the correct source
+                          final s = sources[i - 1];
+                          return SourceTile(
+                            title: s.filename,
+                            icon: Icons.picture_as_pdf_rounded,
+                            isSelected: s.id == selected?.id,
+                            isDeleting: s.id == p.deletingSourceId,
+                            onTap: () => p.selectSource(s),
+                            // onDelete can be added here if you want a delete button
+                            // onDelete: () => _showDeleteSourceConfirmDialog(p, s),
+                          );
+                        },
+                      ),
           ),
           // Upload Footer
           _uploadFooter(p, sources),
@@ -82,29 +80,56 @@ class SourcesPanel extends StatelessWidget {
 
   // --- Helper widgets for Sources Panel ---
   Widget _emptySources() => Center(
-    child: Column(mainAxisSize: MainAxisSize.min, children: [
-      Icon(Icons.upload_file, size: 64, color: Colors.grey[400]),
-      Text("No PDFs yet", style: TextStyle(color: Colors.grey[600])),
-      Text("Tap below to upload", style: TextStyle(color: Colors.grey[500])),
-    ]),
-  );
-  Widget _uploadFooter(ProjectProvider p, List<Source> s) => Container(
-    padding: const EdgeInsets.all(12),
-    color: Colors.grey[50],
-    child: Column(children: [
-      ElevatedButton.icon(
-        onPressed: p.isUploading ? null : p.pickAndUploadFiles,
-        icon: p.isUploading
-            ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white))
-            : const Icon(Icons.upload_file),
-        label: Text(p.isUploading ? "Uploading..." : "Upload PDFs"),
-        style: ElevatedButton.styleFrom(backgroundColor: Colors.blue[600], minimumSize: const Size(double.infinity, 50)),
-      ),
-      if (s.isNotEmpty) Text("${s.length} source${s.length > 1 ? 's' : ''}", style: const TextStyle(fontSize: 12, color: Colors.grey)),
-    ]),
-  );
-}
+        child: Padding( // Added padding for better visual spacing
+          padding: const EdgeInsets.all(16.0),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Icon(Icons.upload_file, size: 64, color: Colors.grey[400]),
+            const SizedBox(height: 16),
+            Text("No PDFs yet", style: TextStyle(color: Colors.grey[600], fontSize: 18, fontWeight: FontWeight.w500)),
+            const SizedBox(height: 8),
+            Text(
+              "Tap the button below to upload your first study source.",
+              style: TextStyle(color: Colors.grey[500]),
+              textAlign: TextAlign.center,
+            ),
+          ]),
+        ),
+      );
 
+  Widget _uploadFooter(ProjectProvider p, List<Source> s) => Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration( // Changed to decoration for border
+            color: Colors.white,
+            border: Border(top: BorderSide(color: Colors.grey[200]!))),
+        child: Column(
+          children: [
+            ElevatedButton.icon(
+              onPressed: p.isUploading ? null : p.pickAndUploadFiles,
+              icon: p.isUploading
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: Colors.white))
+                  : const Icon(Icons.upload_file),
+              label: Text(p.isUploading ? "Uploading..." : "Upload PDFs"),
+              style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.indigo,
+                  foregroundColor: Colors.white,
+                  minimumSize: const Size(double.infinity, 50),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))
+              ),
+            ),
+            if (s.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 8.0),
+                child: Text("${s.length} source${s.length > 1 ? 's' : ''} uploaded",
+                    style: const TextStyle(fontSize: 12, color: Colors.grey)),
+              ),
+          ],
+        ),
+      );
+}
 
 // --- PANEL 2: AI CHAT ---
 class AiChatPanel extends StatelessWidget {
@@ -183,6 +208,178 @@ class AiChatPanel extends StatelessWidget {
       p.askQuestion(q);
       p.chatController.clear();
     }
+  }
+}
+
+// --- PANEL 3: STUDY NOTE ---
+class NotesPanel extends StatelessWidget {
+  const NotesPanel({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.watch<ProjectProvider>();
+    final html = p.scratchpadContent;
+
+    return Container(
+      color: Colors.white,
+      child: Column(
+        children: [
+          _buildPanelHeader("Study Note", Icons.edit_note_rounded, Colors.green),
+          Expanded(
+            child: Container(
+              color: Colors.grey[50],
+              child: p.isLoadingNote
+                  ? _buildNoteLoadingState()
+                  : SingleChildScrollView(
+                      padding: const EdgeInsets.all(16),
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.grey[200]!),
+                        ),
+                        padding: const EdgeInsets.all(16),
+                        child: SelectionArea(child: Html(data: html)),
+                      ),
+                    ),
+            ),
+          ),
+          _buildScratchpadActions(context, p, html),
+        ],
+      ),
+    );
+  }
+
+  // --- Helper widgets for Notes Panel ---
+  Widget _buildPanelHeader(String title, IconData icon, Color color) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border(bottom: BorderSide(color: Colors.grey[200]!)),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: color),
+          const SizedBox(width: 8),
+          Text(title,
+              style:
+                  const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildNoteLoadingState() {
+    return const Center(
+      child: Padding(
+        padding: EdgeInsets.all(20.0),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            CircularProgressIndicator(),
+            SizedBox(height: 16),
+            Text("Loading AI study note...",
+                style: TextStyle(color: Colors.grey)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildScratchpadActions(
+      BuildContext context, ProjectProvider p, String html) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+          color: Colors.white,
+          border: Border(top: BorderSide(color: Colors.grey[200]!))),
+      child: SingleChildScrollView( // Added to prevent overflow on small mobile screens
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: p.selectedSource == null
+                        ? null
+                        : () => p.getNoteForSelectedSource(),
+                    icon: const Icon(Icons.refresh_rounded),
+                    label: const Text("Reload"),
+                    style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 12)),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () => _copyRichTextToClipboard(context, html),
+                    icon: const Icon(Icons.copy_all_rounded),
+                    label: const Text("Copy"),
+                    style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 12)),
+                  ),
+                ),
+              ],
+            ),
+            const Divider(height: 24),
+            const Text("Generate Custom Note",
+                style: TextStyle(fontWeight: FontWeight.bold)),
+            const SizedBox(height: 8),
+            TextField(
+              controller: p.topicController,
+              decoration: InputDecoration(
+                hintText: "e.g., Explain the main theories...",
+                border:
+                    OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                filled: true,
+                fillColor: Colors.grey[100],
+              ),
+            ),
+            const SizedBox(height: 8),
+            ElevatedButton.icon(
+              onPressed: () {
+                final topic = p.topicController.text.trim();
+                if (topic.isNotEmpty) {
+                  p.generateTopicNote(topic);
+                  FocusScope.of(context).unfocus();
+                }
+              },
+              icon: const Icon(Icons.auto_awesome_rounded),
+              label: const Text("Generate"),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.amber[700],
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8)),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _stripHtmlTags(String html) {
+    final RegExp exp = RegExp(r"<[^>]*>", multiLine: true, caseSensitive: true);
+    return html.replaceAll(exp, '').replaceAll('&nbsp;', ' ');
+  }
+
+  Future<void> _copyRichTextToClipboard(
+      BuildContext context, String html) async {
+    final item = DataWriterItem();
+    item.add(Formats.htmlText(html));
+    final plainText = _stripHtmlTags(html).trim();
+    item.add(Formats.plainText(plainText));
+    await SystemClipboard.instance?.write([item]);
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text("Formatted note copied!"),
+        backgroundColor: Colors.green,
+      ),
+    );
   }
 }
 
