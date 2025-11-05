@@ -5,7 +5,10 @@ import 'package:study_assistance/screens/dashboard_screen.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 Future<void> main() async {
-  await dotenv.load(fileName: "assets/.env"); // ADD THIS LINE
+  // Add this line to ensure plugins are initialized
+  WidgetsFlutterBinding.ensureInitialized();
+  await dotenv.load(fileName: "assets/.env");
+  
   runApp(
     ChangeNotifierProvider(
       create: (_) => ProjectProvider(),
