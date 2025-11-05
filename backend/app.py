@@ -176,6 +176,30 @@ def delete_collection(coll_ref, batch_size):
 # CORRECTED: Removed the old @app.route('/') and @app.route('/workspace/...') routes
 # that were causing the crash.
 
+# --- ADD THIS ENTIRE NEW ROUTE ---
+@app.route('/delete-project/<project_id>', methods=['DELETE'])
+def delete_project(project_id):
+    print(f"\n🗑️  DELETE REQUEST for project: {project_id}")
+    try:
+        project_ref = db.collection('projects').document(project_id)
+
+        # 1. Delete all subcollections first
+        for collection_ref in project_ref.collections():
+            print(f"  Deleting subcollection: {collection_ref.id}")
+            delete_collection(collection_ref, batch_size=50)
+
+        # 2. After subcollections are gone, delete the project document itself
+        project_ref.delete()
+        print(f"✅ Successfully deleted project document: {project_id}")
+        
+        return jsonify({"success": True, "message": f"Project {project_id} deleted."}), 200
+
+    except Exception as e:
+        import traceback
+        print(f"❌ Error deleting project {project_id}: {e}")
+        print(traceback.format_exc())
+        return jsonify({"success": False, "error": str(e)}), 500
+
 # ADDED: A simple health-check route for the Flutter app to call.
 @app.route('/api/hello')
 def hello():
