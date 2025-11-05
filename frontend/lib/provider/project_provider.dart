@@ -1,16 +1,13 @@
-// frontend/lib/provider/project_provider.dart
-
-import 'dart:convert';
 import 'dart:developer';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:study_assistance/api/api_service.dart';
 import 'package:study_assistance/models/project.dart';
-import 'dart:convert'; 
-import 'dart:typed_data'; 
+import 'dart:typed_data'; // Import
+import 'dart:convert';
 import 'package:image_picker/image_picker.dart';
-import 'package:study_assistance/models/past_paper.dart'; 
+import 'package:study_assistance/models/past_paper.dart';
 
 class Source {
   final String id;
@@ -176,7 +173,7 @@ class ProjectProvider with ChangeNotifier {
       final List<dynamic> projectList = jsonDecode(projectsJson);
       _projects = projectList.map((map) => Project.fromMap(map)).toList();
       print("✅ Loaded ${_projects.length} projects from cache.");
-      notifyListeners(); 
+      notifyListeners();
     }
   }
 
@@ -193,7 +190,7 @@ class ProjectProvider with ChangeNotifier {
   Future<void> fetchProjects({bool forceRefresh = false}) async {
     if (_isLoadingProjects) return;
     if (_projects.isNotEmpty && !forceRefresh) return;
-    
+
     _isLoadingProjects = true;
     if (_projects.isEmpty || forceRefresh) {
       notifyListeners();
@@ -202,7 +199,7 @@ class ProjectProvider with ChangeNotifier {
     try {
       final data = await _api.getProjects();
       final newProjects = data.map((map) => Project.fromMap(map)).toList();
-      
+
       if (jsonEncode(newProjects.map((p) => p.toMap()).toList()) != jsonEncode(_projects.map((p) => p.toMap()).toList())) {
           _projects = newProjects;
           await _saveProjectsToCache();
@@ -408,7 +405,7 @@ class ProjectProvider with ChangeNotifier {
           .where((m) => !m.isUser || m != _chatHistory.last)
           .map((m) => {'role': m.isUser ? 'user' : 'bot', 'content': m.content})
           .toList();
-          
+
       final answer = await _api.askChatbot(
         _currentProject!.id,
         question,
@@ -448,7 +445,7 @@ class ProjectProvider with ChangeNotifier {
     } catch (e) {
       print("Error taking photo: $e");
     }
-    return null; 
+    return null;
   }
 
   Future<void> fetchPastPapers({bool forceRefresh = false}) async {
@@ -467,7 +464,7 @@ class ProjectProvider with ChangeNotifier {
       notifyListeners();
     }
   }
-  
+
   Future<void> pickAndProcessPaper() async {
     if (_currentProject == null) return;
 
@@ -498,4 +495,32 @@ class ProjectProvider with ChangeNotifier {
     _paperError = null;
     notifyListeners();
   }
+
+  Future<String?> getPhotoAsTag() async {
+  if (_currentProject == null) return null;
+
+  try {
+    final XFile? photo = await _picker.pickImage(source: ImageSource.camera);
+
+    if (photo != null) {
+      final Uint8List imageBytes = await photo.readAsBytes();
+      final String fileName = photo.name;
+
+      // This part just does the upload
+      final String? mediaId = await _api.uploadImageBytes(
+        _currentProject!.id,
+        imageBytes,
+        fileName,
+      );
+
+      // This part just returns the tag as a string
+      if (mediaId != null) {
+        return '\n\n<firestore-image src="$mediaId"></firestore-image>\n\n';
+      }
+    }
+  } catch (e) {
+    print("Error taking photo: $e");
+  }
+  return null;
+}
 }
