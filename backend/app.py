@@ -41,7 +41,7 @@ firebase_admin.initialize_app(cred)
 db = firestore.client()
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, expose_headers=["Content-Disposition"], allow_headers=["X-User-ID", "Content-Type"])
 
 # --- 2. REGISTER THE BLUEPRINT AND PASS THE DB INSTANCE ---
 # Pass the initialized db client to the media routes module

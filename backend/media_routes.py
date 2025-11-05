@@ -1,8 +1,17 @@
 # backend/media_routes.py
 import time
 import base64
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, Response
 from firebase_admin import firestore
+import redis
+
+try:
+    redis_client = redis.Redis(host='localhost', port=6379, db=0, decode_responses=False)
+    redis_client.ping()
+    print("✅ Redis client connected successfully.")
+except redis.exceptions.ConnectionError as e:
+    print(f"❌ Redis connection failed: {e}. Caching will be disabled.")
+    redis_client = None
 
 # Create a Blueprint. This is like a mini-Flask app that can be registered with the main app.
 media_bp = Blueprint('media_bp', __name__)
@@ -83,8 +92,21 @@ def store_media(media_id: str, base64_string: str, file_name: str, media_type: s
 
 def get_media_data(media_id: str) -> bytes:
     """
-    Retrieves chunks from Firestore, reassembles them, and returns the decoded bytes.
+    Retrieves media data, using Redis as a cache, and falling back to Firestore.
     """
+    # 1. Check Redis cache first
+    if redis_client:
+        try:
+            cached_data = redis_client.get(media_id)
+            if cached_data:
+                print(f"CACHE HIT for mediaId: {media_id}")
+                return cached_data
+        except Exception as e:
+            print(f"Redis cache check failed: {e}")
+
+    print(f"CACHE MISS for mediaId: {media_id}. Fetching from Firestore...")
+
+    # 2. If miss, get from Firestore
     if not db:
         raise ConnectionError("Firestore client is not available.")
         
@@ -111,9 +133,18 @@ def get_media_data(media_id: str) -> bytes:
 
     full_base64_string = "".join([doc.to_dict().get("chunk", "") for doc in chunk_list])
     
-    return base64.b64decode(full_base64_string)
+    media_bytes = base64.b64decode(full_base64_string)
 
-# --- ROUTES (attached to the blueprint) ---
+    # 3. Store the reassembled data in Redis for next time
+    if redis_client and media_bytes:
+        try:
+            # Cache for 1 hour
+            redis_client.setex(media_id, 3600, media_bytes)
+            print(f"Successfully stored mediaId {media_id} in Redis cache.")
+        except Exception as e:
+            print(f"Failed to store media in Redis cache: {e}")
+            
+    return media_bytes
 
 @media_bp.route('/media/upload', methods=['POST'])
 def upload_media_route():
@@ -153,16 +184,26 @@ def get_media_route(media_id):
         return jsonify({"error": "Authentication required. Provide 'X-User-ID' header."}), 401
     
     try:
-        media_bytes = get_media_data(media_id)
-        encoded_data = base64.b64encode(media_bytes).decode('utf-8')
-        return jsonify({
-            "success": True,
-            "mediaId": media_id,
-            "content": encoded_data
-        })
+        media_bytes = get_media_data(media_id) # This calls your single, correct, caching function
+        
+        # --- THIS IS THE FIX FOR THE WEBSITE ---
+        # 1. Create the response object.
+        response = Response(media_bytes, mimetype='image/jpeg')
+        
+        # 2. Add the crucial CORS header to the response.
+        #    The '*' allows any website to request this image.
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        
+        # 3. Return the response with the new header.
+        return response
+
     except FileNotFoundError as e:
         return jsonify({"error": str(e)}), 404
     except (ValueError, IOError) as e:
         return jsonify({"error": str(e)}), 409
     except Exception as e:
-        return jsonify({"error": f"Failed to retrieve file: {e}"}), 500
+        import traceback
+        print(f"CRITICAL ERROR in get_media_route: {e}")
+        print(traceback.format_exc())
+        return jsonify({"error": str(e)}), 500
+
