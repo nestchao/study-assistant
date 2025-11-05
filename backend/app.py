@@ -6,7 +6,8 @@ import markdown
 import time
 import firebase_admin
 from firebase_admin import credentials, firestore
-from flask import Flask, request, jsonify, render_template
+from flask import Flask, request, jsonify
+# REMOVED: render_template is no longer needed
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from pdf2image import convert_from_bytes
 import pytesseract
@@ -25,9 +26,14 @@ if not API_KEY:
 
 genai.configure(
     api_key=API_KEY,
-    transport='rest'  # Add this
+    transport='rest'
 )
-pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+# Make sure this path is correct for your system or use an environment variable
+try:
+    pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+except Exception:
+    print("Warning: Tesseract path not found. OCR will fail if needed.")
+
 
 # --- FIREBASE ---
 cred = credentials.Certificate("../firebase-credentials.json")
@@ -91,9 +97,31 @@ def split_chunks(text):
     print(f"  ✅ Created {len(chunks)} chunks")
     return chunks
 
-def split_chunks(text):
-    splitter = RecursiveCharacterTextSplitter(chunk_size=1500, chunk_overlap=200)
-    return splitter.split_text(text)
+def extract_text_from_image(image_stream):
+    """Extracts text from an image file stream using OCR."""
+    print("  🖼️  Extracting text from image via OCR...")
+    try:
+        image = Image.open(image_stream)
+        text = pytesseract.image_to_string(image)
+        print(f"  ✅ OCR extracted {len(text)} characters from image.")
+        return text
+    except Exception as e:
+        print(f"  ❌ Image OCR failed: {e}")
+        return ""
+    
+def get_project_context(project_id):
+    """Fetches all text chunks from all sources in a project."""
+    all_chunks = []
+    sources_ref = db.collection('projects').document(project_id).collection('sources')
+    for source_doc in sources_ref.stream():
+        chunks_ref = source_doc.reference.collection('chunks')
+        for chunk_doc in chunks_ref.stream():
+            all_chunks.extend(chunk_doc.to_dict().get('chunks', []))
+    
+    # Join the first 30 chunks for a reasonably sized context
+    context = "\n---\n".join(all_chunks[:30])
+    print(f"  📚 Retrieved context of {len(context)} characters for project {project_id}")
+    return context
 
 def generate_note(text):
 
@@ -156,23 +184,40 @@ def batch_save(collection, items, batch_size=100):
         batch.set(ref, item)
     batch.commit()
 
+def delete_collection(coll_ref, batch_size):
+    """
+    Recursively deletes all documents and subcollections within a collection.
+    """
+    docs = coll_ref.limit(batch_size).stream()
+    deleted = 0
+
+    for doc in docs:
+        print(f"  Deleting doc: {doc.id}")
+        # Recursively delete subcollections
+        for sub_coll_ref in doc.reference.collections():
+            print(f"    Found subcollection: {sub_coll_ref.id}. Deleting...")
+            delete_collection(sub_coll_ref, batch_size)
+        
+        doc.reference.delete()
+        deleted += 1
+
+    if deleted >= batch_size:
+        return delete_collection(coll_ref, batch_size)
+
 # --- ROUTES ---
-@app.route('/')
-def home():
-    return render_template('dashboard.html')
 
-@app.route('/workspace/<project_id>')
-def workspace(project_id):
-    doc = db.collection('projects').document(project_id).get()
-    name = doc.to_dict().get('name', 'Project') if doc.exists else 'Not Found'
-    return render_template('workspace.html', project_id=project_id, project_name=name)
+# ADDED: Health-check route
+@app.route('/api/hello')
+def hello():
+    return jsonify({"message": "Hello from your Python Backend!"})
 
-# --- API ---
+# GET Projects
 @app.route('/get-projects')
 def get_projects():
     docs = db.collection('projects').stream()
-    return jsonify([{"id": d.id, "name": d.to_dict().get('name')} for d in docs])
+    return jsonify([{"id": d.id, "name": d.to_dict().get('name'), "timestamp": d.to_dict().get('timestamp')} for d in docs])
 
+# POST Create Project
 @app.route('/create-project', methods=['POST'])
 def create_project():
     name = request.json.get('name')
@@ -180,6 +225,77 @@ def create_project():
     ref.set({'name': name, 'timestamp': firestore.SERVER_TIMESTAMP})
     return jsonify({"id": ref.id})
 
+# --- NEW: PUT Rename Project ---
+@app.route('/rename-project/<project_id>', methods=['PUT'])
+def rename_project(project_id):
+    print(f"\n✏️  RENAME REQUEST for project: {project_id}")
+    try:
+        new_name = request.json.get('new_name')
+        if not new_name:
+            return jsonify({"success": False, "error": "New name not provided"}), 400
+
+        project_ref = db.collection('projects').document(project_id)
+        project_ref.update({'name': new_name})
+        
+        print(f"✅ Successfully renamed project to: {new_name}")
+        return jsonify({"success": True, "message": f"Project renamed to {new_name}."}), 200
+
+    except Exception as e:
+        import traceback
+        print(f"❌ Error renaming project {project_id}: {e}")
+        print(traceback.format_exc())
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# DELETE Project
+@app.route('/delete-project/<project_id>', methods=['DELETE'])
+def delete_project(project_id):
+    print(f"\n🗑️  DELETE REQUEST for project: {project_id}")
+    try:
+        project_ref = db.collection('projects').document(project_id)
+
+        # 1. Delete all subcollections first
+        for collection_ref in project_ref.collections():
+            print(f"  Deleting subcollection: {collection_ref.id}")
+            delete_collection(collection_ref, batch_size=50)
+
+        # 2. After subcollections are gone, delete the project document itself
+        project_ref.delete()
+        print(f"✅ Successfully deleted project document: {project_id}")
+        
+        return jsonify({"success": True, "message": f"Project {project_id} deleted."}), 200
+
+    except Exception as e:
+        import traceback
+        print(f"❌ Error deleting project {project_id}: {e}")
+        print(traceback.format_exc())
+        return jsonify({"success": False, "error": str(e)}), 500
+
+# --- NEW: DELETE Source ---
+@app.route('/delete-source/<project_id>/<path:source_id>', methods=['DELETE'])
+def delete_source(project_id, source_id):
+    print(f"\n🗑️  DELETE REQUEST for source: {source_id} in project: {project_id}")
+    try:
+        source_ref = db.collection('projects').document(project_id).collection('sources').document(source_id)
+
+        # 1. Delete subcollections (note_pages, chunks)
+        for collection_ref in source_ref.collections():
+            print(f"  Deleting subcollection: {collection_ref.id}")
+            delete_collection(collection_ref, batch_size=50)
+
+        # 2. Delete the source document itself
+        source_ref.delete()
+        print(f"✅ Successfully deleted source document: {source_id}")
+
+        return jsonify({"success": True, "message": f"Source {source_id} deleted."}), 200
+
+    except Exception as e:
+        import traceback
+        print(f"❌ Error deleting source {source_id}: {e}")
+        print(traceback.format_exc())
+        return jsonify({"success": False, "error": str(e)}), 500
+
+# Other routes...
 @app.route('/ask-chatbot/<project_id>', methods=['POST'])
 def ask_chatbot(project_id):
     data = request.json
@@ -213,7 +329,7 @@ def ask_chatbot(project_id):
     # Use first 10 chunks as context
     context = "\n---\n".join(all_chunks[:10])
     
-    model = genai.GenerativeModel('models/gemini-pro-latest')  # ✅ Updated
+    model = genai.GenerativeModel('models/gemini-pro-latest')
     prompt = f"Answer using only this context:\n{context}\n\nQuestion: {q}\nAnswer:"
     
     try:
@@ -236,7 +352,7 @@ def topic_note(project_id):
     
     context = "\n".join(all_chunks[:20])
     
-    model = genai.GenerativeModel('models/gemini-pro-latest')  # ✅ Updated
+    model = genai.GenerativeModel('models/gemini-pro-latest')
     prompt = f"Make a study note about: {topic}\nUse this:\n{context}"
     
     try:
@@ -251,7 +367,6 @@ def upload_source(project_id):
     print(f"📁 UPLOAD REQUEST for project: {project_id}")
     print("=" * 80)
     
-    # Check if files exist in request
     if 'pdfs' not in request.files:
         print("❌ ERROR: No 'pdfs' field in request!")
         print(f"Available fields: {list(request.files.keys())}")
@@ -279,7 +394,6 @@ def upload_source(project_id):
         print(f"🔐 Safe ID: {safe_id}")
 
         try:
-            # Step 1: Extract text
             print("📖 Step 1: Extracting text from PDF...")
             file.stream.seek(0)
             text = extract_text(file.stream)
@@ -294,7 +408,6 @@ def upload_source(project_id):
             
             print(f"📝 Preview: {text[:200]}...")
 
-            # Step 2: Create source document
             print("💾 Step 2: Creating source document in Firestore...")
             source_ref = db.collection('projects').document(project_id) \
                              .collection('sources').document(safe_id)
@@ -306,7 +419,6 @@ def upload_source(project_id):
             })
             print(f"✅ Source document created: projects/{project_id}/sources/{safe_id}")
 
-            # Step 3: Generate AI note
             print("🤖 Step 3: Generating AI study note...")
             try:
                 note_html = generate_note(text)
@@ -316,7 +428,6 @@ def upload_source(project_id):
                 print(f"❌ ERROR: {error_msg}")
                 note_html = f"<p>AI note generation failed: {e}</p>"
 
-            # Step 4: Save note in chunks
             print("💾 Step 4: Saving note pages to Firestore...")
             chunk_size = 900000
             note_pages_saved = 0
@@ -334,12 +445,10 @@ def upload_source(project_id):
             
             print(f"✅ Total note pages saved: {note_pages_saved}")
 
-            # Step 5: Split text for Q&A
             print("✂️  Step 5: Splitting text into chunks for Q&A...")
             text_chunks = split_chunks(text)
             print(f"✅ Created {len(text_chunks)} text chunks")
             
-            # Step 6: Save Q&A chunks
             print("💾 Step 6: Saving Q&A chunks to Firestore...")
             chunks_docs_saved = 0
             
@@ -437,14 +546,33 @@ def get_sources(project_id):
 @app.route('/get-note/<project_id>/<path:source_id>')
 def get_note(project_id, source_id):
     try:
-        pages = db.collection('projects').document(project_id) \
-                  .collection('sources').document(source_id) \
-                  .collection('note_pages').stream()
+        # Sort by the 'order' field to ensure pages are assembled correctly
+        pages_query = db.collection('projects').document(project_id) \
+                      .collection('sources').document(source_id) \
+                      .collection('note_pages').order_by('order').stream()
         
-        html = "".join(p.to_dict().get('html', '') for p in pages)
+        html = "".join(p.to_dict().get('html', '') for p in pages_query)
         return jsonify({"note_html": html or "<p>No note generated yet.</p>"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+    
+@app.route('/get-papers/<project_id>')
+def get_papers(project_id):
+    try:
+        papers_ref = db.collection('projects').document(project_id).collection('past_papers').order_by('timestamp', direction=firestore.Query.DESCENDING)
+        papers = []
+        for doc in papers_ref.stream():
+            paper_data = doc.to_dict()
+            papers.append({
+                "id": doc.id,
+                "filename": paper_data.get("filename"),
+                "qa_pairs": paper_data.get("qa_pairs", [])
+            })
+        return jsonify(papers)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    
+
 
 @app.route('/update-note/<project_id>/<path:source_id>', methods=['POST'])
 def update_note(project_id, source_id):
