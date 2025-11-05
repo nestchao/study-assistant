@@ -20,6 +20,8 @@ dependencies:
   shared_preferences: ^2.5.0
   intl: ^0.18.1 
   cupertino_icons: ^1.0.2
+  markdown: ^7.3.0
+  image_picker: ^1.0.7
 
 dev_dependencies:
   flutter_test:

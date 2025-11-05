@@ -14,6 +14,7 @@ import pytesseract
 from dotenv import load_dotenv
 from flask_cors import CORS
 import re
+from media_routes import media_bp, set_db_instance
 
 # --- LOAD .env ---
 load_dotenv()
@@ -41,6 +42,13 @@ db = firestore.client()
 
 app = Flask(__name__)
 CORS(app)
+
+# --- 2. REGISTER THE BLUEPRINT AND PASS THE DB INSTANCE ---
+# Pass the initialized db client to the media routes module
+set_db_instance(db)
+# Register the blueprint with the main app.
+# All routes in media_bp will now be active.
+app.register_blueprint(media_bp)
 
 def extract_text(pdf_stream):
     """OCR + Text Extract with logging"""
@@ -476,6 +484,48 @@ def get_note(project_id, source_id):
         html = "".join(p.to_dict().get('html', '') for p in pages_query)
         return jsonify({"note_html": html or "<p>No note generated yet.</p>"})
     except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/update-note/<project_id>/<path:source_id>', methods=['POST'])
+def update_note(project_id, source_id):
+    print(f"🔄 UPDATE NOTE request for project: {project_id}, source: {source_id}")
+    data = request.json
+    new_html = data.get('html_content')
+
+    if not new_html:
+        return jsonify({"error": "Missing 'html_content'"}), 400
+
+    try:
+        source_ref = db.collection('projects').document(project_id).collection('sources').document(source_id)
+        note_pages_ref = source_ref.collection('note_pages')
+
+        # 1. Delete all old note pages to prevent leftovers
+        docs = note_pages_ref.stream()
+        for doc in docs:
+            print(f"  - Deleting old note page: {doc.id}")
+            doc.reference.delete()
+
+        # 2. Re-chunk and save the new note content
+        chunk_size = 900000  # Must match the chunk size from your upload logic
+        note_pages_saved = 0
+        for i in range(0, len(new_html), chunk_size):
+            chunk = new_html[i:i+chunk_size]
+            page_num = i // chunk_size
+            
+            note_pages_ref.document(f'page_{page_num}').set({
+                'html': chunk,
+                'order': page_num
+            })
+            note_pages_saved += 1
+            print(f"  + Saving new note page {page_num}")
+        
+        print(f"✅ Note updated successfully. {note_pages_saved} pages saved.")
+        return jsonify({"success": True, "message": "Note updated successfully"}), 200
+
+    except Exception as e:
+        import traceback
+        print(f"❌ CRITICAL ERROR updating note: {e}")
+        print(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':

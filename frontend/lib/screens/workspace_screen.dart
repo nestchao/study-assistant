@@ -7,6 +7,59 @@ import 'package:flutter_html/flutter_html.dart';
 import 'package:super_clipboard/super_clipboard.dart';
 
 class WorkspaceScreen extends StatelessWidget {
+  const WorkspaceScreen({super.key});
+
+  // Define a breakpoint. Anything narrower than this will be considered "mobile".
+  static const double mobileBreakpoint = 600.0;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxWidth < mobileBreakpoint) {
+          // If the screen is narrow, show the mobile layout
+          return const MobileWorkspaceLayout();
+        } else {
+          // If the screen is wide, show the desktop layout
+          return const DesktopWorkspaceLayout();
+        }
+      },
+    );
+  }
+}
+
+class DesktopWorkspaceLayout extends StatefulWidget {
+  const DesktopWorkspaceLayout({super.key});
+
+  @override
+  State<DesktopWorkspaceLayout> createState() => _DesktopWorkspaceLayoutState();
+}
+
+class _DesktopWorkspaceLayoutState extends State<DesktopWorkspaceLayout> {
+  // State variables to manage panel widths and visibility
+  double _sourcesWidth = 280.0;
+  double _notesWidth = 400.0;
+  bool _isSourcesVisible = true;
+  bool _isChatVisible = true;
+  bool _isNotesVisible = true;
+  final double _minPanelWidth = 150.0; // Minimum width before a panel is useful
+  final double _collapseThreshold = 50.0; // Width at which panels auto-hide
+  final double _minChatPanelWidth = 200.0;
+
+  bool _isEditingNote = false;
+  final TextEditingController _noteEditController = TextEditingController();
+
+  final ScrollController _sourcesScrollController = ScrollController();
+  final ScrollController _notesScrollController = ScrollController();
+
+  @override
+  void dispose() {
+    _sourcesScrollController.dispose();
+    _notesScrollController.dispose();
+    _noteEditController.dispose();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
     return Consumer<ProjectProvider>(
@@ -61,6 +114,7 @@ class WorkspaceScreen extends StatelessWidget {
   Widget _buildSourcesPanel(
       BuildContext context, ProjectProvider p, List<Source> sources, Source? selected) {
     return Container(
+      color: Colors.white,
       color: Colors.white,
       child: Column(
         children: [
@@ -323,6 +377,7 @@ class WorkspaceScreen extends StatelessWidget {
   // --- REBUILT SCRATCHPAD PANEL ---
   Widget _buildScratchpadPanel(BuildContext context, ProjectProvider p, String html) {
     return Container(
+      color: Colors.white,
       color: Colors.white,
       child: Column(
         children: [

@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'dart:typed_data';
 
 class ApiService {
   late final String baseUrl;
@@ -114,6 +115,57 @@ class ApiService {
       return json.decode(response.body);
     } else {
       return {"message": "Backend offline"};
+    }
+  }
+
+  Future<String?> uploadImageBytes(String projectId, Uint8List imageBytes, String fileName) async {
+    final String base64Image = base64Encode(imageBytes);
+
+    final response = await http.post(
+      Uri.parse('$baseUrl/media/upload'),
+      headers: {
+        'Content-Type': 'application/json',
+        'X-User-ID': projectId, // Using projectId as a stand-in for user ID
+      },
+      body: json.encode({
+        'content': base64Image,
+        'fileName': fileName,
+        'type': 'image',
+      }),
+    );
+
+    if (response.statusCode == 201) {
+      return json.decode(response.body)['mediaId'];
+    }
+    return null;
+  }
+
+  // NEW: Gets the media content as raw bytes
+  Future<Uint8List?> getMediaBytes(String mediaId, String projectId) async {
+    final response = await http.get(
+      Uri.parse('$baseUrl/media/get/$mediaId'),
+      headers: { 'X-User-ID': projectId }, // Auth
+    );
+
+    if (response.statusCode == 200) {
+      final String base64Content = json.decode(response.body)['content'];
+      return base64Decode(base64Content);
+    }
+    return null;
+  }
+
+  Future<bool> updateNote(String projectId, String sourceId, String newHtmlContent) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/update-note/$projectId/$sourceId'),
+      headers: {'Content-Type': 'application/json'},
+      body: json.encode({'html_content': newHtmlContent}),
+    );
+    
+    if (response.statusCode == 200) {
+      return true;
+    } else {
+      print("Failed to update note: ${response.body}");
+      return false;
     }
   }
 }
