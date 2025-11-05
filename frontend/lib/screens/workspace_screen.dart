@@ -1,40 +1,105 @@
 // lib/screens/workspace_screen.dart
-import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:study_assistance/provider/project_provider.dart';
 import 'package:flutter_html/flutter_html.dart';
+import 'package:study_assistance/models/past_paper.dart';
+import 'package:study_assistance/screens/workspace_panels.dart'; // Make sure this import is correct
 import 'package:super_clipboard/super_clipboard.dart';
 import 'package:study_assistance/screens/workspace_panels.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:study_assistance/services/firestore_image_service.dart';
 import 'package:study_assistance/widgets/firestore_image.dart';
 
-class WorkspaceScreen extends StatelessWidget {
-  const WorkspaceScreen({super.key});
+// Re-usable helper widget.
+class SourceTile extends StatelessWidget {
+  final String title;
+  final IconData icon;
+  final bool isSelected;
+  final bool isDeleting;
+  final VoidCallback? onTap;
+  final VoidCallback? onDelete;
 
-  // Define a breakpoint. Anything narrower than this will be considered "mobile".
-  static const double mobileBreakpoint = 600.0;
+  const SourceTile({
+    super.key,
+    required this.title,
+    required this.icon,
+    this.isSelected = false,
+    this.isDeleting = false,
+    this.onTap,
+    this.onDelete,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        if (constraints.maxWidth < mobileBreakpoint) {
-          // If the screen is narrow, show the mobile layout
-          return const MobileWorkspaceLayout();
-        } else {
-          // If the screen is wide, show the desktop layout
-          return const DesktopWorkspaceLayout();
-        }
-      },
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4.0),
+      child: Material(
+        color:
+            isSelected ? Colors.indigo.withOpacity(0.1) : Colors.transparent,
+        borderRadius: BorderRadius.circular(10),
+        child: InkWell(
+          onTap: isDeleting ? null : onTap,
+          borderRadius: BorderRadius.circular(10),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                  color: isSelected ? Colors.indigo : Colors.transparent),
+            ),
+            child: Row(
+              children: [
+                Icon(icon, color: isSelected ? Colors.indigo : Colors.grey[700]),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    title,
+                    style: TextStyle(
+                      fontWeight:
+                          isSelected ? FontWeight.bold : FontWeight.normal,
+                      color: Colors.black87,
+                    ),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                if (isDeleting)
+                  const SizedBox(
+                    width: 24,
+                    height: 24,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                else if (onDelete != null)
+                  IconButton(
+                    icon: Icon(Icons.delete_outline, color: Colors.grey[600]),
+                    onPressed: onDelete,
+                    tooltip: 'Delete Source',
+                  )
+                else if (isSelected)
+                  const Icon(Icons.check_circle, color: Colors.indigo, size: 20),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
 
-class DesktopWorkspaceLayout extends StatefulWidget {
-  const DesktopWorkspaceLayout({super.key});
+
+// --- Main Workspace Screen ---
+// This is now the single source of truth for the workspace layout.
+class WorkspaceScreen extends StatefulWidget {
+  const WorkspaceScreen({super.key});
+
+  @override
+  State<WorkspaceScreen> createState() => _WorkspaceScreenState();
+}
+
+class _WorkspaceScreenState extends State<WorkspaceScreen> with SingleTickerProviderStateMixin {
+  late TabController _tabController;
 
   @override
   State<DesktopWorkspaceLayout> createState() => _DesktopWorkspaceLayoutState();
@@ -59,12 +124,14 @@ class _DesktopWorkspaceLayoutState extends State<DesktopWorkspaceLayout> {
 
   final ScrollController _sourcesScrollController = ScrollController();
   final ScrollController _notesScrollController = ScrollController();
+  void initState() {
+    super.initState();
+    _tabController = TabController(length: 2, vsync: this);
+  }
 
   @override
   void dispose() {
-    _sourcesScrollController.dispose();
-    _notesScrollController.dispose();
-    _noteEditController.dispose();
+    _tabController.dispose();
     super.dispose();
   }
 
@@ -72,68 +139,55 @@ class _DesktopWorkspaceLayoutState extends State<DesktopWorkspaceLayout> {
   Widget build(BuildContext context) {
     final provider = context.watch<ProjectProvider>();
     final project = provider.currentProject!;
-    final int visibleCount = (_isSourcesVisible ? 1 : 0) +
-        (_isChatVisible ? 1 : 0) +
-        (_isNotesVisible ? 1 : 0);
-    final double screenWidth = MediaQuery.of(context).size.width;
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(project.name),
+        title: Text(project.name, style: const TextStyle(color: Colors.black87)),
+        backgroundColor: Colors.white,
+        elevation: 1.0,
+        iconTheme: const IconThemeData(color: Colors.black54),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
-          onPressed: () => Navigator.pop(context),
+          onPressed: () {
+            provider.selectSource(null);
+            Navigator.pop(context);
+          },
         ),
-        // --- RESTORED AppBar actions ---
-        actions: [
-          _buildVisibilityToggleButton(
-            tooltip: 'Toggle Sources',
-            icon: Icons.folder_open,
-            color: Colors.blue[300]!,
-            isVisible: _isSourcesVisible,
-            onPressed: () => _togglePanelVisibility('sources'),
-            isDisabled: _isSourcesVisible && visibleCount == 1,
-          ),
-          _buildVisibilityToggleButton(
-            tooltip: 'Toggle AI Chat',
-            icon: Icons.chat_bubble_outline,
-            color: Colors.purple[300]!,
-            isVisible: _isChatVisible,
-            onPressed: () => _togglePanelVisibility('chat'),
-            isDisabled: _isChatVisible && visibleCount == 1,
-          ),
-          _buildVisibilityToggleButton(
-            tooltip: 'Toggle Notes',
-            icon: Icons.note_alt,
-            color: Colors.green[300]!,
-            isVisible: _isNotesVisible,
-            onPressed: () => _togglePanelVisibility('notes'),
-            isDisabled: _isNotesVisible && visibleCount == 1,
-          ),
-          const SizedBox(width: 8),
+        bottom: TabBar(
+          controller: _tabController,
+          labelColor: Colors.indigo,
+          unselectedLabelColor: Colors.grey[600],
+          indicatorColor: Colors.indigo,
+          tabs: const [
+            Tab(icon: Icon(Icons.menu_book_rounded), text: 'Study Hub'),
+            Tab(icon: Icon(Icons.quiz_rounded), text: 'Paper Solver'),
+          ],
+        ),
+      ),
+      body: TabBarView(
+        controller: _tabController,
+        children: const [
+          StudyHubView(),
+          PaperSolverView(),
         ],
       ),
+    );
+  }
+}
 
-      // In your build method...
+// --- WIDGET FOR TAB 1: STUDY HUB (NOW RESPONSIVE) ---
+class StudyHubView extends StatefulWidget {
+  const StudyHubView({super.key});
 
-      body: Row(
-        children: [
-          // --- SOURCES PANEL (Left) ---
-          if (_isSourcesVisible)
-            _isChatVisible
-                ? SizedBox(
-                    width: _sourcesWidth,
-                    // PASS THE CONTROLLER HERE
-                    child: SourcesPanel(
-                        scrollController: _sourcesScrollController),
-                  )
-                : Expanded(
-                    flex: _sourcesWidth.round(),
-                    // AND PASS IT HERE
-                    child: SourcesPanel(
-                        scrollController: _sourcesScrollController),
-                  ),
+  @override
+  State<StudyHubView> createState() => _StudyHubViewState();
+}
 
+class _StudyHubViewState extends State<StudyHubView> with SingleTickerProviderStateMixin {
+  late TabController _studyTabController;
+
+  // Breakpoint to switch between desktop (Row) and mobile (TabBar) layouts
+  static const double mobileBreakpoint = 900.0; // Increased breakpoint for 3 panels
           // --- RESIZER 1 ---
           if (_isSourcesVisible && _isChatVisible)
             _buildResizer(
@@ -153,9 +207,18 @@ class _DesktopWorkspaceLayoutState extends State<DesktopWorkspaceLayout> {
               },
             ),
 
-          // --- CHAT PANEL (Center) ---
-          if (_isChatVisible) const Expanded(child: AiChatPanel()),
+  @override
+  void initState() {
+    super.initState();
+    // This controller is now for 3 panels on mobile
+    _studyTabController = TabController(length: 3, vsync: this);
+  }
 
+  @override
+  void dispose() {
+    _studyTabController.dispose();
+    super.dispose();
+  }
           // --- RESIZER 2 ---
           if (_isChatVisible && _isNotesVisible)
             _buildResizer(
@@ -175,345 +238,269 @@ class _DesktopWorkspaceLayoutState extends State<DesktopWorkspaceLayout> {
               },
             ),
 
-          // --- NOTES PANEL (Right) ---
-          if (_isNotesVisible)
-            _isChatVisible
-                ? SizedBox(
-                    width: _notesWidth,
-                    child: _buildScratchpadPanel(context, provider),
-                  )
-                : Expanded(
-                    flex: _notesWidth.round(),
-                    child: LayoutBuilder(
-                      builder: (context, constraints) {
-                        return SizedBox(
-                          width: constraints.maxWidth,
-                          height: constraints.maxHeight,
-                          child: _buildScratchpadPanel(context, provider),
-                        );
-                      },
-                    ),
-                  ),
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxWidth < mobileBreakpoint) {
+          // --- MOBILE LAYOUT: Use a TabBar for Sources, Chat, and Notes ---
+          return Scaffold(
+            appBar: TabBar(
+              controller: _studyTabController,
+              labelColor: Colors.indigo,
+              tabs: const [
+                Tab(icon: Icon(Icons.folder_open), text: "Sources"),
+                Tab(icon: Icon(Icons.smart_toy), text: "AI Chat"),
+                Tab(icon: Icon(Icons.edit_note), text: "Note"), // ADDED NOTE TAB
+              ],
+            ),
+            body: TabBarView(
+              controller: _studyTabController,
+              children: const [
+                SourcesPanel(),
+                AiChatPanel(),
+                NotesPanel(), // ADDED NOTE PANEL
+              ],
+            ),
+          );
+        } else {
+          // --- DESKTOP LAYOUT: Use a Row for three side-by-side panels ---
+          return Row(
+            children: [
+              const Expanded(flex: 2, child: SourcesPanel()),
+              Container(width: 1, color: Colors.grey[300]),
+              const Expanded(flex: 3, child: AiChatPanel()),
+              Container(width: 1, color: Colors.grey[300]), // ADDED DIVIDER
+              const Expanded(flex: 3, child: NotesPanel()),   // ADDED NOTE PANEL
+            ],
+          );
+        }
+      },
+    );
+  }
+}
+
+// --- WIDGET FOR TAB 2: PAPER SOLVER ---
+class PaperSolverView extends StatefulWidget {
+  const PaperSolverView({super.key});
+
+  @override
+  _PaperSolverViewState createState() => _PaperSolverViewState();
+}
+
+class _PaperSolverViewState extends State<PaperSolverView> {
+  PastPaper? _selectedPaper;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.watch<ProjectProvider>();
+
+    if (p.isUploadingPaper) {
+      return const Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            CircularProgressIndicator(),
+            SizedBox(height: 20),
+            Text("Analyzing your paper...", style: TextStyle(fontSize: 16)),
+            Padding(
+              padding: EdgeInsets.all(16.0),
+              child: Text(
+                "This may take a moment as we read the document and generate answers based on your notes.",
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.grey),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    // Handle errors from the provider
+    if (p.paperError != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) { // Check if the widget is still in the tree
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Error: ${p.paperError}'),
+              backgroundColor: Colors.red,
+              duration: const Duration(seconds: 5),
+            ),
+          );
+          p.clearPaperError(); // Clear error after showing it
+        }
+      });
+    }
+
+    return Scaffold(
+      backgroundColor: Colors.grey[50],
+      body: p.isLoadingPapers
+          ? const Center(child: CircularProgressIndicator())
+          : p.pastPapers.isEmpty
+              ? _buildEmptyState(p)
+              : _buildMainContent(p),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: p.pickAndProcessPaper,
+        icon: const Icon(Icons.upload_file),
+        label: const Text('Upload Paper'),
+        backgroundColor: Colors.indigo,
+      ),
+    );
+  }
+
+  Widget _buildEmptyState(ProjectProvider p) {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.quiz_outlined, size: 100, color: Colors.grey[300]),
+          const SizedBox(height: 20),
+          const Text('No Past Papers Solved',
+              style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 8),
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 24.0),
+            child: Text(
+              'Upload a PDF or image of a question paper to get started.',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 16, color: Colors.grey),
+            ),
+          ),
+          const SizedBox(height: 20),
+          ElevatedButton.icon(
+            onPressed: p.pickAndProcessPaper,
+            icon: const Icon(Icons.add),
+            label: const Text("Upload First Paper"),
+            style: ElevatedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+            ),
+          )
         ],
       ),
     );
   }
 
-  // In _WorkspaceScreenState
-
-  void _togglePanelVisibility(String panel) {
-    setState(() {
-      // --- Logic for enabling the chat panel ---
-      if (panel == 'chat' && !_isChatVisible) {
-        _isChatVisible = true;
-
-        // Get total screen width to perform calculations
-        final double screenWidth = MediaQuery.of(context).size.width;
-
-        // Define a target width for the re-opened chat panel
-        const double targetChatWidth = 400.0;
-
-        // Calculate the current combined width of the side panels
-        final currentSidePanelsWidth = (_isSourcesVisible ? _sourcesWidth : 0) +
-            (_isNotesVisible ? _notesWidth : 0);
-
-        // Calculate the available space for the side panels
-        final availableSpaceForSidePanels =
-            screenWidth - targetChatWidth - 16; // 16 for 2 resizers
-
-        // If the side panels are too big for the chat to re-open comfortably...
-        if (currentSidePanelsWidth > availableSpaceForSidePanels) {
-          // Calculate the overflow amount
-          final overflow = currentSidePanelsWidth - availableSpaceForSidePanels;
-
-          // Shrink the visible side panels proportionally
-          if (_isSourcesVisible && _isNotesVisible) {
-            double sourcesProportion = _sourcesWidth / currentSidePanelsWidth;
-            double notesProportion = _notesWidth / currentSidePanelsWidth;
-            _sourcesWidth -= overflow * sourcesProportion;
-            _notesWidth -= overflow * notesProportion;
-          } else if (_isSourcesVisible) {
-            _sourcesWidth -= overflow;
-          } else if (_isNotesVisible) {
-            _notesWidth -= overflow;
-          }
-        }
-        return; // Exit after handling this special case
-      }
-
-      // --- Original logic for all other cases ---
-      bool isDisablingSources = (panel == 'sources' && _isSourcesVisible);
-      bool isDisablingChat = (panel == 'chat' && _isChatVisible);
-      bool isDisablingNotes = (panel == 'notes' && _isNotesVisible);
-
-      int visibleCount = (_isSourcesVisible ? 1 : 0) +
-          (_isChatVisible ? 1 : 0) +
-          (_isNotesVisible ? 1 : 0);
-
-      if (visibleCount > 1) {
-        if (isDisablingSources) _isSourcesVisible = false;
-        if (isDisablingChat) _isChatVisible = false;
-        if (isDisablingNotes) _isNotesVisible = false;
-      }
-
-      if (panel == 'sources' && !_isSourcesVisible) {
-        _isSourcesVisible = true;
-        _sourcesWidth = 280.0;
-      }
-      if (panel == 'notes' && !_isNotesVisible) {
-        _isNotesVisible = true;
-        _notesWidth = 400.0;
+  Widget _buildMainContent(ProjectProvider p) {
+    return LayoutBuilder(builder: (context, constraints) {
+      // For mobile, show a list view. For desktop, show side-by-side.
+      if (constraints.maxWidth < 600) {
+        return _buildMobilePaperView(p);
+      } else {
+        return _buildDesktopPaperView(p);
       }
     });
   }
 
-  // Replace the old helper method with this one
-  // In _WorkspaceScreenState
-
-  Widget _buildVisibilityToggleButton({
-    required String tooltip,
-    required IconData icon,
-    required Color color,
-    required bool isVisible,
-    required VoidCallback onPressed,
-    required bool isDisabled,
-  }) {
-    return IconButton(
-      tooltip: tooltip,
-      icon: Icon(icon), // Icon color is now managed by the style
-      // Style the button itself
-      style: IconButton.styleFrom(
-        foregroundColor: color,
-        backgroundColor:
-            isVisible ? color.withOpacity(0.20) : Colors.transparent,
-        // Make the disabled state more obvious
-        disabledForegroundColor: color.withOpacity(0.3),
-      ),
-      // Disable the button if it's the last one visible
-      onPressed: isDisabled ? null : onPressed,
-    );
-  }
-
-  Widget _buildResizer({required GestureDragUpdateCallback onDrag}) {
-    return GestureDetector(
-      onHorizontalDragUpdate: onDrag,
-      child: MouseRegion(
-        cursor: SystemMouseCursors.resizeLeftRight,
-        child: Container(
-          width: 8,
-          color: Colors.grey[300],
-        ),
-      ),
-    );
-  }
-
-  String _stripHtmlTags(String html) {
-    final RegExp exp = RegExp(r"<[^>]*>", multiLine: true, caseSensitive: true);
-    return html.replaceAll(exp, '');
-  }
-
-  Future<void> _copyRichTextToClipboard(
-      BuildContext context, String html) async {
-    final item = DataWriterItem();
-    item.add(Formats.htmlText(html));
-    final plainText = _stripHtmlTags(html).trim();
-    item.add(Formats.plainText(plainText));
-    await SystemClipboard.instance?.write([item]);
-
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text("Formatted note copied!"),
-          backgroundColor: Colors.green,
-        ),
-      );
-    }
-  }
-
-  // --- EXISTING PANEL BUILDERS (Slightly modified to accept provider) ---
-
-  Widget _buildSourcesPanel(BuildContext context, ProjectProvider p) {
-    final sources = p.sources;
-    final selected = p.selectedSource;
-
-    return Container(
-      color: Colors.white,
-      child: Column(
-        children: [
-          // Header
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: Colors.blue[50],
-              border: Border(bottom: BorderSide(color: Colors.grey[300]!)),
-            ),
-            child: Row(children: [
-              Icon(Icons.folder_open, color: Colors.blue[700]),
-              const SizedBox(width: 8),
-              const Text("Sources",
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-            ]),
-          ),
-
-          // SCROLLABLE LIST with controller
-          Expanded(
-            child: p.isLoadingSources
-                ? const Center(child: CircularProgressIndicator())
-                : sources.isEmpty
-                    ? _emptySources()
-                    : Scrollbar(
-                        controller: _sourcesScrollController, // Add controller
-                        thumbVisibility: true,
-                        thickness: 8.0,
-                        radius: const Radius.circular(4),
-                        child: ListView.builder(
-                          controller:
-                              _sourcesScrollController, // Add controller here too
-                          padding: const EdgeInsets.symmetric(vertical: 8),
-                          itemBuilder: (ctx, i) {
-                            final s = sources[i];
-                            final active = s.id == selected?.id;
-                            return Card(
-                              margin: const EdgeInsets.symmetric(
-                                  horizontal: 8, vertical: 4),
-                              color: active ? Colors.blue[600] : null,
-                              child: ListTile(
-                                leading: Icon(Icons.picture_as_pdf,
-                                    color: active
-                                        ? Colors.white
-                                        : Colors.red[700]),
-                                title: Text(s.filename,
-                                    style: TextStyle(
-                                        color: active ? Colors.white : null)),
-                                onTap: () => p.selectSource(s),
-                              ),
-                            );
-                          },
-                          itemCount: sources.length,
-                        ),
-                      ),
-          ),
-
-          // Upload Footer
-          _uploadFooter(p, sources),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildChatPanel(BuildContext context, ProjectProvider p) {
-    final chat = p.chatHistory;
-    final thinking = p.isBotThinking;
-    // The rest of this method's content is EXACTLY the same as your previous version.
-    return Column(
+  // View for Desktop
+  Widget _buildDesktopPaperView(ProjectProvider p) {
+    return Row(
       children: [
-        const Padding(
-          padding: EdgeInsets.all(16),
-          child: Text("AI Chat",
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+        SizedBox(
+          width: 300,
+          child: _buildPaperList(p, isMobile: false),
         ),
         Expanded(
-          child: ListView.builder(
-            padding: const EdgeInsets.all(16),
-            itemCount: chat.length + (thinking ? 1 : 0),
-            itemBuilder: (ctx, i) {
-              if (i == chat.length && thinking) {
-                return _chatBubble("Thinking...", false);
-              }
-              final msg = chat[i];
-              return _chatBubble(msg.content, msg.isUser);
-            },
-          ),
+          child: _selectedPaper == null
+              ? const Center(child: Text("Select a paper to view the solution"))
+              : _buildQAPanel(_selectedPaper!),
         ),
-        _chatInput(p),
       ],
     );
   }
 
-  Widget _chatBubble(String text, bool isUser) {
-    return Align(
-      alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
-      child: Container(
-        margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: isUser ? Colors.blue : Colors.grey[200],
-          borderRadius: BorderRadius.circular(16),
+  // View for Mobile
+  Widget _buildMobilePaperView(ProjectProvider p) {
+    if (_selectedPaper != null) {
+      return Scaffold(
+        appBar: AppBar(
+          title: Text(_selectedPaper!.filename, style: const TextStyle(fontSize: 16)),
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back),
+            onPressed: () => setState(() => _selectedPaper = null),
+          ),
         ),
-        child: isUser
-            ? Text(text, style: const TextStyle(color: Colors.white))
-            : Html(data: text),
-      ),
-    );
+        body: _buildQAPanel(_selectedPaper!),
+      );
+    }
+    return _buildPaperList(p, isMobile: true);
   }
 
-  Widget _chatInput(ProjectProvider p) {
+  Widget _buildPaperList(ProjectProvider p, {required bool isMobile}) {
     return Container(
-      padding: const EdgeInsets.all(12),
-      color: Colors.grey[100],
-      child: Row(
+      color: Colors.white,
+      child: Column(
         children: [
+          _buildPanelHeader("Solved Papers", Icons.history_edu, Colors.indigo),
           Expanded(
-            child: TextField(
-              controller: p.chatController,
-              decoration: InputDecoration(
-                hintText: "Ask a question...",
-                border:
-                    OutlineInputBorder(borderRadius: BorderRadius.circular(25)),
-                filled: true,
-                fillColor: Colors.white,
-              ),
-              onSubmitted: (_) => _sendChat(p),
+            child: ListView.builder(
+              itemCount: p.pastPapers.length,
+              itemBuilder: (context, index) {
+                final paper = p.pastPapers[index];
+                final isSelected = !isMobile && _selectedPaper?.id == paper.id;
+                return ListTile(
+                  leading: const Icon(Icons.article_outlined),
+                  title: Text(paper.filename, maxLines: 2, overflow: TextOverflow.ellipsis),
+                  tileColor: isSelected ? Colors.indigo.withOpacity(0.1) : null,
+                  onTap: () {
+                    setState(() {
+                      _selectedPaper = paper;
+                    });
+                  },
+                );
+              },
             ),
-          ),
-          IconButton(
-            icon: const Icon(Icons.send, color: Colors.blue),
-            onPressed: () => _sendChat(p),
           ),
         ],
       ),
     );
   }
 
-  void _sendChat(ProjectProvider p) {
-    final q = p.chatController.text.trim();
-    if (q.isNotEmpty) {
-      p.askQuestion(q);
-      p.chatController.clear();
-    }
+  Widget _buildPanelHeader(String title, IconData icon, Color color) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border(bottom: BorderSide(color: Colors.grey[200]!)),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: color),
+          const SizedBox(width: 8),
+          Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+        ],
+      ),
+    );
   }
 
-  Widget _buildScratchpadPanel(BuildContext context, ProjectProvider p) {
-    final html = p.scratchpadContent;
-
-    if (_isEditingNote && _noteEditController.text.isEmpty) {
-      _noteEditController.text = html;
-    }
-
-    return Container(
-      color: Colors.white,
-      child: Column(
-        children: [
-          // Header
-          Container(
-            padding: const EdgeInsets.all(16),
-            color: Colors.green[50],
-            child: Row(children: [
-              Icon(Icons.note_alt, color: Colors.green[700]),
-              const SizedBox(width: 8),
-              const Text("Study Notes",
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-            ]),
-          ),
-
+  Widget _buildQAPanel(PastPaper paper) {
+    return ListView.builder(
+      padding: const EdgeInsets.all(16),
+      itemCount: paper.qaPairs.length,
+      itemBuilder: (context, index) {
+        final qa = paper.qaPairs[index];
+        return Card(
+          margin: const EdgeInsets.only(bottom: 16),
+          elevation: 2,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          child: ExpansionTile(
+            shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+            collapsedShape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+            leading: CircleAvatar(child: Text('${index + 1}')),
+            title: Text(qa.question, style: const TextStyle(fontWeight: FontWeight.w600)),
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                child: SelectionArea(
+                  child: Html(
+                    data: markdownToHtml(qa.answer),
           if (!_isEditingNote)
             TextButton.icon(
               icon: const Icon(Icons.edit, size: 18),
               label: const Text("Edit"),
               onPressed: () {
                 setState(() {
-                  _noteEditController.text = html; 
-                  _isEditingNote = true;    
+                  _noteEditController.text = html;
+                  _isEditingNote = true;
                 });
               },
             )
@@ -789,7 +776,7 @@ class _MobileWorkspaceLayoutState extends State<MobileWorkspaceLayout> {
               onPressed: () async {
                 // Get the current text FROM THE CONTROLLER
               final currentText = _noteEditController.text;
-              
+
               // Get the image tag from the provider
               // IMPORTANT: We modify takePhotoAndInsertToNote to ONLY do the upload
               // and return the tag. It should NOT modify any state itself.
@@ -894,7 +881,7 @@ class _MobileWorkspaceLayoutState extends State<MobileWorkspaceLayout> {
                               ),
                             );
                           }
-                          
+
                           if (snapshot.hasError) {
                             print("Image Loading Error: ${snapshot.error}");
                             return const Padding(
@@ -912,7 +899,7 @@ class _MobileWorkspaceLayoutState extends State<MobileWorkspaceLayout> {
                               ),
                             );
                           }
-                          
+
                           if (snapshot.hasData && snapshot.data != null) {
                             return Padding(
                               padding: const EdgeInsets.symmetric(vertical: 8.0),
@@ -929,7 +916,7 @@ class _MobileWorkspaceLayoutState extends State<MobileWorkspaceLayout> {
                               ),
                             );
                           }
-                          
+
                           // Fallback for null data
                           return const Padding(
                             padding: EdgeInsets.all(8.0),
@@ -943,9 +930,12 @@ class _MobileWorkspaceLayoutState extends State<MobileWorkspaceLayout> {
                       );
                     },
                   ),
-                ],
+                ),
               ),
-            ),
+            ],
+          ),
+        );
+      },
     );
   }
 
@@ -956,20 +946,29 @@ class _MobileWorkspaceLayoutState extends State<MobileWorkspaceLayout> {
     try {
       // First, try to get from cache
       var fileInfo = await cacheManager.getFileFromCache(url);
-      
+
       if (fileInfo != null) {
         print("Image loaded from cache: $url");
         return fileInfo;
       }
-      
+
       // If not in cache, download it
       print("Image not in cache, downloading: $url");
       fileInfo = await cacheManager.downloadFile(url);
-      
+
       return fileInfo;
     } catch (e) {
       print("Error in _getOrDownloadImage: $e");
       rethrow;
     }
+  }
+}
+
+  // ADDED BACK THIS MISSING HELPER FUNCTION
+  String markdownToHtml(String text) {
+      text = text.replaceAllMapped(RegExp(r'\*\*(.*?)\*\*'), (match) => '<b>${match.group(1)}</b>');
+      text = text.replaceAllMapped(RegExp(r'\*(.*?)\*'), (match) => '<i>${match.group(1)}</i>');
+      text = text.replaceAll('\n', '<br>');
+      return text;
   }
 }

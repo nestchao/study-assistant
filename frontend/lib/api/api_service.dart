@@ -27,6 +27,40 @@ class ApiService {
     );
   }
 
+  // --- NEW ---
+  Future<void> renameProject(String projectId, String newName) async {
+    final response = await http.put(
+      Uri.parse('$baseUrl/rename-project/$projectId'),
+      headers: {'Content-Type': 'application/json'},
+      body: json.encode({'new_name': newName}),
+    );
+
+    if (response.statusCode != 200) {
+      throw Exception('Failed to rename project');
+    }
+  }
+
+  Future<void> deleteProject(String projectId) async {
+    final response = await http.delete(
+      Uri.parse('$baseUrl/delete-project/$projectId'),
+    );
+
+    if (response.statusCode != 200) {
+      throw Exception('Failed to delete project');
+    }
+  }
+  
+  // --- NEW ---
+  Future<void> deleteSource(String projectId, String sourceId) async {
+    final response = await http.delete(
+      Uri.parse('$baseUrl/delete-source/$projectId/$sourceId'),
+    );
+
+    if (response.statusCode != 200) {
+      throw Exception('Failed to delete source');
+    }
+  }
+
   // GET /api/get-sources/<project_id>
   Future<List<Map<String, dynamic>>> getSources(String projectId) async {
     final response = await http.get(Uri.parse('$baseUrl/get-sources/$projectId'));
@@ -34,7 +68,6 @@ class ApiService {
   }
 
   // POST /api/upload-source/<project_id>
-  // In your ApiService class, update uploadSources:
   Future<void> uploadSources(String projectId, List<PlatformFile> files) async {
     print("📤 Uploading ${files.length} files to project $projectId");
     
@@ -98,7 +131,7 @@ class ApiService {
     return json.decode(response.body)['answer'] ?? 'No response';
   }
 
-  // ADD THIS METHOD
+  // GET /api/hello
   Future<Map<String, dynamic>> hello() async {
     final response = await http.get(Uri.parse('$baseUrl/api/hello'));
     if (response.statusCode == 200) {
@@ -157,6 +190,44 @@ class ApiService {
     } else {
       print("Failed to update note: ${response.body}");
       return false;
+    }
+  }
+
+  // --- NEW: Get Past Papers ---
+  Future<List<Map<String, dynamic>>> getPastPapers(String projectId) async {
+    final response = await http.get(Uri.parse('$baseUrl/get-papers/$projectId'));
+    if (response.statusCode == 200) {
+      return List<Map<String, dynamic>>.from(json.decode(response.body));
+    } else {
+      throw Exception('Failed to load past papers');
+    }
+  }
+
+  // --- NEW: Upload Past Paper ---
+  Future<Map<String, dynamic>> uploadPastPaper(String projectId, PlatformFile file) async {
+    var request = http.MultipartRequest(
+      'POST',
+      Uri.parse('$baseUrl/upload-paper/$projectId'),
+    );
+
+    if (file.bytes != null) {
+      request.files.add(http.MultipartFile.fromBytes(
+        'file', // MUST match Flask's request.files['file']
+        file.bytes!,
+        filename: file.name,
+      ));
+    } else {
+      throw Exception('File bytes are null');
+    }
+
+    var response = await request.send();
+    var responseBody = await response.stream.bytesToString();
+    var decodedBody = json.decode(responseBody);
+
+    if (response.statusCode == 200) {
+      return decodedBody;
+    } else {
+      throw Exception(decodedBody['error'] ?? 'Failed to upload and process paper');
     }
   }
 }
