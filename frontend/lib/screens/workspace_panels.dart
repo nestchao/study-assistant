@@ -6,15 +6,133 @@ import 'package:flutter_html/flutter_html.dart';
 import 'package:super_clipboard/super_clipboard.dart';
 import 'package:study_assistance/screens/workspace_screen.dart'; 
 
+class SourceTile extends StatelessWidget {
+  final String title;
+  final IconData icon;
+  final bool isSelected;
+  final bool isDeleting;
+  final VoidCallback? onTap;
+  final VoidCallback? onDelete;
+
+  const SourceTile({
+    super.key,
+    required this.title,
+    required this.icon,
+    this.isSelected = false,
+    this.isDeleting = false,
+    this.onTap,
+    this.onDelete,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    // Use an indigo color scheme for selection to match the TabBars
+    const Color selectedColor = Colors.indigo;
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4.0),
+      child: Material(
+        color: isSelected ? selectedColor.withOpacity(0.1) : Colors.transparent,
+        borderRadius: BorderRadius.circular(8),
+        child: InkWell(
+          onTap: isDeleting ? null : onTap, // Disable tap while deleting
+          borderRadius: BorderRadius.circular(8),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: isSelected ? selectedColor : Colors.grey[300]!,
+              ),
+            ),
+            child: Row(
+              children: [
+                Icon(icon, color: isSelected ? selectedColor : Colors.grey[700]),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    title,
+                    style: TextStyle(
+                      fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                      color: Colors.black87,
+                    ),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                // This logic determines which trailing widget to show
+                if (isDeleting)
+                  const SizedBox(
+                    width: 24,
+                    height: 24,
+                    child: Padding(
+                      padding: EdgeInsets.all(4.0),
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                  )
+                else if (onDelete != null)
+                  IconButton(
+                    icon: Icon(Icons.delete_outline, color: Colors.grey[600]),
+                    onPressed: onDelete,
+                    tooltip: 'Delete Source',
+                    splashRadius: 20,
+                  )
+                else if (isSelected)
+                  Icon(Icons.check_circle, color: selectedColor, size: 20),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 // --- PANEL 1: SOURCES ---
 class SourcesPanel extends StatelessWidget {
-  const SourcesPanel({super.key});
+  final ScrollController? scrollController;
+
+  const SourcesPanel({
+    super.key,
+    this.scrollController, // Make the controller an optional named parameter
+  });
 
   @override
   Widget build(BuildContext context) {
     final p = context.watch<ProjectProvider>();
     final sources = p.sources;
     final selected = p.selectedSource;
+
+    final listView = ListView.builder(
+      controller: scrollController,
+      padding: const EdgeInsets.all(8), // Add padding around the whole list
+      itemCount: sources.length + 1, // +1 for the "All Sources" tile
+      itemBuilder: (ctx, i) {
+        // First item is always "All Sources"
+        if (i == 0) {
+          return SourceTile(
+            title: 'All Sources',
+            icon: Icons.all_inclusive_rounded,
+            isSelected: selected == null, // Selected if no specific source is chosen
+            onTap: () => p.selectSource(null),
+            // No delete button for "All Sources"
+          );
+        }
+
+        // Adjust index for the sources list
+        final s = sources[i - 1];
+        
+        // Return a SourceTile for each actual source file
+        return SourceTile(
+          title: s.filename,
+          icon: Icons.picture_as_pdf_rounded,
+          isSelected: s.id == selected?.id,
+          isDeleting: s.id == p.deletingSourceId, // Check if this source is being deleted
+          onTap: () => p.selectSource(s),
+          onDelete: () => _showDeleteSourceConfirmDialog(context, p, s),
+        );
+      },
+    );
 
     // This is the UI code that needs correction
     return Container(
@@ -39,40 +157,32 @@ class SourcesPanel extends StatelessWidget {
           Expanded(
             child: p.isLoadingSources
                 ? const Center(child: CircularProgressIndicator())
-                : sources.isEmpty && !p.isLoadingSources
-                    ? _emptySources()
-                    : ListView.builder(
-                        // Increase itemCount by 1 to accommodate "All Sources"
-                        itemCount: sources.length + 1,
-                        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
-                        itemBuilder: (ctx, i) {
-                          // --- ADDED LOGIC FOR "ALL SOURCES" ---
-                          if (i == 0) {
-                            // This is the first item, build the "All Sources" tile
-                            return SourceTile(
-                              title: 'All Sources',
-                              icon: Icons.all_inclusive,
-                              isSelected: selected == null, // Selected if no specific source is chosen
-                              onTap: () => p.selectSource(null),
-                            );
-                          }
-
-                          // For all other items, subtract 1 from the index to get the correct source
-                          final s = sources[i - 1];
-                          return SourceTile(
-                            title: s.filename,
-                            icon: Icons.picture_as_pdf_rounded,
-                            isSelected: s.id == selected?.id,
-                            isDeleting: s.id == p.deletingSourceId,
-                            onTap: () => p.selectSource(s),
-                            // onDelete can be added here if you want a delete button
-                            // onDelete: () => _showDeleteSourceConfirmDialog(p, s),
-                          );
-                        },
-                      ),
+                : scrollController != null
+                    ? Scrollbar(controller: scrollController, thumbVisibility: true, child: listView)
+                    : listView,
           ),
           // Upload Footer
           _uploadFooter(p, sources),
+        ],
+      ),
+    );
+  }
+
+  void _showDeleteSourceConfirmDialog(BuildContext context, ProjectProvider p, Source s) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete Source?'),
+        content: Text('Are you sure you want to delete "${s.filename}"? This process cannot be undone.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              p.deleteSource(s.id); // Call the provider method
+            },
+            child: const Text('Delete', style: TextStyle(color: Colors.red)),
+          ),
         ],
       ),
     );
