@@ -126,7 +126,7 @@ def get_project_context(project_id):
 def generate_note(text):
 
     print("  🤖 Generating AI study note with gemini-pro-latest...")
-    model = genai.GenerativeModel('models/gemini-pro-latest')
+    model = genai.GenerativeModel('gemini-2.5-flash-lite')
 
     prompt = f"""
     You are an expert universal study assistant. Your mission is to transform dense academic texts from **any language** into simplified, well-structured, and exceptionally easy-to-understand study notes.
@@ -329,7 +329,7 @@ def ask_chatbot(project_id):
     # Use first 10 chunks as context
     context = "\n---\n".join(all_chunks[:10])
     
-    model = genai.GenerativeModel('models/gemini-pro-latest')
+    model = genai.GenerativeModel('gemini-2.5-flash-lite')
     prompt = f"Answer using only this context:\n{context}\n\nQuestion: {q}\nAnswer:"
     
     try:
@@ -352,7 +352,7 @@ def topic_note(project_id):
     
     context = "\n".join(all_chunks[:20])
     
-    model = genai.GenerativeModel('models/gemini-pro-latest')
+    model = genai.GenerativeModel('gemini-2.5-flash-lite')
     prompt = f"Make a study note about: {topic}\nUse this:\n{context}"
     
     try:
@@ -572,7 +572,6 @@ def get_papers(project_id):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     
-
 
 @app.route('/update-note/<project_id>/<path:source_id>', methods=['POST'])
 def update_note(project_id, source_id):
