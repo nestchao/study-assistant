@@ -31,7 +31,7 @@ class SourceTile extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4.0),
       child: Material(
-        color: isSelected ? selectedColor.withValues() : Colors.transparent,
+        color: isSelected ? selectedColor.withOpacity(0.3) : Colors.transparent,
         borderRadius: BorderRadius.circular(8),
         child: InkWell(
           onTap: isDeleting ? null : onTap, // Disable tap while deleting
@@ -186,24 +186,6 @@ class SourcesPanel extends StatelessWidget {
       ),
     );
   }
-
-  // --- Helper widgets for Sources Panel ---
-  // Widget _emptySources() => Center(
-  //       child: Padding( // Added padding for better visual spacing
-  //         padding: const EdgeInsets.all(16.0),
-  //         child: Column(mainAxisSize: MainAxisSize.min, children: [
-  //           Icon(Icons.upload_file, size: 64, color: Colors.grey[400]),
-  //           const SizedBox(height: 16),
-  //           Text("No PDFs yet", style: TextStyle(color: Colors.grey[600], fontSize: 18, fontWeight: FontWeight.w500)),
-  //           const SizedBox(height: 8),
-  //           Text(
-  //             "Tap the button below to upload your first study source.",
-  //             style: TextStyle(color: Colors.grey[500]),
-  //             textAlign: TextAlign.center,
-  //           ),
-  //         ]),
-  //       ),
-  //     );
 
   Widget _uploadFooter(ProjectProvider p, List<Source> s) => Container(
         padding: const EdgeInsets.all(12),
