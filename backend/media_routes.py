@@ -24,7 +24,7 @@ MAX_CHUNK_SIZE_BYTES = 900_000
 # For now, we'll use a placeholder.
 db = None
 
-def set_db_instance(db_instance):
+def set_dependencies(db_instance):
     """Allows the main app to pass its db instance to this blueprint."""
     global db
     db = db_instance
