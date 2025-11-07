@@ -37,8 +37,7 @@ class _DesktopStudyLayoutState extends State<DesktopStudyLayout> {
     _noteEditController.dispose();
     super.dispose();
   }
-  
-  // All helper methods that manage the desktop state
+
   void _togglePanelVisibility(String panel) { 
     setState(() {
       if (panel == 'chat' && !_isChatVisible) {
@@ -81,8 +80,8 @@ class _DesktopStudyLayoutState extends State<DesktopStudyLayout> {
       icon: Icon(icon),
       style: IconButton.styleFrom(
         foregroundColor: color,
-        backgroundColor: isVisible ? color.withValues() : Colors.transparent,
-        disabledForegroundColor: color.withValues(),
+        backgroundColor: isVisible ? color.withOpacity(0.20) : Colors.transparent,
+        disabledForegroundColor: color.withOpacity(0.3),
       ),
       onPressed: isDisabled ? null : onPressed,
     );
@@ -110,7 +109,14 @@ class _DesktopStudyLayoutState extends State<DesktopStudyLayout> {
         backgroundColor: Colors.grey[100],
         elevation: 0,
         automaticallyImplyLeading: false,
-        title: const Text("View Panels", style: TextStyle(color: Colors.black54, fontSize: 16)),
+        leading: const Padding(
+          padding: EdgeInsets.only(left: 16.0),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Text("View Panels", style: TextStyle(color: Colors.black54, fontSize: 16)),
+          ),
+        ),
+        leadingWidth: 150,
         actions: [
           _buildVisibilityToggleButton(
             tooltip: 'Toggle Sources', icon: Icons.folder_open, color: Colors.blue[300]!,
@@ -168,15 +174,31 @@ class _DesktopStudyLayoutState extends State<DesktopStudyLayout> {
       Container(
         padding: const EdgeInsets.all(12),
         child: Column(children: [
-          ElevatedButton.icon(
-              onPressed: p.selectedSource == null ? null : p.getNoteForSelectedSource,
-              icon: const Icon(Icons.refresh),
-              label: const Text("Reload")),
+          // ... (Reload button)
           const SizedBox(height: 8),
+
+          // --- THIS IS THE UPDATED BUTTON ---
           OutlinedButton.icon(
-              onPressed: () => _copyRichTextToClipboard(ctx, html),
-              icon: const Icon(Icons.copy),
-              label: const Text("Copy Note")),
+            // Make the callback async
+            onPressed: () async {
+              // 1. Show a loading indicator to the user
+              ScaffoldMessenger.of(ctx).showSnackBar(
+                const SnackBar(content: Text("Preparing note for copying...")),
+              );
+
+              // 2. Call the new provider method to get the rich HTML
+              final String richHtml = await p.getNoteAsRichHtml();
+
+              // 3. Call your existing copy method with the new rich HTML
+              await _copyRichTextToClipboard(ctx, richHtml);
+
+              // 4. (Optional) Hide the loading indicator
+              ScaffoldMessenger.of(ctx).hideCurrentSnackBar();
+            },
+            icon: const Icon(Icons.copy),
+            label: const Text("Copy Note with Images"), // Updated label
+          ),
+
           const Divider(height: 24),
           TextField(
               controller: p.topicController,
