@@ -4,7 +4,6 @@ import 'package:provider/provider.dart';
 import 'package:study_assistance/provider/project_provider.dart';
 import 'package:flutter_html/flutter_html.dart';
 import 'package:super_clipboard/super_clipboard.dart';
-import 'package:study_assistance/screens/workspace_screen.dart'; 
 
 class SourceTile extends StatelessWidget {
   final String title;
@@ -32,7 +31,7 @@ class SourceTile extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4.0),
       child: Material(
-        color: isSelected ? selectedColor.withOpacity(0.1) : Colors.transparent,
+        color: isSelected ? selectedColor.withValues() : Colors.transparent,
         borderRadius: BorderRadius.circular(8),
         child: InkWell(
           onTap: isDeleting ? null : onTap, // Disable tap while deleting
@@ -78,7 +77,7 @@ class SourceTile extends StatelessWidget {
                     splashRadius: 20,
                   )
                 else if (isSelected)
-                  Icon(Icons.check_circle, color: selectedColor, size: 20),
+                  const Icon(Icons.check_circle, color: selectedColor, size: 20),
               ],
             ),
           ),
@@ -189,22 +188,22 @@ class SourcesPanel extends StatelessWidget {
   }
 
   // --- Helper widgets for Sources Panel ---
-  Widget _emptySources() => Center(
-        child: Padding( // Added padding for better visual spacing
-          padding: const EdgeInsets.all(16.0),
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            Icon(Icons.upload_file, size: 64, color: Colors.grey[400]),
-            const SizedBox(height: 16),
-            Text("No PDFs yet", style: TextStyle(color: Colors.grey[600], fontSize: 18, fontWeight: FontWeight.w500)),
-            const SizedBox(height: 8),
-            Text(
-              "Tap the button below to upload your first study source.",
-              style: TextStyle(color: Colors.grey[500]),
-              textAlign: TextAlign.center,
-            ),
-          ]),
-        ),
-      );
+  // Widget _emptySources() => Center(
+  //       child: Padding( // Added padding for better visual spacing
+  //         padding: const EdgeInsets.all(16.0),
+  //         child: Column(mainAxisSize: MainAxisSize.min, children: [
+  //           Icon(Icons.upload_file, size: 64, color: Colors.grey[400]),
+  //           const SizedBox(height: 16),
+  //           Text("No PDFs yet", style: TextStyle(color: Colors.grey[600], fontSize: 18, fontWeight: FontWeight.w500)),
+  //           const SizedBox(height: 8),
+  //           Text(
+  //             "Tap the button below to upload your first study source.",
+  //             style: TextStyle(color: Colors.grey[500]),
+  //             textAlign: TextAlign.center,
+  //           ),
+  //         ]),
+  //       ),
+  //     );
 
   Widget _uploadFooter(ProjectProvider p, List<Source> s) => Container(
         padding: const EdgeInsets.all(12),
@@ -492,8 +491,3 @@ class NotesPanel extends StatelessWidget {
     );
   }
 }
-
-// NOTE: The Notes panel is more complex because it has its own state (_isEditingNote).
-// For the mobile layout, you've already created a good implementation.
-// For the desktop layout, you can keep the _buildScratchpadPanel method inside the
-// _DesktopWorkspaceLayoutState since its editing state is tied to that specific layout.
