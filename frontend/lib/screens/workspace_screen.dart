@@ -2,14 +2,19 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:study_assistance/provider/project_provider.dart';
-
 import 'package:study_assistance/screens/desktop_study_layout.dart';
 import 'package:study_assistance/screens/mobile_study_layout.dart';
 import 'package:study_assistance/screens/paper_solver_view.dart';
+import 'package:study_assistance/models/project.dart';
 
 // --- 1. TOP-LEVEL WORKSPACE SCREEN (Manages the two main tabs) ---
 class WorkspaceScreen extends StatefulWidget {
-  const WorkspaceScreen({super.key});
+  final Project project;
+
+  const WorkspaceScreen({
+    super.key,
+    required this.project, // Make the project a required parameter
+  });
 
   @override
   State<WorkspaceScreen> createState() => _WorkspaceScreenState();
@@ -22,6 +27,10 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> with SingleTickerProv
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      Provider.of<ProjectProvider>(context, listen: false).setCurrentProject(widget.project);
+    });
   }
 
   @override

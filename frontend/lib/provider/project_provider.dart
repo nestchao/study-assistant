@@ -8,6 +8,7 @@ import 'dart:typed_data'; // Import
 import 'dart:convert';
 import 'package:image_picker/image_picker.dart';
 import 'package:study_assistance/models/past_paper.dart';
+import 'package:study_assistance/models/sync_config.dart';
 
 class Source {
   final String id;
@@ -43,6 +44,27 @@ class ProjectProvider with ChangeNotifier {
 
   String? _paperError;
   String? get paperError => _paperError;
+
+  bool _isGuestMode = false;
+  bool get isGuestMode => _isGuestMode;
+
+  List<SyncConfig> _syncConfigs = [];
+  List<SyncConfig> get syncConfigs => _syncConfigs;
+  bool _isLoadingConfigs = false;
+  bool get isLoadingConfigs => _isLoadingConfigs;
+  String? _syncingConfigId;
+  String? get syncingConfigId => _syncingConfigId;
+
+  // State for file viewer
+  String? _viewingProjectId;
+  Map<String, dynamic>? _fileTree;
+  Map<String, dynamic>? get fileTree => _fileTree;
+  bool _isLoadingFileTree = false;
+  bool get isLoadingFileTree => _isLoadingFileTree;
+  String? _selectedFileContent;
+  String? get selectedFileContent => _selectedFileContent;
+  bool _isLoadingFileContent = false;
+  bool get isLoadingFileContent => _isLoadingFileContent;
 
   Future<Uint8List?> getCachedMediaBytes(String mediaId) async {
     // 1. Check if the image is already in the cache.
@@ -185,8 +207,6 @@ class ProjectProvider with ChangeNotifier {
     print("💾 Saved ${_projects.length} projects to cache.");
   }
 
-  // --- DATA FETCHING & MUTATION METHODS ---
-
   Future<void> fetchProjects({bool forceRefresh = false}) async {
     if (_isLoadingProjects) return;
     if (_projects.isNotEmpty && !forceRefresh) return;
@@ -214,6 +234,9 @@ class ProjectProvider with ChangeNotifier {
 
   Future<void> createProject(String name) async {
     if (name.isEmpty) return;
+    
+    // The UI will be responsible for checking guest mode.
+    // The provider's job is just to talk to the API.
     try {
       await _api.createProject(name);
       await fetchProjects(forceRefresh: true);
@@ -222,7 +245,6 @@ class ProjectProvider with ChangeNotifier {
     }
   }
 
-  // --- NEW ---
   Future<void> renameProject(String projectId, String newName) async {
     _renamingProjectId = projectId;
     notifyListeners();
@@ -265,7 +287,6 @@ class ProjectProvider with ChangeNotifier {
     }
   }
 
-  // --- NEW ---
   Future<void> deleteSource(String sourceId) async {
     if (_currentProject == null) return;
     _deletingSourceId = sourceId;
@@ -561,5 +582,128 @@ class ProjectProvider with ChangeNotifier {
     }
 
     return richHtml;
+  }
+
+  void enterGuestMode() {
+    _isGuestMode = true;
+    // We can load projects from cache for the guest, but they can't save.
+    _loadProjectsFromCache();
+    notifyListeners();
+  }
+
+  void exitGuestMode() {
+    _isGuestMode = false;
+    // Clear any cached guest data when they log out of guest mode
+    _projects = [];
+    notifyListeners();
+  }
+
+  Future<void> fetchSyncConfigs() async {
+    _isLoadingConfigs = true;
+    notifyListeners();
+    try {
+      final data = await _api.getSyncConfigs();
+      _syncConfigs = data.map((map) => SyncConfig.fromMap(map)).toList();
+    } catch (e) {
+      print("Error fetching sync configs: $e");
+    } finally {
+      _isLoadingConfigs = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> registerSyncConfig(String projectId, String path, List<String> extensions) async {
+    try {
+      await _api.registerSyncConfig(projectId, path, extensions);
+      await fetchSyncConfigs(); // Refresh the list
+    } catch (e) {
+      print("Error registering sync config: $e");
+      rethrow;
+    }
+  }
+
+  Future<void> updateSyncConfigStatus(String configId, bool isActive) async {
+    try {
+      await _api.updateSyncConfig(configId, isActive: isActive);
+      // Update local state for immediate feedback
+      final index = _syncConfigs.indexWhere((c) => c.id == configId);
+      if (index != -1) {
+        _syncConfigs[index] = SyncConfig.fromMap({
+          ..._syncConfigs[index] as Map<String, dynamic>, // This is a bit verbose
+          'is_active': isActive,
+        });
+        notifyListeners();
+      }
+    } catch (e) {
+      print("Error updating sync config: $e");
+      rethrow;
+    }
+  }
+
+  Future<void> deleteSyncConfig(String configId) async {
+    try {
+      await _api.deleteSyncConfig(configId);
+      _syncConfigs.removeWhere((c) => c.id == configId);
+      notifyListeners();
+    } catch (e) {
+      print("Error deleting sync config: $e");
+      rethrow;
+    }
+  }
+
+  Future<Map<String, dynamic>> runSync(String configId) async {
+    _syncingConfigId = configId;
+    notifyListeners();
+    try {
+      final result = await _api.runSync(configId);
+      await fetchSyncConfigs(); // Refresh status and last synced time
+      return result;
+    } catch (e) {
+      print("Error running sync: $e");
+      rethrow;
+    } finally {
+      _syncingConfigId = null;
+      notifyListeners();
+    }
+  }
+
+  // --- NEW METHODS FOR FILE VIEWER ---
+  Future<void> fetchFileTree(String projectId) async {
+    _isLoadingFileTree = true;
+    _viewingProjectId = projectId;
+    _fileTree = null; // Clear old tree
+    _selectedFileContent = null;
+    notifyListeners();
+    try {
+      _fileTree = await _api.getProjectFileStructure(projectId);
+    } catch (e) {
+      print("Error fetching file tree: $e");
+    } finally {
+      _isLoadingFileTree = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> fetchFileContent(String docId) async { // <-- REMOVE projectId from parameters
+    if (_viewingProjectId == null) {
+      _selectedFileContent = "Error: No project selected for viewing.";
+      notifyListeners();
+      return;
+    }
+    
+    _isLoadingFileContent = true;
+    _selectedFileContent = "Loading file content...";
+    notifyListeners();
+    try {
+      // Use the stored _viewingProjectId
+      _selectedFileContent = await _api.getFileContent(_viewingProjectId!, docId);
+    } catch (e) { 
+      print("Error fetching file content: $e");
+      _selectedFileContent = "Error: Could not load file."; 
+    }
+    finally {
+      _isLoadingFileContent = false;
+      notifyListeners();
+    }
   }
 }

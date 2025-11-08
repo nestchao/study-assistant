@@ -5,13 +5,7 @@ from flask import Blueprint, request, jsonify, Response
 from firebase_admin import firestore
 import redis
 
-try:
-    redis_client = redis.Redis(host='localhost', port=6379, db=0, decode_responses=False)
-    redis_client.ping()
-    print("✅ Redis client connected successfully.")
-except redis.exceptions.ConnectionError as e:
-    print(f"❌ Redis connection failed: {e}. Caching will be disabled.")
-    redis_client = None
+redis_client = None 
 
 # Create a Blueprint. This is like a mini-Flask app that can be registered with the main app.
 media_bp = Blueprint('media_bp', __name__)
@@ -24,17 +18,16 @@ MAX_CHUNK_SIZE_BYTES = 900_000
 # For now, we'll use a placeholder.
 db = None
 
-def set_dependencies(db_instance):
+def set_dependencies(db_instance, redis_instance):
     """Allows the main app to pass its db instance to this blueprint."""
-    global db
+    global db, redis_client
     db = db_instance
+    redis_client = redis_instance
 
 # --- HELPER / AUTH MOCK ---
 def get_current_user_id():
     """Placeholder for your authentication logic."""
     return request.headers.get("X-User-ID")
-
-# --- CORE MEDIA LOGIC ---
 
 def store_media(media_id: str, base64_string: str, file_name: str, media_type: str, user_id: str):
     """
@@ -91,15 +84,12 @@ def store_media(media_id: str, base64_string: str, file_name: str, media_type: s
         raise
 
 def get_media_data(media_id: str) -> bytes:
-    """
-    Retrieves media data, using Redis as a cache, and falling back to Firestore.
-    """
-    # 1. Check Redis cache first
     if redis_client:
         try:
             cached_data = redis_client.get(media_id)
             if cached_data:
                 print(f"CACHE HIT for mediaId: {media_id}")
+                # This is correct. It returns the raw bytes directly.
                 return cached_data
         except Exception as e:
             print(f"Redis cache check failed: {e}")
@@ -175,7 +165,6 @@ def upload_media_route():
         }), 201
     except Exception as e:
         return jsonify({"error": f"Failed to upload file: {e}"}), 500
-
 
 @media_bp.route('/media/get/<string:media_id>', methods=['GET'])
 def get_media_route(media_id):
