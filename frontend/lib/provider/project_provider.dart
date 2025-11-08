@@ -465,7 +465,7 @@ class ProjectProvider with ChangeNotifier {
     }
   }
 
-  Future<void> pickAndProcessPaper() async {
+  Future<void> pickAndProcessPaper(String analysisMode) async {
     if (_currentProject == null) return;
 
     FilePickerResult? result = await FilePicker.platform.pickFiles(
@@ -479,8 +479,13 @@ class ProjectProvider with ChangeNotifier {
       _paperError = null;
       notifyListeners();
       try {
-        await _api.uploadPastPaper(_currentProject!.id, result.files.single);
-        await fetchPastPapers(forceRefresh: true);
+        // Pass the mode to the API service
+        final newPaperData = await _api.uploadPastPaper(
+            _currentProject!.id, result.files.single, analysisMode);
+        
+        // Add the new paper to the top of the list instantly
+        _pastPapers.insert(0, PastPaper.fromMap(newPaperData));
+
       } catch (e) {
         print("Paper processing error: $e");
         _paperError = e.toString();
@@ -497,30 +502,69 @@ class ProjectProvider with ChangeNotifier {
   }
 
   Future<String?> getPhotoAsTag() async {
-  if (_currentProject == null) return null;
+    if (_currentProject == null) return null;
 
-  try {
-    final XFile? photo = await _picker.pickImage(source: ImageSource.camera);
+    try {
+      final XFile? photo = await _picker.pickImage(source: ImageSource.camera);
 
-    if (photo != null) {
-      final Uint8List imageBytes = await photo.readAsBytes();
-      final String fileName = photo.name;
+      if (photo != null) {
+        final Uint8List imageBytes = await photo.readAsBytes();
+        final String fileName = photo.name;
 
-      // This part just does the upload
-      final String? mediaId = await _api.uploadImageBytes(
-        _currentProject!.id,
-        imageBytes,
-        fileName,
-      );
+        // This part just does the upload
+        final String? mediaId = await _api.uploadImageBytes(
+          _currentProject!.id,
+          imageBytes,
+          fileName,
+        );
 
-      // This part just returns the tag as a string
-      if (mediaId != null) {
-        return '\n\n<firestore-image src="$mediaId"></firestore-image>\n\n';
+        // This part just returns the tag as a string
+        if (mediaId != null) {
+          return '\n\n<firestore-image src="$mediaId"></firestore-image>\n\n';
+        }
+      }
+    } catch (e) {
+      print("Error taking photo: $e");
+    }
+    return null;
+  }
+
+  Future<String> getNoteAsRichHtml() async {
+    String richHtml = _scratchpadContent;
+
+    // This regex finds all instances of your custom tag and captures the mediaId.
+    final RegExp exp = RegExp(r'<firestore-image src="([^"]+)"></firestore-image>');
+
+    // Find all matches in the current note content.
+    final matches = exp.allMatches(richHtml).toList();
+
+    // Asynchronously process each match.
+    for (final match in matches) {
+      // The full matched tag, e.g., '<firestore-image src="img_123"></firestore-image>'
+      final String fullTag = match.group(0)!; 
+      
+      // The captured mediaId, e.g., 'img_123'
+      final String mediaId = match.group(1)!;
+
+      // Get the image bytes using your existing caching logic.
+      final Uint8List? imageBytes = await getCachedMediaBytes(mediaId);
+
+      if (imageBytes != null) {
+        // Convert the image bytes to a Base64 string.
+        final String base64Image = base64Encode(imageBytes);
+        
+        // Create the standard <img> tag with a Base64 Data URI.
+        // Assuming JPEG. You could store the mime type in your backend metadata for more accuracy.
+        final String imageHtmlTag = '<img src="data:image/jpeg;base64,$base64Image">';
+
+        // Replace the custom tag in our string with the new standard <img> tag.
+        richHtml = richHtml.replaceFirst(fullTag, imageHtmlTag);
+      } else {
+        // If the image can't be loaded, replace the tag with an error message.
+        richHtml = richHtml.replaceFirst(fullTag, '<p>[Error: Image $mediaId not found]</p>');
       }
     }
-  } catch (e) {
-    print("Error taking photo: $e");
+
+    return richHtml;
   }
-  return null;
-}
 }
