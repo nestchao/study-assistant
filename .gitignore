@@ -30,6 +30,9 @@ dist/
 htmlcov/
 
 venv/
+# --- THIS IS THE FIX ---
+# Remove the leading slash to make the pattern more robust
+backend/venv/
 
 
 # ===================================================================
