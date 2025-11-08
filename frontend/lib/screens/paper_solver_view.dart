@@ -1,4 +1,3 @@
-// lib/screens/paper_solver_view.dart
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:study_assistance/provider/project_provider.dart';
@@ -16,6 +15,72 @@ class PaperSolverView extends StatefulWidget {
 class _PaperSolverViewState extends State<PaperSolverView> {
   PastPaper? _selectedPaper;
 
+  /// Shows a dialog for the user to choose between analysis methods.
+  void _showUploadOptionsDialog(BuildContext context) {
+    final provider = Provider.of<ProjectProvider>(context, listen: false);
+
+    showDialog(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Text('Choose Analysis Method'),
+          content: const SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('How would you like to analyze this paper?'),
+                SizedBox(height: 16),
+                Text(
+                  'Text Only (Fast & Reliable)',
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+                Text(
+                  'Best for text-heavy documents. Ignores images and complex layouts.',
+                  style: TextStyle(fontSize: 13, color: Colors.black54),
+                ),
+                SizedBox(height: 12),
+                Text(
+                  'Full Analysis (Slower, Visual)',
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+                Text(
+                  'Sends the entire file to the AI. Best for papers with diagrams, charts, or complex formatting.',
+                  style: TextStyle(fontSize: 13, color: Colors.black54),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.of(dialogContext).pop();
+                provider.pickAndProcessPaper('text_only');
+              },
+              child: const Text('Text Only'),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.indigo,
+                foregroundColor: Colors.white,
+              ),
+              onPressed: () {
+                Navigator.of(dialogContext).pop();
+                provider.pickAndProcessPaper('multimodal');
+              },
+              child: const Text('Full Analysis'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final p = context.watch<ProjectProvider>();
@@ -31,7 +96,7 @@ class _PaperSolverViewState extends State<PaperSolverView> {
             Padding(
               padding: EdgeInsets.all(16.0),
               child: Text(
-                "This may take a moment as we read the document and generate answers based on your notes.",
+                "This may take a moment as the AI reads the document and generates answers based on your notes.",
                 textAlign: TextAlign.center,
                 style: TextStyle(color: Colors.grey),
               ),
@@ -44,7 +109,7 @@ class _PaperSolverViewState extends State<PaperSolverView> {
     // Handle errors from the provider
     if (p.paperError != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) { // Check if the widget is still in the tree
+        if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text('Error: ${p.paperError}'),
@@ -52,7 +117,7 @@ class _PaperSolverViewState extends State<PaperSolverView> {
               duration: const Duration(seconds: 5),
             ),
           );
-          p.clearPaperError(); // Clear error after showing it
+          p.clearPaperError();
         }
       });
     }
@@ -65,7 +130,7 @@ class _PaperSolverViewState extends State<PaperSolverView> {
               ? _buildEmptyState(p)
               : _buildMainContent(p),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: p.pickAndProcessPaper,
+        onPressed: () => _showUploadOptionsDialog(context),
         icon: const Icon(Icons.upload_file),
         label: const Text('Upload Paper'),
         backgroundColor: Colors.indigo,
@@ -73,10 +138,12 @@ class _PaperSolverViewState extends State<PaperSolverView> {
     );
   }
 
+  /// Converts a markdown string to an HTML string for rendering.
   String markdownToHtml(String markdown) {
     return md.markdownToHtml(markdown, extensionSet: md.ExtensionSet.gitHubWeb);
   }
 
+  /// The view shown when no past papers have been uploaded yet.
   Widget _buildEmptyState(ProjectProvider p) {
     return Center(
       child: Column(
@@ -97,7 +164,7 @@ class _PaperSolverViewState extends State<PaperSolverView> {
           ),
           const SizedBox(height: 20),
           ElevatedButton.icon(
-            onPressed: p.pickAndProcessPaper,
+            onPressed: () => _showUploadOptionsDialog(context), // FIX: This now correctly calls the dialog
             icon: const Icon(Icons.add),
             label: const Text("Upload First Paper"),
             style: ElevatedButton.styleFrom(
@@ -109,9 +176,9 @@ class _PaperSolverViewState extends State<PaperSolverView> {
     );
   }
 
+  /// The main content area, which uses a LayoutBuilder to be responsive.
   Widget _buildMainContent(ProjectProvider p) {
     return LayoutBuilder(builder: (context, constraints) {
-      // For mobile, show a list view. For desktop, show side-by-side.
       if (constraints.maxWidth < 600) {
         return _buildMobilePaperView(p);
       } else {
@@ -120,7 +187,7 @@ class _PaperSolverViewState extends State<PaperSolverView> {
     });
   }
 
-  // View for Desktop
+  /// The two-panel layout for wider screens (desktop/tablet).
   Widget _buildDesktopPaperView(ProjectProvider p) {
     return Row(
       children: [
@@ -128,6 +195,7 @@ class _PaperSolverViewState extends State<PaperSolverView> {
           width: 300,
           child: _buildPaperList(p, isMobile: false),
         ),
+        const VerticalDivider(width: 1),
         Expanded(
           child: _selectedPaper == null
               ? const Center(child: Text("Select a paper to view the solution"))
@@ -137,7 +205,7 @@ class _PaperSolverViewState extends State<PaperSolverView> {
     );
   }
 
-  // View for Mobile
+  /// The view for mobile screens, which navigates to a detail view.
   Widget _buildMobilePaperView(ProjectProvider p) {
     if (_selectedPaper != null) {
       return Scaffold(
@@ -154,6 +222,7 @@ class _PaperSolverViewState extends State<PaperSolverView> {
     return _buildPaperList(p, isMobile: true);
   }
 
+  /// The list of solved papers.
   Widget _buildPaperList(ProjectProvider p, {required bool isMobile}) {
     return Container(
       color: Colors.white,
@@ -169,6 +238,13 @@ class _PaperSolverViewState extends State<PaperSolverView> {
                 return ListTile(
                   leading: const Icon(Icons.article_outlined),
                   title: Text(paper.filename, maxLines: 2, overflow: TextOverflow.ellipsis),
+                  subtitle: Text(
+                    'Mode: ${paper.analysisMode == 'multimodal' ? 'Full Analysis' : 'Text Only'}',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: paper.analysisMode == 'multimodal' ? Colors.indigo : Colors.black54,
+                    ),
+                  ),
                   tileColor: isSelected ? Colors.indigo.withOpacity(0.1) : null,
                   onTap: () {
                     setState(() {
@@ -184,6 +260,7 @@ class _PaperSolverViewState extends State<PaperSolverView> {
     );
   }
 
+  /// A generic header for panels.
   Widget _buildPanelHeader(String title, IconData icon, Color color) {
     return Container(
       padding: const EdgeInsets.all(16),
@@ -201,6 +278,7 @@ class _PaperSolverViewState extends State<PaperSolverView> {
     );
   }
 
+  /// The panel that displays the questions and answers for the selected paper.
   Widget _buildQAPanel(PastPaper paper) {
     return ListView.builder(
       padding: const EdgeInsets.all(16),
@@ -229,139 +307,4 @@ class _PaperSolverViewState extends State<PaperSolverView> {
       },
     );
   }
-
-  // Widget _buildNoteViewer(String html) {
-  //   return Scrollbar(
-  //     controller: _notesScrollController,
-  //     thumbVisibility: true,
-  //     child: SingleChildScrollView(
-  //       controller: _notesScrollController,
-  //       padding: const EdgeInsets.all(16),
-  //       child: Card(
-  //         child: Padding(
-  //           padding: const EdgeInsets.all(16),
-  //           // --- THIS IS THE CLEANED-UP IMPLEMENTATION ---
-  //           child: Html(
-  //             data: html,
-  //             extensions: [
-  //               TagExtension(
-  //                 tagsToExtend: {"firestore-image"},
-  //                 builder: (ExtensionContext context) {
-  //                   final String mediaId = context.attributes['src'] ?? '';
-  //                   // Just return the new reusable widget. No complex logic here.
-  //                   return FirestoreImage(mediaId: mediaId);
-  //                 },
-  //               ),
-  //             ],
-  //           ),
-  //           // --- END OF FIX ---
-  //         ),
-  //       ),
-  //     ),
-  //   );
-  // }
-
-  // Widget _buildNoteEditor() {
-  //   return Padding(
-  //     padding: const EdgeInsets.all(16.0),
-  //     child: TextField(
-  //       controller: _noteEditController,
-  //       maxLines: null, // Allows the text field to expand vertically
-  //       expands: true, // Fills the available space
-  //       keyboardType: TextInputType.multiline,
-  //       decoration: const InputDecoration(
-  //         hintText: "Edit your notes here...",
-  //         border: OutlineInputBorder(),
-  //         isDense: true,
-  //       ),
-  //       textAlignVertical: TextAlignVertical.top,
-  //     ),
-  //   );
-  // }
-
-  // Widget _emptySources() => Center(
-  //       child: Column(mainAxisSize: MainAxisSize.min, children: [
-  //         Icon(Icons.upload_file, size: 64, color: Colors.grey[400]),
-  //         Text("No PDFs yet", style: TextStyle(color: Colors.grey[600])),
-  //         Text("Tap below to upload",
-  //             style: TextStyle(color: Colors.grey[500])),
-  //       ]),
-  //     );
-
-  // Widget _uploadFooter(ProjectProvider p, List<Source> s) => Container(
-  //       padding: const EdgeInsets.all(12),
-  //       color: Colors.grey[50],
-  //       child: Column(children: [
-  //         ElevatedButton.icon(
-  //           onPressed: p.isUploading ? null : p.pickAndUploadFiles,
-  //           icon: p.isUploading
-  //               ? const SizedBox(
-  //                   width: 20,
-  //                   height: 20,
-  //                   child: CircularProgressIndicator(color: Colors.white))
-  //               : const Icon(Icons.upload_file),
-  //           label: Text(p.isUploading ? "Uploading..." : "Upload PDFs"),
-  //           style: ElevatedButton.styleFrom(
-  //               backgroundColor: Colors.blue[600],
-  //               minimumSize: const Size(double.infinity, 50)),
-  //         ),
-  //         if (s.isNotEmpty)
-  //           Text("${s.length} source${s.length > 1 ? 's' : ''}",
-  //               style: const TextStyle(fontSize: 12, color: Colors.grey)),
-  //       ]),
-  //     );
-
-  // Widget _noteActions(BuildContext ctx, ProjectProvider p, String html) =>
-  //     Container(
-  //       padding: const EdgeInsets.all(12),
-  //       child: Column(children: [
-  //         ElevatedButton.icon(
-  //             onPressed:
-  //                 p.selectedSource == null ? null : p.getNoteForSelectedSource,
-  //             icon: const Icon(Icons.refresh),
-  //             label: const Text("Reload")),
-  //         const SizedBox(height: 8),
-  //         OutlinedButton.icon(
-  //             onPressed: () => _copyRichTextToClipboard(ctx, html),
-  //             icon: const Icon(Icons.copy),
-  //             label: const Text("Copy Note")),
-  //         const Divider(height: 24),
-  //         TextField(
-  //             controller: p.topicController,
-  //             maxLines: 2,
-  //             decoration: const InputDecoration(hintText: "e.g. Explain OOP")),
-  //         ElevatedButton.icon(
-  //             onPressed: () {
-  //               final t = p.topicController.text.trim();
-  //               if (t.isNotEmpty) p.generateTopicNote(t);
-  //             },
-  //             icon: const Icon(Icons.auto_awesome),
-  //             label: const Text("Generate")),
-  //       ]),
-  //     );
-
-  //   Future<void> _copyRichTextToClipboard(BuildContext context, String html) async {
-  //   final item = DataWriterItem();
-  //   item.add(Formats.htmlText(html));
-    
-  //   // Helper to create a plain text fallback
-  //   String stripHtmlTags(String html) {
-  //     final RegExp exp = RegExp(r"<[^>]*>", multiLine: true, caseSensitive: true);
-  //     return html.replaceAll(exp, '').replaceAll('&nbsp;', ' ');
-  //   }
-
-  //   final plainText = stripHtmlTags(html).trim();
-  //   item.add(Formats.plainText(plainText));
-    
-  //   await SystemClipboard.instance?.write([item]);
-    
-  //   if (mounted) {
-  //     ScaffoldMessenger.of(context).showSnackBar(
-  //       const SnackBar(
-  //         content: Text("Formatted note copied!"),
-  //         backgroundColor: Colors.green,
-  //       ),
-  //     );
-  //   }
-  // }
 }
