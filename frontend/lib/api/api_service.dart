@@ -219,15 +219,22 @@ class ApiService {
   }
 
   // --- NEW: Upload Past Paper ---
-  Future<Map<String, dynamic>> uploadPastPaper(String projectId, PlatformFile file) async {
+  Future<Map<String, dynamic>> uploadPastPaper(
+    String projectId,
+    PlatformFile file,
+    String analysisMode, // <-- NEW PARAMETER
+  ) async {
     var request = http.MultipartRequest(
       'POST',
       Uri.parse('$baseUrl/upload-paper/$projectId'),
     );
 
+    // Add the analysis mode as a field in the multipart request
+    request.fields['analysis_mode'] = analysisMode;
+
     if (file.bytes != null) {
       request.files.add(http.MultipartFile.fromBytes(
-        'file', // MUST match Flask's request.files['file']
+        'paper', // MUST match Flask's request.files['paper']
         file.bytes!,
         filename: file.name,
       ));
@@ -242,7 +249,8 @@ class ApiService {
     if (response.statusCode == 200) {
       return decodedBody;
     } else {
-      throw Exception(decodedBody['error'] ?? 'Failed to upload and process paper');
+      throw Exception(
+          decodedBody['error'] ?? 'Failed to upload and process paper');
     }
   }
 

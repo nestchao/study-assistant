@@ -1,65 +1,68 @@
-# backend/study_hub_routes.py
 import re
 import markdown
-import google.generativeai as genai
+import html2text
 from flask import Blueprint, request, jsonify
 from firebase_admin import firestore
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from utils import extract_text, delete_collection # We'll create this utils.py file next
+
+# Import shared utility functions
+from utils import extract_text, delete_collection, split_chunks
 import redis
 
 # --- BLUEPRINT SETUP ---
+# Create a blueprint for study hub features
 study_hub_bp = Blueprint('study_hub_bp', __name__)
+
+# Global variables to hold dependencies injected from app.py
 db = None
-genai_model = None
+note_gen_model = None
+chat_model = None
 redis_client = None 
 
-def set_dependencies(db_instance, genai_instance, redis_instance):
-    """Injects dependencies from the main app."""
-    global db, genai_model, redis_client
+def set_dependencies(db_instance, note_model_instance, chat_model_instance, redis_instance):
+    """Injects database and AI model dependencies from the main app."""
+    global db, note_gen_model, chat_model, redis_client
     db = db_instance
-    genai_model = genai_instance
+    note_gen_model = note_model_instance
+    chat_model = chat_model_instance
+    print("✅ Study Hub dependencies injected.")
     redis_client = redis_instance
 
 # --- HELPER FUNCTIONS for Study Hub ---
-def split_chunks(text):
-    splitter = RecursiveCharacterTextSplitter(chunk_size=1500, chunk_overlap=200)
-    return splitter.split_text(text)
 
 def generate_note(text):
+    """Generates a simplified study note using the injected AI model."""
+    print("  🤖 Generating AI study note...")
     prompt = f"""
-    You are an expert universal study assistant. Your mission is to transform dense academic texts from **any language** into simplified, well-structured, and exceptionally easy-to-understand study notes.
+    You are an expert academic study assistant. Your mission is to transform dense academic texts into simplified, well-structured study notes that are easy to understand, while strictly preserving the original document's structure.
 
-    Your output must be in the **same language as the source text**. Follow these rules meticulously, as they are your core programming.
+    Your output must be in the **same language as the source text**. Follow these rules meticulously.
 
-    **1. 💡 The Golden Rule: Simplify Everything**
-    *   This is your most important task. Your absolute priority is to make the content easy to understand for a student who finds the original text difficult.
-    *   **Step A: Simplify Vocabulary.** Find any complex, technical, or **unfamiliar words** in the original text and replace them with simpler, more common words in that **same language**.
-        *   *English Example:* Change "leverage synergistic paradigms" to "use teamwork effectively."
-        *   *Spanish Example:* Change "implementar una metodología vanguardista" to "usar un método nuevo y moderno."
-    *   **Step B: Simplify Sentences.** Break down long, complex sentences into shorter, clearer ones that are easy to read and digest.
-    *   **Step C: Simplify Structure.** Convert dense paragraphs into scannable bullet points, numbered lists, and short, focused sections.
+    **0. 🏛️ The Golden Rule: Preserve the Original Structure**
+    *   This is your most important command. You MUST follow the structure, headings, and topic order of the original text EXACTLY.
+    *   Do not merge sections, re-order paragraphs, or write new introductory paragraphs. Your task is to simplify the content *within* each original section.
 
-    **2. ✍️ Annotation Rule: Translate ALL Simplified Words (NEW & IMPROVED)**
-    *   Your annotation is not just for major keywords. For **every single word** that you simplified in Rule #1 because it was complex or unfamiliar, you **must** provide its Chinese translation.
-    *   The format is always: `new simplified word (中文翻译)`.
-    *   **Example of Scope:** If the original text said "The *ubiquitous* nature of the *phenomenon*...", and you simplify it to "The *widespread* nature of the *event*...", your output must be: "The **widespread (普遍的)** nature of the **event (事件)**..." This applies to all such words.
+    **1. 💡 The Simplification Rule: Clarify In-Place**
+    *   Replace complex, technical, or academic words with simpler, more common equivalents in the same language.
+    *   Break down long, complex sentences into shorter, clearer ones.
 
-    **3. 🎨 Formatting Rule: Make it Engaging and Clear**
-    *   **Headings and Emojis:** Use markdown headings (`#`, `##`) to create a clear structure. Add a relevant emoji next to each main heading to make it visually appealing (e.g., 🔍 for Definitions, ⚙️ for Processes, ✅ for Key Takeaways).
-    *   **Highlighting:** Use **bold text** to emphasize the most important simplified keywords and concepts.
-    *   **Tone:** Adopt a friendly, encouraging, and helpful tone, as if you are a tutor guiding the student through the material.
+    **2. ✍️ The Annotation Rule: Translate Simplified Words**
+    *   For **every single word** that you simplified, you MUST provide its Chinese translation immediately after.
+    *   Format: `new simplified word (中文翻译)`. Example: "The **widespread (普遍的)** nature of the **event (事件)**..."
 
-    **4. 🎯 Content Rule: Be Comprehensive and Accurate**
-    *   While simplifying, you must still cover **all major topics and key concepts** from the original text. Do not skip sections.
-    *   Your notes should follow the same logical flow and structure as the source document.
+    **3. 🎨 The Formatting & Tone Rule: Be Clear and Direct**
+    *   Use markdown headings (`#`, `##`) that match the original text's structure. Add a relevant emoji to each main heading.
+    *   Use **bold text** to emphasize key simplified concepts.
+    *   Adopt a clear, direct, and helpful academic tone.
+
+    **4. 🎯 The Content Rule: Be Comprehensive and Accurate**
+    *   Cover all major topics and key concepts from the original text. Do not skip sections.
     *   Extract only the most critical information—definitions, key arguments, and essential examples.
 
-    **5. 🧠 Memory Aid: Add a Mnemonic Tip (记忆技巧)**
-    *   At the end of each major section, create a short, creative **Mnemonic Tip (记忆技巧)**. This could be an acronym, a simple rhyme, or a memorable phrase to help the student recall the main points.
+    **5. 🧠 The Memory Aid Rule: Add a Mnemonic Tip (记忆技巧)**
+    *   At the end of each major section, create a short, creative Mnemonic Tip (记忆技巧) to help recall the main points.
 
     **Constraint:**
-    *   You must not add any new information that is not present in the original text. Your job is to simplify and structure, not to invent or add external knowledge.
+    *   You must not add any new information that is not present in the original text.
 
     Here is the text to process:
     ---
@@ -67,16 +70,51 @@ def generate_note(text):
     ---
     """
     try:
-        response = genai_model.generate_content(prompt)
+        # Use the injected note_gen_model
+        response = note_gen_model.generate_content(prompt)
         return markdown.markdown(response.text)
     except Exception as e:
-        print(f"  ❌ Generation failed: {e}")
+        print(f"  ❌ Note generation failed: {e}")
         raise
 
-@study_hub_bp.route('/get-projects')
+def get_simplified_note_context(project_id, source_id=None):
+    """Fetches and combines all simplified note pages into clean text for the chatbot."""
+    print(f"  📚 Retrieving simplified note context for project {project_id}...")
+    full_html_content = ""
+    sources_to_query = []
+
+    if source_id:
+        source_ref = db.collection('projects').document(project_id).collection('sources').document(source_id)
+        sources_to_query.append(source_ref)
+    else:
+        sources_stream = db.collection('projects').document(project_id).collection('sources').stream()
+        sources_to_query = [source.reference for source in sources_stream]
+
+    for source_ref in sources_to_query:
+        pages_query = source_ref.collection('note_pages').order_by('order').stream()
+        for page in pages_query:
+            full_html_content += page.to_dict().get('html', '')
+
+    if not full_html_content:
+        print("  ⚠️ No note content found.")
+        return ""
+
+    # Convert HTML back to clean text for the AI model
+    h = html2text.HTML2Text()
+    h.ignore_links = True
+    h.ignore_images = True
+    clean_text = h.handle(full_html_content)
+    
+    print(f"  ✅ Assembled {len(clean_text)} characters of simplified note text.")
+    return clean_text
+
+# --- ROUTES ---
+
+@study_hub_bp.route('/get-projects', methods=['GET'])
 def get_projects():
     docs = db.collection('projects').order_by('timestamp', direction=firestore.Query.DESCENDING).stream()
-    return jsonify([{"id": d.id, "name": d.to_dict().get('name')} for d in docs])
+    projects = [{"id": d.id, "name": d.to_dict().get('name')} for d in docs]
+    return jsonify(projects)
 
 # In create_project function
 @study_hub_bp.route('/create-project', methods=['POST'])
@@ -96,22 +134,14 @@ def create_project():
 
 @study_hub_bp.route('/rename-project/<project_id>', methods=['PUT'])
 def rename_project(project_id):
-    print(f"\n✏️  RENAME REQUEST for project: {project_id}")
+    new_name = request.json.get('new_name')
+    if not new_name:
+        return jsonify({"success": False, "error": "New name not provided"}), 400
     try:
-        new_name = request.json.get('new_name')
-        if not new_name:
-            return jsonify({"success": False, "error": "New name not provided"}), 400
-
         project_ref = db.collection('projects').document(project_id)
         project_ref.update({'name': new_name})
-        
-        print(f"✅ Successfully renamed project to: {new_name}")
         return jsonify({"success": True, "message": f"Project renamed to {new_name}."}), 200
-
     except Exception as e:
-        import traceback
-        print(f"❌ Error renaming project {project_id}: {e}")
-        print(traceback.format_exc())
         return jsonify({"success": False, "error": str(e)}), 500
 
 @study_hub_bp.route('/delete-project/<project_id>', methods=['DELETE'])
@@ -119,191 +149,78 @@ def delete_project(project_id):
     print(f"\n🗑️  DELETE REQUEST for project: {project_id}")
     try:
         project_ref = db.collection('projects').document(project_id)
-
-        # 1. Delete all subcollections first
         for collection_ref in project_ref.collections():
-            print(f"  Deleting subcollection: {collection_ref.id}")
             delete_collection(collection_ref, batch_size=50)
-
-        # 2. After subcollections are gone, delete the project document itself
         project_ref.delete()
-        print(f"✅ Successfully deleted project document: {project_id}")
-        
-        return jsonify({"success": True, "message": f"Project {project_id} deleted."}), 200
-
+        print(f"✅ Successfully deleted project: {project_id}")
+        return jsonify({"success": True}), 200
     except Exception as e:
-        import traceback
-        print(f"❌ Error deleting project {project_id}: {e}")
-        print(traceback.format_exc())
         return jsonify({"success": False, "error": str(e)}), 500
 
-@study_hub_bp.route('/get-sources/<project_id>')
+@study_hub_bp.route('/get-sources/<project_id>', methods=['GET'])
 def get_sources(project_id):
-    docs = db.collection('projects').document(project_id) \
-             .collection('sources').stream()
-    return jsonify([{
-        "id": d.id,                 
-        "filename": d.to_dict().get('filename')
-    } for d in docs])
+    docs = db.collection('projects').document(project_id).collection('sources').stream()
+    sources = [{"id": d.id, "filename": d.to_dict().get('filename')} for d in docs]
+    return jsonify(sources)
 
 @study_hub_bp.route('/upload-source/<project_id>', methods=['POST'])
 def upload_source(project_id):
-    print("=" * 80)
-    print(f"📁 UPLOAD REQUEST for project: {project_id}")
-    print("=" * 80)
-    
+    print(f"\n📁 UPLOAD REQUEST for project: {project_id}")
     if 'pdfs' not in request.files:
-        print("❌ ERROR: No 'pdfs' field in request!")
-        print(f"Available fields: {list(request.files.keys())}")
         return jsonify({"error": "No files provided", "success": False}), 400
     
     files = request.files.getlist('pdfs')
-    print(f"📦 Received {len(files)} file(s)")
-    
     if not files or files[0].filename == '':
-        print("❌ ERROR: Empty file list or no filename")
         return jsonify({"error": "No files selected", "success": False}), 400
     
-    processed = []
-    errors = []
-
-    for idx, file in enumerate(files):
-        print(f"\n{'─' * 60}")
-        print(f"🔄 Processing file {idx + 1}/{len(files)}")
-        print(f"{'─' * 60}")
-        
+    processed, errors = [], []
+    for file in files:
         filename = file.filename
-        print(f"📄 Original filename: {filename}")
-        
-        safe_id = re.sub(r'[.#$/[\]]', '_', filename)
-        print(f"🔐 Safe ID: {safe_id}")
-
+        safe_id = re.sub(r'[.#$/[\]]', '_', filename) # Make filename Firestore-safe
+        print(f"\n🔄 Processing '{filename}'...")
         try:
-            print("📖 Step 1: Extracting text from PDF...")
             file.stream.seek(0)
             text = extract_text(file.stream)
-            
-            print(f"✅ Text extracted: {len(text)} characters")
-            
             if not text.strip():
-                error_msg = f"No text extracted from {filename}"
-                print(f"⚠️  WARNING: {error_msg}")
-                errors.append({"filename": filename, "error": error_msg})
+                errors.append({"filename": filename, "error": "No text could be extracted."})
                 continue
-            
-            print(f"📝 Preview: {text[:200]}...")
 
-            print("💾 Step 2: Creating source document in Firestore...")
-            source_ref = db.collection('projects').document(project_id) \
-                             .collection('sources').document(safe_id)
+            source_ref = db.collection('projects').document(project_id).collection('sources').document(safe_id)
+            source_ref.set({'filename': filename, 'timestamp': firestore.SERVER_TIMESTAMP, 'character_count': len(text)})
             
-            source_ref.set({
-                'filename': filename, 
-                'timestamp': firestore.SERVER_TIMESTAMP,
-                'character_count': len(text)
-            })
-            print(f"✅ Source document created: projects/{project_id}/sources/{safe_id}")
-
-            print("🤖 Step 3: Generating AI study note...")
-            try:
-                note_html = generate_note(text)
-                print(f"✅ Note generated: {len(note_html)} characters")
-            except Exception as e:
-                error_msg = f"AI generation failed: {str(e)}"
-                print(f"❌ ERROR: {error_msg}")
-                note_html = f"<p>AI note generation failed: {e}</p>"
-
-            print("💾 Step 4: Saving note pages to Firestore...")
-            chunk_size = 900000
-            note_pages_saved = 0
+            note_html = generate_note(text)
             
+            # Save note in chunks to avoid Firestore document size limits
+            chunk_size = 900000 
             for i in range(0, len(note_html), chunk_size):
                 chunk = note_html[i:i+chunk_size]
                 page_num = i // chunk_size
-                
-                source_ref.collection('note_pages').document(f'page_{page_num}').set({
-                    'html': chunk,
-                    'order': page_num
-                })
-                note_pages_saved += 1
-                print(f"  ✓ Saved note page {page_num} ({len(chunk)} chars)")
+                source_ref.collection('note_pages').document(f'page_{page_num}').set({'html': chunk, 'order': page_num})
             
-            print(f"✅ Total note pages saved: {note_pages_saved}")
-
-            print("✂️  Step 5: Splitting text into chunks for Q&A...")
+            # Save original text chunks for context-aware features
             text_chunks = split_chunks(text)
-            print(f"✅ Created {len(text_chunks)} text chunks")
-            
-            print("💾 Step 6: Saving Q&A chunks to Firestore...")
-            chunks_docs_saved = 0
-            
             for i in range(0, len(text_chunks), 100):
-                batch_chunks = text_chunks[i:i+100]
+                batch = text_chunks[i:i+100]
                 page_num = i // 100
-                
-                source_ref.collection('chunks').document(f'page_{page_num}').set({
-                    'chunks': batch_chunks,
-                    'order': page_num,
-                    'count': len(batch_chunks)
-                })
-                chunks_docs_saved += 1
-                print(f"  ✓ Saved chunk page {page_num} ({len(batch_chunks)} chunks)")
+                source_ref.collection('chunks').document(f'page_{page_num}').set({'chunks': batch, 'order': page_num})
             
-            print(f"✅ Total chunk pages saved: {chunks_docs_saved}")
-
-            processed.append({
-                "filename": filename, 
-                "id": safe_id,
-                "text_length": len(text),
-                "note_pages": note_pages_saved,
-                "chunk_pages": chunks_docs_saved
-            })
-            
-            print(f"✅ ✅ ✅ SUCCESS: {filename} fully processed!")
-
+            processed.append({"filename": filename, "id": safe_id})
+            print(f"✅ SUCCESS: '{filename}' processed.")
         except Exception as e:
-            error_msg = f"Failed to process {filename}: {str(e)}"
-            print(f"❌ CRITICAL ERROR: {error_msg}")
             import traceback
-            print(traceback.format_exc())
-            errors.append({"filename": filename, "error": error_msg})
+            print(f"❌ CRITICAL ERROR processing '{filename}': {e}")
+            traceback.print_exc()
+            errors.append({"filename": filename, "error": str(e)})
 
-    print("\n" + "=" * 80)
-    print(f"📊 UPLOAD SUMMARY")
-    print("=" * 80)
-    print(f"✅ Successfully processed: {len(processed)}")
-    print(f"❌ Errors: {len(errors)}")
-    
-    if processed:
-        print("\n✅ Processed files:")
-        for p in processed:
-            print(f"  - {p['filename']} (ID: {p['id']})")
-    
-    if errors:
-        print("\n❌ Errors:")
-        for e in errors:
-            print(f"  - {e['filename']}: {e['error']}")
-    
-    print("=" * 80)
-
-    return jsonify({
-        "success": len(processed) > 0,
-        "processed": processed,
-        "errors": errors
-    })
+    return jsonify({"success": len(processed) > 0, "processed": processed, "errors": errors})
 
 @study_hub_bp.route('/delete-source/<project_id>/<path:source_id>', methods=['DELETE'])
 def delete_source(project_id, source_id):
-    print(f"\n🗑️  DELETE REQUEST for source: {source_id} in project: {project_id}")
+    print(f"\n🗑️  DELETE REQUEST for source: {source_id}")
     try:
         source_ref = db.collection('projects').document(project_id).collection('sources').document(source_id)
-
-        # 1. Delete subcollections (note_pages, chunks)
         for collection_ref in source_ref.collections():
-            print(f"  Deleting subcollection: {collection_ref.id}")
             delete_collection(collection_ref, batch_size=50)
-
-        # 2. Delete the source document itself
         source_ref.delete()
 
         if redis_client:
@@ -318,12 +235,9 @@ def delete_source(project_id, source_id):
         return jsonify({"success": True, "message": f"Source {source_id} deleted."}), 200
 
     except Exception as e:
-        import traceback
-        print(f"❌ Error deleting source {source_id}: {e}")
-        print(traceback.format_exc())
         return jsonify({"success": False, "error": str(e)}), 500
 
-@study_hub_bp.route('/get-note/<project_id>/<path:source_id>')
+@study_hub_bp.route('/get-note/<project_id>/<path:source_id>', methods=['GET'])
 def get_note(project_id, source_id):
     note_redis_key = f"note:{project_id}:{source_id}"
 
@@ -364,26 +278,19 @@ def get_note(project_id, source_id):
 
 @study_hub_bp.route('/update-note/<project_id>/<path:source_id>', methods=['POST'])
 def update_note(project_id, source_id):
-    print(f"🔄 UPDATE NOTE request for project: {project_id}, source: {source_id}")
-    data = request.json
-    new_html = data.get('html_content')
-
-    if not new_html:
+    new_html = request.json.get('html_content')
+    if new_html is None:
         return jsonify({"error": "Missing 'html_content'"}), 400
-
     try:
         source_ref = db.collection('projects').document(project_id).collection('sources').document(source_id)
         note_pages_ref = source_ref.collection('note_pages')
-
-        # 1. Delete all old note pages to prevent leftovers
-        docs = note_pages_ref.stream()
-        for doc in docs:
-            print(f"  - Deleting old note page: {doc.id}")
+        
+        # Delete old pages
+        for doc in note_pages_ref.stream():
             doc.reference.delete()
-
-        # 2. Re-chunk and save the new note content
-        chunk_size = 900000  # Must match the chunk size from your upload logic
-        note_pages_saved = 0
+        
+        # Save new content in chunks
+        chunk_size = 900000
         for i in range(0, len(new_html), chunk_size):
             chunk = new_html[i:i+chunk_size]
             page_num = i // chunk_size
@@ -405,74 +312,57 @@ def update_note(project_id, source_id):
         
         print(f"✅ Note updated successfully. {note_pages_saved} pages saved.")
         return jsonify({"success": True, "message": "Note updated successfully"}), 200
-
     except Exception as e:
-        import traceback
-        print(f"❌ CRITICAL ERROR updating note: {e}")
-        print(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
 
 @study_hub_bp.route('/ask-chatbot/<project_id>', methods=['POST'])
 def ask_chatbot(project_id):
     data = request.json
-    q = data.get('question')
-    src = data.get('source_id')
+    question = data.get('question')
+    source_id = data.get('source_id') # Can be a specific source ID or null for 'all'
     
-    # Get chunks
-    all_chunks = []
-    
-    if src:
-        # Get chunks from specific source
-        chunk_docs = db.collection('projects').document(project_id) \
-            .collection('sources').document(src) \
-            .collection('chunks').stream()
-        
-        for doc in chunk_docs:
-            all_chunks.extend(doc.to_dict().get('chunks', []))
-    else:
-        # Get chunks from all sources
-        sources = db.collection('projects').document(project_id) \
-            .collection('sources').stream()
-        
-        for source in sources:
-            chunk_docs = source.reference.collection('chunks').stream()
-            for doc in chunk_docs:
-                all_chunks.extend(doc.to_dict().get('chunks', []))
+    context = get_simplified_note_context(project_id, source_id)
+    if not context:
+        return jsonify({"answer": "I couldn't find any generated notes to read. Please upload a document first!"})
 
-    if not all_chunks:
-        return jsonify({"answer": "Please upload a PDF first!"})
-
-    # Use first 10 chunks as context
-    context = "\n---\n".join(all_chunks[:10])
-    
-    model = genai.GenerativeModel('models/gemini-pro-latest')
-    prompt = f"Answer using only this context:\n{context}\n\nQuestion: {q}\nAnswer:"
+    prompt = f"You are a helpful study assistant. Answer the user's question based *only* on the provided study notes. The notes are simplified summaries, so be concise. If the answer is not in the notes, say 'I'm sorry, that information isn't in my simplified notes.'\n\nStudy Notes:\n---\n{context}\n---\n\nQuestion: {question}\n\nAnswer:"
     
     try:
-        answer = model.generate_content(prompt).text
+        # Use the injected chat_model
+        answer = chat_model.generate_content(prompt).text
         return jsonify({"answer": answer})
     except Exception as e:
-        return jsonify({"answer": f"Error: {e}"})
+        return jsonify({"answer": f"Sorry, an error occurred: {e}"})
 
 @study_hub_bp.route('/generate-topic-note/<project_id>', methods=['POST'])
 def topic_note(project_id):
     topic = request.json.get('topic')
-    
-    all_chunks = []
-    sources = db.collection('projects').document(project_id).collection('sources').stream()
-    
-    for source in sources:
-        chunk_docs = source.reference.collection('chunks').stream()
-        for doc in chunk_docs:
-            all_chunks.extend(doc.to_dict().get('chunks', []))
-    
-    context = "\n".join(all_chunks[:20])
-    
-    model = genai.GenerativeModel('models/gemini-pro-latest')
-    prompt = f"Make a study note about: {topic}\nUse this:\n{context}"
+    print(f"  🔍 Extracting topic '{topic}' from simplified notes...")
+
+    simplified_notes_context = get_simplified_note_context(project_id)
+    if not simplified_notes_context:
+        return jsonify({"note_html": "<p>Could not find any notes to search through.</p>"})
+
+    prompt = f"""
+    You are an information retrieval assistant. Your task is to act like a "smart search".
+    Given a TOPIC and existing STUDY NOTES, find and extract all sections, headings, paragraphs, and bullet points from the STUDY NOTES that are relevant to the TOPIC.
+
+    RULES:
+    1.  EXTRACT ONLY: Do NOT write new sentences or summaries. Your output must be a direct copy of relevant parts from the notes.
+    2.  PRESERVE FORMATTING: Keep the original markdown formatting (headings, bold text, etc.).
+    3.  NO COMMENTARY: Do not add text like "Here are the relevant sections...". Start immediately with the first extracted piece of content. If nothing is found, return only: "I could not find any information about that topic in the notes."
+
+    ---
+    TOPIC: {topic}
+    ---
+    EXISTING STUDY NOTES:
+    {simplified_notes_context}
+    ---
+    """
     
     try:
-        html = markdown.markdown(model.generate_content(prompt).text)
+        response_text = note_gen_model.generate_content(prompt).text
+        html = markdown.markdown(response_text)
         return jsonify({"note_html": html})
     except Exception as e:
-        return jsonify({"note_html": f"<p>Error generating note: {e}</p>"})
+        return jsonify({"note_html": f"<p>Error generating topic note: {e}</p>"})
