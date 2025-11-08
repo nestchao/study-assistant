@@ -1,9 +1,19 @@
-flask
-flask-cors
-PyPDF2
+Flask
+Flask-Cors
+google-cloud-firestore
 python-dotenv
 google-generativeai
-langchain
-pytesseract
-pillow
+PyPDF2
+markdown
 pdf2image
+pytesseract
+GitPython
+redis
+Pillow
+firebase-admin
+html2text 
+
+# Use langchain-google-genai directly and a core version of langchain
+langchain-google-genai==0.0.9
+langchain-core==0.1.30
+langchain-text-splitters==0.0.1

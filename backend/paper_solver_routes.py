@@ -9,12 +9,14 @@ import google.generativeai as genai
 paper_solver_bp = Blueprint('paper_solver_bp', __name__)
 db = None
 genai_model = None
+redis_client = None 
 
-def set_dependencies(db_instance, genai_instance):
+def set_dependencies(db_instance, genai_instance, redis_instance):
     """Injects dependencies from the main app."""
-    global db, genai_model
+    global db, genai_model, redis_client
     db = db_instance
     genai_model = genai_instance
+    redis_client = redis_instance
 
 # ... (solve_paper_with_file and solve_paper_with_text functions are fine) ...
 def get_project_context(project_id):

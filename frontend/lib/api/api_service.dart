@@ -3,13 +3,27 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:firebase_auth/firebase_auth.dart';
 import 'dart:typed_data';
 
 class ApiService {
   late final String baseUrl;
 
   ApiService() {
-    baseUrl = dotenv.env['API_URL'] ?? 'http://10.0.2.2:5000';
+    if (kIsWeb) {
+      // If we are on the web, ALWAYS use localhost. The browser will handle it.
+      baseUrl = 'http://localhost:5000';
+    } else {
+      // For mobile (Android/iOS), read the IP from the .env file.
+      // Provide a fallback for the emulator just in case.
+      baseUrl = dotenv.env['API_URL'] ?? 'http://10.0.2.2:5000';
+    }
+
+    print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+    print("Platform: ${kIsWeb ? 'Web' : 'Mobile'}");
+    print("ApiService initialized with baseUrl: $baseUrl");
+    print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
   }
 
   // GET /api/get-projects
@@ -20,9 +34,10 @@ class ApiService {
 
   // POST /api/create-project
   Future<void> createProject(String name) async {
+    final headers = await _getHeaders();
     await http.post(
       Uri.parse('$baseUrl/create-project'),
-      headers: {'Content-Type': 'application/json'},
+      headers: headers, // <-- USE THE NEW HEADERS
       body: json.encode({'name': name}),
     );
   }
@@ -237,5 +252,99 @@ class ApiService {
       throw Exception(
           decodedBody['error'] ?? 'Failed to upload and process paper');
     }
+  }
+
+  Future<List<Map<String, dynamic>>> getSyncConfigs() async {
+  final response = await http.get(Uri.parse('$baseUrl/sync/configs'));
+  if (response.statusCode == 200) {
+    return List<Map<String, dynamic>>.from(json.decode(response.body));
+  }
+  throw Exception('Failed to load sync configs');
+}
+
+  Future<String> registerSyncConfig(String projectId, String path, List<String> extensions) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/sync/register'),
+      headers: {'Content-Type': 'application/json'},
+      body: json.encode({
+        'project_id': projectId,
+        'local_path': path,
+        'extensions': extensions,
+      }),
+    );
+    if (response.statusCode == 201) {
+      return json.decode(response.body)['config_id'];
+    }
+    throw Exception('Failed to register sync config');
+  }
+
+  Future<void> updateSyncConfig(String configId, {bool? isActive, List<String>? extensions}) async {
+    final Map<String, dynamic> body = {};
+    if (isActive != null) body['is_active'] = isActive;
+    if (extensions != null) body['allowed_extensions'] = extensions;
+
+    final response = await http.put(
+      Uri.parse('$baseUrl/sync/config/$configId'),
+      headers: {'Content-Type': 'application/json'},
+      body: json.encode(body),
+    );
+    if (response.statusCode != 200) {
+      throw Exception('Failed to update sync config');
+    }
+  }
+
+  Future<void> deleteSyncConfig(String configId) async {
+    final response = await http.delete(Uri.parse('$baseUrl/sync/config/$configId'));
+    if (response.statusCode != 200) {
+      throw Exception('Failed to delete sync config');
+    }
+  }
+
+  Future<Map<String, dynamic>> runSync(String configId) async {
+    final response = await http.post(Uri.parse('$baseUrl/sync/run/$configId'));
+    if (response.statusCode == 200) {
+      return json.decode(response.body);
+    }
+    throw Exception('Failed to run sync');
+  }
+
+
+  // --- CODE CONVERTER METHODS ---
+
+  Future<Map<String, dynamic>> getProjectFileStructure(String projectId) async {
+    final response = await http.get(Uri.parse('$baseUrl/code-converter/structure/$projectId'));
+    if (response.statusCode == 200) {
+      return json.decode(response.body);
+    }
+    throw Exception('Failed to get project structure');
+  }
+
+  Future<String> getFileContent(String projectId, String docId) async {
+    // Call the new, correct endpoint
+    final response = await http.get(Uri.parse('$baseUrl/code-converter/file/$projectId/$docId'));
+    
+    if (response.statusCode == 200) {
+      // The backend returns JSON: {"content": "...", "original_path": "..."}
+      final data = json.decode(response.body);
+      return data['content'] ?? 'Error: Content field missing in response.';
+    }
+    
+    print("Failed to get file content, Status: ${response.statusCode}, Body: ${response.body}");
+    throw Exception('Failed to get file content');
+  }
+
+  Future<Map<String, String>> _getHeaders() async {
+    final user = FirebaseAuth.instance.currentUser;
+    String? token;
+    if (user != null) {
+      // Get the Firebase ID token for the current user.
+      token = await user.getIdToken();
+    }
+    
+    return {
+      'Content-Type': 'application/json',
+      // Send the token in the standard 'Authorization' header
+      if (token != null) 'Authorization': 'Bearer $token',
+    };
   }
 }

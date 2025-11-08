@@ -6,6 +6,9 @@ import 'package:provider/provider.dart';
 import 'package:study_assistance/provider/project_provider.dart';
 import 'package:study_assistance/screens/workspace_screen.dart';
 import 'package:study_assistance/models/project.dart';
+import 'package:flutter/services.dart';
+import 'package:study_assistance/widgets/auth_wrapper.dart';
+import 'package:study_assistance/screens/code_sync_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -19,9 +22,46 @@ class _DashboardScreenState extends State<DashboardScreen> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      Provider.of<ProjectProvider>(context, listen: false)
-          .fetchProjects(forceRefresh: true); // Refresh on each visit
+      final provider = Provider.of<ProjectProvider>(context, listen: false);
+      // Only force refresh if NOT in guest mode
+      if (!provider.isGuestMode) {
+        provider.fetchProjects(forceRefresh: true);
+      }
+
+      // --- NEW: Show Guest Banner ---
+      if (provider.isGuestMode) {
+        _showGuestModeBanner();
+      }
     });
+  }
+
+  void _showGuestModeBanner() {
+    ScaffoldMessenger.of(context).showMaterialBanner(
+      MaterialBanner(
+        padding: const EdgeInsets.all(12),
+        content: const Text(
+          'You are in Guest Mode. Sign in to save your projects to the cloud.',
+          style: TextStyle(color: Colors.white),
+        ),
+        backgroundColor: Colors.indigo,
+        leading: const Icon(Icons.info_outline, color: Colors.white),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () {
+              // Hide the banner
+              ScaffoldMessenger.of(context).hideCurrentMaterialBanner();
+              // Sign out of guest mode and navigate to the auth wrapper
+              Provider.of<ProjectProvider>(context, listen: false).exitGuestMode();
+              Navigator.of(context).pushAndRemoveUntil(
+                MaterialPageRoute(builder: (context) => const AuthWrapper()),
+                    (Route<dynamic> route) => false,
+              );
+            },
+            child: const Text('SIGN IN', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
   }
 
   void _showCreateProjectDialog() {
@@ -117,10 +157,38 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   void _createProject(BuildContext context, String name) {
-    if (name.trim().isNotEmpty) {
-      Provider.of<ProjectProvider>(context, listen: false)
-          .createProject(name.trim());
-      Navigator.of(context).pop();
+    final provider = Provider.of<ProjectProvider>(context, listen: false);
+
+    // --- THIS IS THE NEW GUEST MODE CHECK ---
+    if (provider.isGuestMode) {
+      // If user is a guest, show a dialog asking them to sign in.
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text("Sign In Required"),
+          content: const Text("Creating and saving projects requires an account. Please sign in to continue."),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text("Cancel")),
+            FilledButton(
+              onPressed: () {
+                // Navigate user back to the login screen
+                provider.exitGuestMode();
+                Navigator.of(context).pushAndRemoveUntil(
+                  MaterialPageRoute(builder: (context) => const AuthWrapper()),
+                  (Route<dynamic> route) => false,
+                );
+              },
+              child: const Text("Sign In"),
+            ),
+          ],
+        ),
+      );
+    } else {
+      // If user is logged in, proceed as normal.
+      if (name.trim().isNotEmpty) {
+        provider.createProject(name.trim());
+        Navigator.of(context).pop(); // Close the create dialog
+      }
     }
   }
 
@@ -147,6 +215,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
             },
             tooltip: 'Refresh Projects',
           ),
+          IconButton(
+              icon: const Icon(Icons.sync_alt),
+              onPressed: () {
+                Navigator.of(context).push(MaterialPageRoute(builder: (_) => const CodeSyncScreen()));
+              },
+              tooltip: 'Code Sync Service',
+            ),
         ],
       ),
       body: Consumer<ProjectProvider>(
@@ -155,15 +230,25 @@ class _DashboardScreenState extends State<DashboardScreen> {
             return const Center(child: CircularProgressIndicator());
           }
 
-          return CustomScrollView(
-            slivers: [
-              SliverToBoxAdapter(
-                child: _buildHeader(),
-              ),
-              provider.projects.isEmpty
-                  ? SliverFillRemaining(child: _buildEmptyState())
-                  : _buildProjectList(provider.projects),
-            ],
+          return RefreshIndicator(
+            onRefresh: () => provider.fetchProjects(forceRefresh: true),
+            child: CustomScrollView(
+              // Add physics to ensure scrolling is always possible, which is
+              // needed for RefreshIndicator to work even when the list is short.
+              physics: const AlwaysScrollableScrollPhysics(),
+              slivers: [
+                SliverToBoxAdapter(
+                  child: _buildHeader(),
+                ),
+                provider.projects.isEmpty
+                    ? SliverFillRemaining(
+                        // Use hasScrollBody: false to allow centering
+                        hasScrollBody: false,
+                        child: _buildEmptyState(),
+                      )
+                    : _buildProjectList(provider.projects),
+              ],
+            ),
           );
         },
       ),
@@ -206,38 +291,29 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Widget _buildEmptyState() {
     return Center(
-      child: SingleChildScrollView(
-        child: Padding(
-          padding: const EdgeInsets.all(32.0),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(
-                Icons.school_outlined,
-                size: 100,
-                color: Colors.grey[300],
-              ),
-              const SizedBox(height: 20),
-              Text(
-                'No Projects Yet',
-                style: TextStyle(
-                  fontSize: 22,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.grey[700],
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Click the "New Project" button below to get started on your learning journey.',
-                style: TextStyle(
-                  fontSize: 16,
-                  color: Colors.grey[500],
-                ),
-                textAlign: TextAlign.center,
-              ),
-            ],
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.school_outlined, size: 120, color: Colors.indigo[100]),
+          const SizedBox(height: 24),
+          Text(
+            'Your study space awaits!',
+            style: TextStyle(
+              fontSize: 22,
+              fontWeight: FontWeight.bold,
+              color: Colors.grey[800],
+            ),
           ),
-        ),
+          const SizedBox(height: 12),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 40.0),
+            child: Text(
+              'Create your first project to start organizing your notes and materials.',
+              style: TextStyle(fontSize: 16, color: Colors.grey[600]),
+              textAlign: TextAlign.center,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -322,9 +398,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     onTap: isLoading
                         ? null
                         : () {
+                            HapticFeedback.lightImpact(); 
                             provider.setCurrentProject(project);
                             Navigator.of(context).push(MaterialPageRoute(
-                              builder: (_) => const WorkspaceScreen(),
+                              builder: (_) => WorkspaceScreen(project: project),
                             ));
                           },
                     child: Padding(
@@ -373,7 +450,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           ),
                           // Action Buttons / Spinner
                           SizedBox(
-                            width: 88, // Increased width for two buttons
+                            width: 48, // We only need space for one button now
                             height: 48,
                             child: isLoading
                                 ? const Center(
@@ -383,21 +460,35 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                       child: CircularProgressIndicator(strokeWidth: 2.5),
                                     ),
                                   )
-                                : Row(
-                                    mainAxisAlignment: MainAxisAlignment.end,
-                                    children: [
-                                      IconButton(
-                                        icon: Icon(Icons.edit_outlined, color: Colors.grey[500]),
-                                        tooltip: 'Rename Project',
-                                        onPressed: () => _showRenameProjectDialog(project),
+                                // --- THIS IS THE FIX ---
+                                : PopupMenuButton<String>(
+                                    tooltip: 'Project Options',
+                                    icon: Icon(Icons.more_vert, color: Colors.grey[600]),
+                                    onSelected: (value) {
+                                      if (value == 'rename') {
+                                        _showRenameProjectDialog(project);
+                                      } else if (value == 'delete') {
+                                        _showDeleteConfirmDialog(project);
+                                      }
+                                    },
+                                    itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
+                                      const PopupMenuItem<String>(
+                                        value: 'rename',
+                                        child: ListTile(
+                                          leading: Icon(Icons.edit_outlined),
+                                          title: Text('Rename'),
+                                        ),
                                       ),
-                                      IconButton(
-                                        icon: Icon(Icons.delete_outline, color: Colors.grey[500]),
-                                        tooltip: 'Delete Project',
-                                        onPressed: () => _showDeleteConfirmDialog(project),
+                                      const PopupMenuItem<String>(
+                                        value: 'delete',
+                                        child: ListTile(
+                                          leading: Icon(Icons.delete_outline),
+                                          title: Text('Delete'),
+                                        ),
                                       ),
                                     ],
                                   ),
+                              // --- END OF FIX ---
                           ),
                         ],
                       ),

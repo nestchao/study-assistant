@@ -6,6 +6,7 @@ from firebase_admin import firestore
 
 # Import shared utility functions
 from utils import extract_text, delete_collection, split_chunks
+import redis
 
 # --- BLUEPRINT SETUP ---
 # Create a blueprint for study hub features
@@ -15,14 +16,16 @@ study_hub_bp = Blueprint('study_hub_bp', __name__)
 db = None
 note_gen_model = None
 chat_model = None
+redis_client = None 
 
-def set_dependencies(db_instance, note_model_instance, chat_model_instance):
+def set_dependencies(db_instance, note_model_instance, chat_model_instance, redis_instance):
     """Injects database and AI model dependencies from the main app."""
-    global db, note_gen_model, chat_model
+    global db, note_gen_model, chat_model, redis_client
     db = db_instance
     note_gen_model = note_model_instance
     chat_model = chat_model_instance
     print("✅ Study Hub dependencies injected.")
+    redis_client = redis_instance
 
 # --- HELPER FUNCTIONS for Study Hub ---
 
@@ -113,14 +116,21 @@ def get_projects():
     projects = [{"id": d.id, "name": d.to_dict().get('name')} for d in docs]
     return jsonify(projects)
 
+# In create_project function
 @study_hub_bp.route('/create-project', methods=['POST'])
 def create_project():
     name = request.json.get('name')
-    if not name:
-        return jsonify({"success": False, "error": "Project name not provided"}), 400
+    user_id = get_current_user_id() # Assuming this gets the user's UID
+    if not user_id:
+        return jsonify({"error": "Authentication required"}), 401
+    
     ref = db.collection('projects').document()
-    ref.set({'name': name, 'timestamp': firestore.SERVER_TIMESTAMP})
-    return jsonify({"id": ref.id, "name": name})
+    ref.set({
+        'name': name,
+        'timestamp': firestore.SERVER_TIMESTAMP,
+        'userId': user_id  
+    })
+    return jsonify({"id": ref.id})
 
 @study_hub_bp.route('/rename-project/<project_id>', methods=['PUT'])
 def rename_project(project_id):
@@ -212,17 +222,57 @@ def delete_source(project_id, source_id):
         for collection_ref in source_ref.collections():
             delete_collection(collection_ref, batch_size=50)
         source_ref.delete()
-        print(f"✅ Successfully deleted source: {source_id}")
-        return jsonify({"success": True}), 200
+
+        if redis_client:
+            try:
+                note_redis_key = f"note:{project_id}:{source_id}"
+                redis_client.delete(note_redis_key)
+                print(f"✅ Invalidated Redis cache for deleted source: {note_redis_key}")
+            except Exception as e:
+                print(f"⚠️ Failed to invalidate note cache for deleted source: {e}")
+
+        print(f"✅ Successfully deleted source document: {source_id}")
+        return jsonify({"success": True, "message": f"Source {source_id} deleted."}), 200
+
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
 @study_hub_bp.route('/get-note/<project_id>/<path:source_id>', methods=['GET'])
 def get_note(project_id, source_id):
+    note_redis_key = f"note:{project_id}:{source_id}"
+
+    if redis_client:
+        try:
+            cached_html_bytes = redis_client.get(note_redis_key)
+            if cached_html_bytes:
+                print(f"✅ CACHE HIT for note: {note_redis_key}")
+                # --- THIS IS THE FIX ---
+                # Decode the bytes from Redis into a UTF-8 string.
+                return jsonify({"note_html": cached_html_bytes.decode('utf-8')})
+                # --- END OF FIX ---
+        except Exception as e:
+            print(f"⚠️ Redis cache check failed for note: {e}")
+
+    print(f"CACHE MISS for note: {note_redis_key}. Fetching from Firestore...")
+
+    # 2. If miss, get from Firestore
     try:
-        pages_query = db.collection('projects').document(project_id).collection('sources').document(source_id).collection('note_pages').order_by('order').stream()
+        pages_query = db.collection('projects').document(project_id) \
+                      .collection('sources').document(source_id) \
+                      .collection('note_pages').order_by('order').stream()
+        
         html = "".join(p.to_dict().get('html', '') for p in pages_query)
-        return jsonify({"note_html": html or "<p>No note found or it is empty.</p>"})
+        
+        # 3. Store the assembled HTML in Redis for next time
+        if redis_client and html:
+            try:
+                # Cache for 1 hour (3600 seconds)
+                redis_client.setex(note_redis_key, 3600, html)
+                print(f"💾 Successfully stored note in Redis cache: {note_redis_key}")
+            except Exception as e:
+                print(f"⚠️ Failed to store note in Redis cache: {e}")
+
+        return jsonify({"note_html": html or "<p>No note generated yet.</p>"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -244,8 +294,23 @@ def update_note(project_id, source_id):
         for i in range(0, len(new_html), chunk_size):
             chunk = new_html[i:i+chunk_size]
             page_num = i // chunk_size
-            note_pages_ref.document(f'page_{page_num}').set({'html': chunk, 'order': page_num})
+            
+            note_pages_ref.document(f'page_{page_num}').set({
+                'html': chunk,
+                'order': page_num
+            })
+            note_pages_saved += 1
+            print(f"  + Saving new note page {page_num}")
+
+        if redis_client:
+            try:
+                note_redis_key = f"note:{project_id}:{source_id}"
+                redis_client.delete(note_redis_key)
+                print(f"✅ Invalidated Redis cache for note: {note_redis_key}")
+            except Exception as e:
+                print(f"⚠️ Failed to invalidate note cache: {e}")
         
+        print(f"✅ Note updated successfully. {note_pages_saved} pages saved.")
         return jsonify({"success": True, "message": "Note updated successfully"}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
