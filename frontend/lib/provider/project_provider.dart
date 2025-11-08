@@ -465,7 +465,7 @@ class ProjectProvider with ChangeNotifier {
     }
   }
 
-  Future<void> pickAndProcessPaper() async {
+  Future<void> pickAndProcessPaper(String analysisMode) async {
     if (_currentProject == null) return;
 
     FilePickerResult? result = await FilePicker.platform.pickFiles(
@@ -479,8 +479,13 @@ class ProjectProvider with ChangeNotifier {
       _paperError = null;
       notifyListeners();
       try {
-        await _api.uploadPastPaper(_currentProject!.id, result.files.single);
-        await fetchPastPapers(forceRefresh: true);
+        // Pass the mode to the API service
+        final newPaperData = await _api.uploadPastPaper(
+            _currentProject!.id, result.files.single, analysisMode);
+        
+        // Add the new paper to the top of the list instantly
+        _pastPapers.insert(0, PastPaper.fromMap(newPaperData));
+
       } catch (e) {
         print("Paper processing error: $e");
         _paperError = e.toString();
