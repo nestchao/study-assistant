@@ -2,11 +2,13 @@ class PastPaper {
   final String id;
   final String filename;
   final List<QAPair> qaPairs;
+  final String analysisMode;
 
   PastPaper({
     required this.id,
     required this.filename,
     required this.qaPairs,
+    required this.analysisMode,
   });
 
   factory PastPaper.fromMap(Map<String, dynamic> map) {
@@ -19,6 +21,7 @@ class PastPaper {
       id: map['id'] ?? '',
       filename: map['filename'] ?? 'Unknown Paper',
       qaPairs: pairs,
+      analysisMode: map['analysis_mode'] ?? 'text_only',
     );
   }
 }

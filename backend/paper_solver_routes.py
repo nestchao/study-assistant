@@ -1,7 +1,9 @@
-# backend/paper_solver_routes.py
+import json
+import mimetypes
 from flask import Blueprint, request, jsonify
 from firebase_admin import firestore
-from utils import extract_text_from_image # We'll use the shared utility function
+from utils import extract_text_from_image, extract_text
+import google.generativeai as genai
 
 # --- BLUEPRINT SETUP ---
 paper_solver_bp = Blueprint('paper_solver_bp', __name__)
@@ -16,6 +18,7 @@ def set_dependencies(db_instance, genai_instance, redis_instance):
     genai_model = genai_instance
     redis_client = redis_instance
 
+# ... (solve_paper_with_file and solve_paper_with_text functions are fine) ...
 def get_project_context(project_id):
     """Fetches all text chunks from all sources in a project."""
     all_chunks = []
@@ -24,89 +27,138 @@ def get_project_context(project_id):
         chunks_ref = source_doc.reference.collection('chunks')
         for chunk_doc in chunks_ref.stream():
             all_chunks.extend(chunk_doc.to_dict().get('chunks', []))
-    
-    # Join the first 30 chunks for a reasonably sized context
-    context = "\n---\n".join(all_chunks[:30])
+    context = "\n---\n".join(all_chunks)
     print(f"  📚 Retrieved context of {len(context)} characters for project {project_id}")
     return context
 
-# --- ROUTES ---
+def solve_paper_with_file(file_stream, filename, context):
+    """
+    Uploads a file directly to the Gemini API and asks it to solve the paper.
+    """
+    print("  🧠 Solving paper using direct file (multimodal) method...")
+    print("    - Uploading file to Gemini API...")
+    file_stream.seek(0)
+    mime_type, _ = mimetypes.guess_type(filename)
+    if mime_type is None:
+        mime_type = "application/octet-stream"
+    print(f"    - Inferred MIME type for upload: {mime_type}")
+    uploaded_file = genai.upload_file(
+        path=file_stream,
+        display_name=filename,
+        mime_type=mime_type
+    )
+    print(f"    - File uploaded successfully. URI: {uploaded_file.uri}")
+    prompt = f"""
+    You are an expert exam solver. Based ONLY on the provided CONTEXT and the attached FILE, answer the questions from the file.
+    The file contains a past exam paper which may include images, diagrams, and complex layouts.
+    For each question you can identify, provide a clear, concise, and accurate answer in markdown format.
+    Format your entire output as a valid JSON array of objects, where each object has a "question" and "answer" key. Do not include any other text or explanations outside of the JSON array.
+    
+    CONTEXT:
+    ---
+    {context}
+    ---
+    
+    FILE:
+    (See attached file: {filename})
+    
+    JSON OUTPUT:
+    """
+    print("    - Generating content from file and context...")
+    response = genai_model.generate_content([prompt, uploaded_file])
+    print(f"    - Deleting temporary file: {uploaded_file.name}")
+    genai.delete_file(uploaded_file.name)
+    cleaned_json_string = response.text.strip().replace('```json', '').replace('```', '')
+    return json.loads(cleaned_json_string)
+
+def solve_paper_with_text(file_stream, filename, context):
+    """
+    Extracts text from the file first and then sends it to the Gemini API.
+    """
+    print("  📝 Solving paper using text extraction (text-only) method...")
+    paper_text = ""
+    if filename.lower().endswith(('.png', '.jpg', '.jpeg')):
+        paper_text = extract_text_from_image(file_stream)
+    elif filename.lower().endswith('.pdf'):
+        paper_text = extract_text(file_stream)
+    if not paper_text.strip():
+        raise ValueError(f"Could not extract any text from '{filename}'.")
+    prompt = f"""
+    You are an expert exam solver. Based ONLY on the provided CONTEXT, answer the questions from the PAST PAPER TEXT.
+    For each question, provide a clear, concise, and accurate answer in markdown format.
+    Format your entire output as a valid JSON array of objects, where each object has a "question" and "answer" key. Do not include any other text or explanations outside of the JSON array.
+    CONTEXT:
+    ---
+    {context}
+    ---
+    PAST PAPER TEXT:
+    ---
+    {paper_text}
+    ---
+    JSON OUTPUT:
+    """
+    response = genai_model.generate_content(prompt)
+    cleaned_json_string = response.text.strip().replace('```json', '').replace('```', '')
+    return json.loads(cleaned_json_string)
+
+
 @paper_solver_bp.route('/get-papers/<project_id>')
 def get_papers(project_id):
     try:
         papers_ref = db.collection('projects').document(project_id).collection('past_papers').order_by('timestamp', direction=firestore.Query.DESCENDING)
-        papers = []
-        for doc in papers_ref.stream():
-            paper_data = doc.to_dict()
-            papers.append({
-                "id": doc.id,
-                "filename": paper_data.get("filename"),
-                "qa_pairs": paper_data.get("qa_pairs", [])
-            })
+        # The .to_dict() method correctly converts Firestore Timestamps to Python datetimes, which are JSON serializable
+        papers = [{"id": doc.id, **doc.to_dict()} for doc in papers_ref.stream()]
         return jsonify(papers)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 @paper_solver_bp.route('/upload-paper/<project_id>', methods=['POST'])
 def upload_paper(project_id):
-    """
-    NEW ROUTE: This is where you'll put the logic to handle past paper uploads.
-    This will involve OCR, calling Gemini with context, and saving the Q&A pairs.
-    """
     print(f"📄 UPLOAD PAST PAPER request for project: {project_id}")
     
     if 'paper' not in request.files:
         return jsonify({"error": "No 'paper' file provided"}), 400
     
+    analysis_mode = request.form.get('analysis_mode', 'text_only')
     file = request.files['paper']
     filename = file.filename
-    print(f"  Processing file: {filename}")
+    print(f"  Processing file: {filename} with mode: {analysis_mode}")
 
     try:
-        # 1. Get context from existing study materials
         context = get_project_context(project_id)
         
-        # 2. Extract questions from the uploaded paper (using OCR)
-        # This assumes the paper is an image. You'll need to handle PDFs differently.
-        if filename.lower().endswith(('.png', '.jpg', '.jpeg')):
-            paper_text = extract_text_from_image(file.stream)
+        qa_pairs = []
+        if analysis_mode == 'multimodal':
+            qa_pairs = solve_paper_with_file(file.stream, filename, context)
         else:
-            # Add PDF extraction logic if needed
-            return jsonify({"error": "Unsupported file type for papers (only images supported for now)"}), 400
+            qa_pairs = solve_paper_with_text(file.stream, filename, context)
 
-        # 3. Call Gemini to answer the questions based on the context
-        prompt = f"""
-        You are an expert exam solver. Based ONLY on the provided CONTEXT, answer the following questions from the PAST PAPER TEXT.
-        For each question, provide a clear, concise, and accurate answer.
-        Format your entire output as a JSON array of objects, where each object has a "question" and "answer" key.
-        
-        CONTEXT:
-        ---
-        {context}
-        ---
-        
-        PAST PAPER TEXT:
-        ---
-        {paper_text}
-        ---
-        
-        JSON OUTPUT:
-        """
-        
-        response = genai_model.generate_content(prompt)
-        # Clean up Gemini's response to be valid JSON
-        cleaned_json_string = response.text.strip().replace('```json', '').replace('```', '')
-        qa_pairs = json.loads(cleaned_json_string)
-
-        # 4. Save to Firestore
         paper_ref = db.collection('projects').document(project_id).collection('past_papers').document()
-        paper_ref.set({
+        
+        # --- THIS IS THE FIX ---
+
+        # 1. This dictionary is for saving to the database. It contains the Sentinel.
+        paper_data_for_db = {
             "filename": filename,
             "timestamp": firestore.SERVER_TIMESTAMP,
-            "qa_pairs": qa_pairs
-        })
+            "qa_pairs": qa_pairs,
+            "analysis_mode": analysis_mode
+        }
+        paper_ref.set(paper_data_for_db)
 
-        return jsonify({"success": True, "paper_id": paper_ref.id, "qa_pairs_found": len(qa_pairs)}), 201
+        # 2. This dictionary is for the JSON response. It does NOT contain the Sentinel.
+        response_data = {
+            "id": paper_ref.id,
+            "filename": filename,
+            "qa_pairs": qa_pairs,
+            "analysis_mode": analysis_mode
+            # The client doesn't need the timestamp immediately. It will get it on the next fetch.
+        }
+
+        # 3. Return the safe dictionary.
+        return jsonify(response_data), 200
+
+        # --- END OF FIX ---
 
     except Exception as e:
         import traceback
