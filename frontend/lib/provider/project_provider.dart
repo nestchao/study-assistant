@@ -184,6 +184,8 @@ class ProjectProvider with ChangeNotifier {
   String? _deletingSourceId;
   String? get deletingSourceId => _deletingSourceId;
 
+  bool _isRegeneratingNote = false;
+  bool get isRegeneratingNote => _isRegeneratingNote;
 
   // --- CACHING LOGIC ---
 
@@ -708,6 +710,29 @@ class ProjectProvider with ChangeNotifier {
     }
     finally {
       _isLoadingFileContent = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> regenerateNoteForSelectedSource() async {
+    if (_currentProject == null || _selectedSource == null) return;
+    
+    _isRegeneratingNote = true;
+    _isLoadingNote = true; // Also use the general loading flag
+    notifyListeners();
+
+    try {
+      final newHtml = await _api.regenerateNote(
+        _currentProject!.id,
+        _selectedSource!.id,
+      );
+      _scratchpadContent = newHtml; // Update content immediately with the response
+    } catch (e) {
+      print("Error regenerating note: $e");
+      _scratchpadContent = "<p>Error regenerating note: $e</p>";
+    } finally {
+      _isRegeneratingNote = false;
+      _isLoadingNote = false;
       notifyListeners();
     }
   }

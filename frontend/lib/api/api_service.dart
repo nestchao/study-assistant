@@ -359,4 +359,19 @@ class ApiService {
       if (token != null) 'Authorization': 'Bearer $token',
     };
   }
+
+  Future<String> regenerateNote(String projectId, String sourceId) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/regenerate-note/$projectId/$sourceId'),
+      headers: {'Content-Type': 'application/json'},
+    );
+
+    if (response.statusCode == 200) {
+      final data = json.decode(response.body);
+      return data['note_html'] ?? '<p>Error: Regeneration failed to return content.</p>';
+    } else {
+      final errorData = json.decode(response.body);
+      throw Exception(errorData['error'] ?? 'Failed to regenerate note');
+    }
+  }
 }
