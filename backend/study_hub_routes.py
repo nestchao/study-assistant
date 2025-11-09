@@ -28,6 +28,20 @@ def set_dependencies(db_instance, note_model_instance, chat_model_instance, redi
     redis_client = redis_instance
 
 # --- HELPER FUNCTIONS for Study Hub ---
+def get_original_text(project_id, source_id):
+    """Fetches and reassembles the original, unprocessed text for a specific source."""
+    print(f"  📚 Retrieving original text for source {source_id} in project {project_id}...")
+    full_text = ""
+    source_ref = db.collection('projects').document(project_id).collection('sources').document(source_id)
+    chunks_query = source_ref.collection('chunks').order_by('order').stream()
+    
+    all_chunks = []
+    for chunk_page in chunks_query:
+        all_chunks.extend(chunk_page.to_dict().get('chunks', []))
+    
+    full_text = "\n".join(all_chunks) # Join the chunks back into a single text block
+    print(f"  ✅ Assembled {len(full_text)} characters of original text.")
+    return full_text
 
 def generate_note(text):
     """Generates a simplified study note using the injected AI model."""
@@ -366,3 +380,46 @@ def topic_note(project_id):
         return jsonify({"note_html": html})
     except Exception as e:
         return jsonify({"note_html": f"<p>Error generating topic note: {e}</p>"})
+    
+@study_hub_bp.route('/regenerate-note/<project_id>/<path:source_id>', methods=['POST'])
+def regenerate_note(project_id, source_id):
+    """Regenerates the simplified note for a single source and returns the new HTML."""
+    print(f"\n🔄 REGENERATE NOTE request for source: {source_id} in project: {project_id}")
+    try:
+        # 1. Get the original text from Firestore
+        original_text = get_original_text(project_id, source_id)
+        if not original_text:
+            return jsonify({"error": "Original source text not found or is empty."}), 404
+
+        # 2. Generate the new note using the same function as upload
+        new_note_html = generate_note(original_text)
+        
+        # 3. Overwrite the old note pages in Firestore
+        source_ref = db.collection('projects').document(project_id).collection('sources').document(source_id)
+        note_pages_ref = source_ref.collection('note_pages')
+        
+        # Delete old pages first for a clean slate
+        for doc in note_pages_ref.stream():
+            doc.reference.delete()
+            
+        # Save new content in chunks
+        chunk_size = 900000 
+        for i, chunk in enumerate(range(0, len(new_note_html), chunk_size)):
+            page_content = new_note_html[chunk:chunk + chunk_size]
+            note_pages_ref.document(f'page_{i}').set({'html': page_content, 'order': i})
+
+        # 4. Invalidate the Redis cache for this specific note
+        if redis_client:
+            note_redis_key = f"note:{project_id}:{source_id}"
+            redis_client.delete(note_redis_key)
+            print(f"  ✅ Invalidated Redis cache for regenerated note: {note_redis_key}")
+
+        print(f"  ✅ SUCCESS: Note for '{source_id}' regenerated.")
+        # 5. Return the new HTML directly to the frontend
+        return jsonify({"success": True, "note_html": new_note_html})
+
+    except Exception as e:
+        import traceback
+        print(f"❌ CRITICAL ERROR regenerating note '{source_id}': {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
