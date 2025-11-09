@@ -3,7 +3,14 @@ import json
 from pathlib import Path
 from flask import Blueprint, request, jsonify
 from firebase_admin import firestore
-from utils import get_file_hash, convert_and_upload_to_firestore, get_converted_file_ref, delete_collection
+import hashlib 
+from utils import (
+    get_file_hash, 
+    convert_and_upload_to_firestore, 
+    get_converted_file_ref, 
+    delete_collection, 
+    generate_tree_text
+)
 
 # --- BLUEPRINT SETUP ---
 sync_service_bp = Blueprint('sync_service_bp', __name__)
@@ -87,6 +94,30 @@ def perform_sync(config_id: str, config_data: dict):
         doc_ref = get_converted_file_ref(db, project_id, path_to_delete)
         doc_ref.delete()
         deleted_count += 1
+
+    try:
+        print("  Generating file tree text...")
+        tree_content = f"{source_path.name}/\n"
+        # This call correctly passes the filter to the utility function
+        tree_content += generate_tree_text(source_path, allowed_extensions=extensions) 
+        
+        # 5. Save the tree.txt content to a special Firestore document
+        print("  Saving tree.txt to Firestore...")
+        tree_doc_id = "project_tree_txt" # Use a predictable ID
+        tree_doc_ref = db.collection('projects').document(project_id).collection('converted_files').document(tree_doc_id)
+        
+        tree_doc_ref.set({
+            'original_path': 'tree.txt',
+            'content': tree_content,
+            'hash': hashlib.sha256(tree_content.encode('utf-8')).hexdigest(),
+            'timestamp': firestore.SERVER_TIMESTAMP,
+        })
+        print(f"  ✅ Saved tree.txt to Firestore document: {tree_doc_id}")
+
+    except Exception as tree_error:
+        # If anything goes wrong during tree generation, log it but don't crash the whole sync.
+        print(f"  ❌ FAILED to generate or save tree.txt: {tree_error}")
+        logs.append(f"ERROR: Failed to generate file tree: {tree_error}")
     
     print("="*40)
     print(f"🏁 Sync complete.")
@@ -168,9 +199,6 @@ def delete_config(config_id):
         return jsonify({"success": True, "message": "Sync configuration deleted."})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
-
-# --- ROUTE TO TRIGGER THE SYNC ---
 
 @sync_service_bp.route('/sync/run/<config_id>', methods=['POST'])
 def run_sync_route(config_id):

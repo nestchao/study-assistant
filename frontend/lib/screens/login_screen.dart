@@ -31,20 +31,23 @@ class LoginScreen extends StatelessWidget {
               Buttons.GitHub,
               text: "Sign in with GitHub",
               onPressed: () async {
-                final userCredential = await authService.signInWithGitHub();
+                showDialog(
+                  context: context,
+                  barrierDismissible: false,
+                  builder: (context) => const Center(child: CircularProgressIndicator()),
+                );
 
-                if (userCredential != null && userCredential.user != null) {
-                  // If login is successful, navigate to the dashboard
-                  print("Signed in as: ${userCredential.user!.displayName}");
-                  if (context.mounted) {
-                    Navigator.of(context).pushReplacement(
-                      MaterialPageRoute(
-                        builder: (context) => const DashboardScreen(),
-                      ),
-                    );
-                  }
-                } else {
-                  // If login fails, show an error message
+                // Simply call the sign-in method.
+                final userCredential = await authService.signInWithGitHub();
+                
+                // Pop the loading indicator, regardless of success or failure.
+                // The AuthWrapper will handle the navigation.
+                if (context.mounted) {
+                  Navigator.of(context, rootNavigator: true).pop();
+                }
+
+                // Optional: If it failed, show an error. The wrapper won't navigate.
+                if (userCredential == null) {
                   print("Sign in failed.");
                   if (context.mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(
@@ -55,6 +58,9 @@ class LoginScreen extends StatelessWidget {
                     );
                   }
                 }
+                // If successful, the authStateChanges stream will fire, and the AuthWrapper
+                // will automatically rebuild and navigate to the DashboardScreen.
+                // We don't need to do anything else here.
               },
             ),
 
