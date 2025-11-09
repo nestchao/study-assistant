@@ -15,20 +15,18 @@ class AuthWrapper extends StatelessWidget {
     final authService = AuthService();
 
     return StreamBuilder<User?>(
-      stream: authService.user,
+      stream: authService.user, // <-- This is the single source of truth
       builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          // Show a loading spinner while checking auth state
-          return const Scaffold(body: Center(child: CircularProgressIndicator()));
+        if (snapshot.connectionState == ConnectionState.active) {
+          final User? user = snapshot.data;
+          // If user is null, show LoginScreen.
+          // If user is not null, show DashboardScreen.
+          return user == null ? const LoginScreen() : const DashboardScreen();
         }
-
-        if (snapshot.hasData) {
-          // If the snapshot has data, it means a user is logged in
-          return const DashboardScreen();
-        } else {
-          // If no data, show the login screen
-          return const LoginScreen();
-        }
+        // While waiting for the first auth state, show a loading screen.
+        return const Scaffold(
+          body: Center(child: CircularProgressIndicator()),
+        );
       },
     );
   }

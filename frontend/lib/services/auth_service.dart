@@ -17,7 +17,9 @@ class AuthService {
     if (kIsWeb) {
       // For web, we use signInWithPopup. This is a better UX than redirecting.
       try {
+        await _auth.setPersistence(Persistence.LOCAL);
         return await _auth.signInWithPopup(githubProvider);
+
       } on FirebaseAuthException catch (e) {
         print("Firebase Auth Exception on web: ${e.message}");
         return null;
@@ -34,7 +36,7 @@ class AuthService {
         print("Firebase Auth Exception on mobile: ${e.message}");
         return null;
       } catch (e) {
-        print("An unknown error occurred: $e");
+        print("An unknown error occurred on mobile: $e");
         return null;
       }
     }

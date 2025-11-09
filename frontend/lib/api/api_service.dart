@@ -32,16 +32,6 @@ class ApiService {
     return List<Map<String, dynamic>>.from(json.decode(response.body));
   }
 
-  // POST /api/create-project
-  Future<void> createProject(String name) async {
-    final headers = await _getHeaders();
-    await http.post(
-      Uri.parse('$baseUrl/create-project'),
-      headers: headers, // <-- USE THE NEW HEADERS
-      body: json.encode({'name': name}),
-    );
-  }
-
   // --- NEW ---
   Future<void> renameProject(String projectId, String newName) async {
     final response = await http.put(
@@ -64,8 +54,30 @@ class ApiService {
       throw Exception('Failed to delete project');
     }
   }
+
+  Future<Map<String, String>> _getAuthHeaders() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      // This case should be handled by the UI (don't call authenticated endpoints if not logged in)
+      throw Exception('User is not authenticated.');
+    }
+    final idToken = await user.getIdToken();
+    return {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer $idToken',
+    };
+  }  
   
-  // --- NEW ---
+  Future<void> createProject(String name) async {
+    final headers = await _getAuthHeaders(); // Get the headers
+    
+    await http.post(
+      Uri.parse('$baseUrl/create-project'),
+      headers: headers, // Use the auth headers
+      body: json.encode({'name': name}),
+    );
+  }
+
   Future<void> deleteSource(String projectId, String sourceId) async {
     final response = await http.delete(
       Uri.parse('$baseUrl/delete-source/$projectId/$sourceId'),

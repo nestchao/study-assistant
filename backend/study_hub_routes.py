@@ -3,9 +3,10 @@ import markdown
 import html2text
 from flask import Blueprint, request, jsonify
 from firebase_admin import firestore
+from utils import L1_CACHE
 
 # Import shared utility functions
-from utils import extract_text, delete_collection, split_chunks
+from utils import extract_text, delete_collection, split_chunks, token_required
 import redis
 
 # --- BLUEPRINT SETUP ---
@@ -116,19 +117,18 @@ def get_projects():
     projects = [{"id": d.id, "name": d.to_dict().get('name')} for d in docs]
     return jsonify(projects)
 
-# In create_project function
 @study_hub_bp.route('/create-project', methods=['POST'])
+@token_required 
 def create_project():
     name = request.json.get('name')
-    user_id = get_current_user_id() # Assuming this gets the user's UID
-    if not user_id:
-        return jsonify({"error": "Authentication required"}), 401
+    user_id = request.user_id # <-- Get the verified user ID from the decorator
     
     ref = db.collection('projects').document()
+    # --- ADD THE userId TO THE DOCUMENT ---
     ref.set({
         'name': name,
         'timestamp': firestore.SERVER_TIMESTAMP,
-        'userId': user_id  
+        'userId': user_id 
     })
     return jsonify({"id": ref.id})
 
@@ -237,25 +237,32 @@ def delete_source(project_id, source_id):
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
-@study_hub_bp.route('/get-note/<project_id>/<path:source_id>', methods=['GET'])
+@study_hub_bp.route('/get-note/<project_id>/<path:source_id>')
 def get_note(project_id, source_id):
-    note_redis_key = f"note:{project_id}:{source_id}"
+    note_key = f"note:{project_id}:{source_id}"
 
+    # 1. Check Level 1 Cache (In-Memory)
+    cached_html = L1_CACHE.get(note_key)
+    if cached_html:
+        print(f"✅ L1 CACHE HIT for note: {note_key}")
+        return jsonify({"note_html": cached_html})
+
+    # 2. Check Level 2 Cache (Redis)
     if redis_client:
         try:
-            cached_html_bytes = redis_client.get(note_redis_key)
+            cached_html_bytes = redis_client.get(note_key)
             if cached_html_bytes:
-                print(f"✅ CACHE HIT for note: {note_redis_key}")
-                # --- THIS IS THE FIX ---
-                # Decode the bytes from Redis into a UTF-8 string.
-                return jsonify({"note_html": cached_html_bytes.decode('utf-8')})
-                # --- END OF FIX ---
+                print(f"✅ L2 CACHE HIT (Redis) for note: {note_key}")
+                html_content = cached_html_bytes.decode('utf-8')
+                # Backfill L1 Cache
+                L1_CACHE.set(note_key, html_content)
+                return jsonify({"note_html": html_content})
         except Exception as e:
             print(f"⚠️ Redis cache check failed for note: {e}")
 
-    print(f"CACHE MISS for note: {note_redis_key}. Fetching from Firestore...")
+    print(f"CACHE MISS for note: {note_key}. Fetching from Firestore...")
 
-    # 2. If miss, get from Firestore
+    # 3. If miss, get from Firestore (Database)
     try:
         pages_query = db.collection('projects').document(project_id) \
                       .collection('sources').document(source_id) \
@@ -263,14 +270,22 @@ def get_note(project_id, source_id):
         
         html = "".join(p.to_dict().get('html', '') for p in pages_query)
         
-        # 3. Store the assembled HTML in Redis for next time
-        if redis_client and html:
-            try:
-                # Cache for 1 hour (3600 seconds)
-                redis_client.setex(note_redis_key, 3600, html)
-                print(f"💾 Successfully stored note in Redis cache: {note_redis_key}")
-            except Exception as e:
-                print(f"⚠️ Failed to store note in Redis cache: {e}")
+        if html:
+            # --- APPLY RANDOM EXPIRATION ---
+            # Base TTL of 5 minutes (300s) + a random value up to 60s
+            random_ttl = 300 + random.randint(0, 60)
+            
+            # 4. Backfill L2 Cache (Redis) with random TTL
+            if redis_client:
+                try:
+                    redis_client.setex(note_key, random_ttl, html)
+                    print(f"💾 Stored note in Redis cache with TTL: {random_ttl}s")
+                except Exception as e:
+                    print(f"⚠️ Failed to store note in Redis cache: {e}")
+            
+            # 5. Backfill L1 Cache (In-Memory)
+            L1_CACHE.set(note_key, html)
+            print(f"💾 Stored note in L1 cache.")
 
         return jsonify({"note_html": html or "<p>No note generated yet.</p>"})
     except Exception as e:
