@@ -170,49 +170,123 @@ class _DesktopStudyLayoutState extends State<DesktopStudyLayout> {
     );
   }
 
-  Widget _noteActions(BuildContext ctx, ProjectProvider p, String html) =>
-      Container(
-        padding: const EdgeInsets.all(12),
-        child: Column(children: [
-          // ... (Reload button)
+  Widget _noteActions(BuildContext ctx, ProjectProvider p, String html) {
+    // A helper to build a dropdown item
+    DropdownMenuItem<Source?> buildDropdownItem(Source? source) {
+      return DropdownMenuItem<Source?>(
+        value: source,
+        child: Row(
+          children: [
+            Icon(
+              source == null ? Icons.all_inclusive : Icons.picture_as_pdf,
+              size: 18,
+              color: Colors.black54,
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                source?.filename ?? "Project Overview",
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text("Note Controls", style: TextStyle(fontWeight: FontWeight.bold)),
           const SizedBox(height: 8),
 
-          // --- THIS IS THE UPDATED BUTTON ---
-          OutlinedButton.icon(
-            // Make the callback async
-            onPressed: () async {
-              // 1. Show a loading indicator to the user
-              ScaffoldMessenger.of(ctx).showSnackBar(
-                const SnackBar(content: Text("Preparing note for copying...")),
-              );
+          // --- 1. THE NEW NOTE SELECTOR DROPDOWN ---
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12.0),
+            decoration: BoxDecoration(
+              border: Border.all(color: Colors.grey.shade300),
+              borderRadius: BorderRadius.circular(8.0),
+            ),
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<Source?>(
+                isExpanded: true,
+                value: p.selectedSource,
+                // Create a list of items: "Project Overview" + all sources
+                items: [
+                  buildDropdownItem(null), // The "Project Overview" option
+                  ...p.sources.map((s) => buildDropdownItem(s)).toList(),
+                ],
+                onChanged: (Source? source) {
+                  // When a new source is selected, call the provider method
+                  p.selectSource(source);
+                },
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
 
-              // 2. Call the new provider method to get the rich HTML
-              final String richHtml = await p.getNoteAsRichHtml();
-
-              // 3. Call your existing copy method with the new rich HTML
-              await _copyRichTextToClipboard(ctx, richHtml);
-
-              // 4. (Optional) Hide the loading indicator
-              ScaffoldMessenger.of(ctx).hideCurrentSnackBar();
-            },
-            icon: const Icon(Icons.copy),
-            label: const Text("Copy Note with Images"), // Updated label
+          // --- 2. THE NEW REGENERATE BUTTON & COPY BUTTON ---
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: p.selectedSource == null || p.isRegeneratingNote
+                      ? null // Disable if no source is selected or if already regenerating
+                      : () => p.regenerateNoteForSelectedSource(),
+                  icon: p.isRegeneratingNote && p.selectedSource != null
+                      ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Icon(Icons.auto_awesome),
+                  label: Text(p.isRegeneratingNote && p.selectedSource != null ? "Working..." : "Regenerate"),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () async {
+                    ScaffoldMessenger.of(ctx).showSnackBar(
+                      const SnackBar(content: Text("Preparing note for copying...")),
+                    );
+                    final String richHtml = await p.getNoteAsRichHtml();
+                    await _copyRichTextToClipboard(ctx, richHtml);
+                    ScaffoldMessenger.of(ctx).hideCurrentSnackBar();
+                  },
+                  icon: const Icon(Icons.copy),
+                  label: const Text("Copy Note"),
+                ),
+              ),
+            ],
           ),
 
           const Divider(height: 24),
+          const Text("Generate Custom Note From Topic", style: TextStyle(fontWeight: FontWeight.bold)),
+          const SizedBox(height: 8),
           TextField(
-              controller: p.topicController,
-              maxLines: 2,
-              decoration: const InputDecoration(hintText: "e.g. Explain OOP")),
+            controller: p.topicController,
+            maxLines: 2,
+            decoration: const InputDecoration(
+              hintText: "e.g. Explain Object-Oriented Programming",
+              border: OutlineInputBorder(),
+              contentPadding: EdgeInsets.all(12),
+            ),
+          ),
+          const SizedBox(height: 8),
           ElevatedButton.icon(
-              onPressed: () {
-                final t = p.topicController.text.trim();
-                if (t.isNotEmpty) p.generateTopicNote(t);
-              },
-              icon: const Icon(Icons.auto_awesome),
-              label: const Text("Generate")),
-        ]),
-      );
+            onPressed: () {
+              final t = p.topicController.text.trim();
+              if (t.isNotEmpty) p.generateTopicNote(t);
+            },
+            icon: const Icon(Icons.psychology),
+            label: const Text("Generate Topic Note"),
+            style: ElevatedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(vertical: 14),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
   Widget _buildNoteViewer(String html) {
     return Scrollbar(
