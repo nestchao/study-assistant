@@ -22,6 +22,12 @@ class ChatMessage {
   ChatMessage({required this.content, required this.isUser});
 }
 
+class CodeSuggestionMessage {
+  final String content;
+  final bool isUser;
+  CodeSuggestionMessage({required this.content, required this.isUser});
+}
+
 class ProjectProvider with ChangeNotifier {
   final ApiService _api = ApiService();
 
@@ -54,6 +60,16 @@ class ProjectProvider with ChangeNotifier {
   bool get isLoadingConfigs => _isLoadingConfigs;
   String? _syncingConfigId;
   String? get syncingConfigId => _syncingConfigId;
+
+  List<CodeSuggestionMessage> _codeSuggestionHistory = [];
+  List<CodeSuggestionMessage> get codeSuggestionHistory => _codeSuggestionHistory;
+  bool _isGeneratingSuggestion = false;
+  bool get isGeneratingSuggestion => _isGeneratingSuggestion;
+
+  void clearCodeSuggestionHistory() {
+    _codeSuggestionHistory = [];
+    notifyListeners();
+  }
 
   // State for file viewer
   String? _viewingProjectId;
@@ -733,6 +749,45 @@ class ProjectProvider with ChangeNotifier {
     } finally {
       _isRegeneratingNote = false;
       _isLoadingNote = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> generateCodeSuggestion(String prompt) async { 
+    if (prompt.trim().isEmpty) return;
+
+    // --- THIS IS THE FIX ---
+    // We need the currently selected PROJECT ID to build the context.
+    // The 'Code Sync' screen is not part of a single project context, so we
+    // need to get the projectId from the sync config.
+    // Let's assume the 'viewingProjectId' we added earlier is the correct one.
+    if (_viewingProjectId == null) {
+      _codeSuggestionHistory.add(CodeSuggestionMessage(content: "Error: No project context is loaded. Please view a synced project's files first.", isUser: false));
+      notifyListeners();
+      return;
+    }
+    // --- END OF FIX ---
+
+    _codeSuggestionHistory.add(CodeSuggestionMessage(content: prompt, isUser: true));
+    _isGeneratingSuggestion = true;
+    notifyListeners();
+
+    try {
+      // Get the extensions from the sync config associated with this project
+      final syncConfig = _syncConfigs.firstWhere((c) => c.projectId == _viewingProjectId);
+      final extensions = syncConfig.allowedExtensions;
+
+      // Call the updated API method
+      final suggestion = await _api.getCodeSuggestion(
+        projectId: _viewingProjectId!,
+        extensions: extensions,
+        prompt: prompt,
+      );
+      _codeSuggestionHistory.add(CodeSuggestionMessage(content: suggestion, isUser: false));
+    } catch (e) {
+      _codeSuggestionHistory.add(CodeSuggestionMessage(content: "Error: $e", isUser: false));
+    } finally {
+      _isGeneratingSuggestion = false;
       notifyListeners();
     }
   }
