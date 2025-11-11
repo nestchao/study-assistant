@@ -4,6 +4,8 @@ import html2text
 from flask import Blueprint, request, jsonify
 from firebase_admin import firestore
 from utils import L1_CACHE
+import random  # For the random TTL in get_note
+import time 
 
 # Import shared utility functions
 from utils import extract_text, delete_collection, split_chunks, token_required
@@ -19,6 +21,8 @@ note_gen_model = None
 chat_model = None
 redis_client = None 
 
+NULL_CACHE_VALUE = "##NULL##"
+
 def set_dependencies(db_instance, note_model_instance, chat_model_instance, redis_instance):
     """Injects database and AI model dependencies from the main app."""
     global db, note_gen_model, chat_model, redis_client
@@ -31,18 +35,30 @@ def set_dependencies(db_instance, note_model_instance, chat_model_instance, redi
 # --- HELPER FUNCTIONS for Study Hub ---
 def get_original_text(project_id, source_id):
     """Fetches and reassembles the original, unprocessed text for a specific source."""
-    print(f"  📚 Retrieving original text for source {source_id} in project {project_id}...")
-    full_text = ""
-    source_ref = db.collection('projects').document(project_id).collection('sources').document(source_id)
-    chunks_query = source_ref.collection('chunks').order_by('order').stream()
+    print(f"  📚 Retrieving original text for source '{source_id}' in project '{project_id}'...")
     
-    all_chunks = []
-    for chunk_page in chunks_query:
-        all_chunks.extend(chunk_page.to_dict().get('chunks', []))
-    
-    full_text = "\n".join(all_chunks) # Join the chunks back into a single text block
-    print(f"  ✅ Assembled {len(full_text)} characters of original text.")
-    return full_text
+    try:
+        source_ref = db.collection('projects').document(project_id).collection('sources').document(source_id)
+        chunks_query = source_ref.collection('chunks').order_by('order').stream()
+        
+        all_chunks = []
+        page_count = 0
+        for chunk_page in chunks_query:
+            page_count += 1
+            page_data = chunk_page.to_dict()
+            chunks_in_page = page_data.get('chunks', [])
+            all_chunks.extend(chunks_in_page)
+            print(f"    - Fetched page {page_count}, found {len(chunks_in_page)} chunks.")
+        
+        if page_count == 0:
+            print("    - ‼️  Query returned 0 documents from the 'chunks' subcollection.")
+
+        full_text = "\n".join(all_chunks)
+        print(f"  ✅ Assembled {len(full_text)} characters of original text from {len(all_chunks)} total chunks.")
+        return full_text
+    except Exception as e:
+        print(f"  ❌ An error occurred while fetching original text: {e}")
+        return "" # Return empty on failure
 
 def generate_note(text):
     """Generates a simplified study note using the injected AI model."""
@@ -200,26 +216,52 @@ def upload_source(project_id):
                 continue
 
             source_ref = db.collection('projects').document(project_id).collection('sources').document(safe_id)
-            source_ref.set({'filename': filename, 'timestamp': firestore.SERVER_TIMESTAMP, 'character_count': len(text)})
+            source_ref.set({
+                'filename': filename, 
+                'timestamp': firestore.SERVER_TIMESTAMP, 
+                'character_count': len(text)
+            })
             
-            note_html = generate_note(text)
-            
-            # Save note in chunks to avoid Firestore document size limits
-            chunk_size = 900000 
-            for i in range(0, len(note_html), chunk_size):
-                chunk = note_html[i:i+chunk_size]
-                page_num = i // chunk_size
-                source_ref.collection('note_pages').document(f'page_{page_num}').set({'html': chunk, 'order': page_num})
-            
-            # Save original text chunks for context-aware features
+            # CRITICAL: Save original text chunks FIRST (before note generation)
+            # This ensures regeneration will work even if note generation fails
+            print(f"  💾 Saving original text chunks...")
             text_chunks = split_chunks(text)
             for i in range(0, len(text_chunks), 100):
                 batch = text_chunks[i:i+100]
                 page_num = i // 100
-                source_ref.collection('chunks').document(f'page_{page_num}').set({'chunks': batch, 'order': page_num})
+                source_ref.collection('chunks').document(f'page_{page_num}').set({
+                    'chunks': batch, 
+                    'order': page_num
+                })
+            print(f"  ✅ Saved {len(text_chunks)} chunks in {(len(text_chunks) + 99) // 100} pages")
+            
+            # Now try to generate the note (this can fail without breaking everything)
+            try:
+                note_html = generate_note(text)
+                
+                # Save note in chunks to avoid Firestore document size limits
+                chunk_size = 900000 
+                for i in range(0, len(note_html), chunk_size):
+                    chunk = note_html[i:i+chunk_size]
+                    page_num = i // chunk_size
+                    source_ref.collection('note_pages').document(f'page_{page_num}').set({
+                        'html': chunk, 
+                        'order': page_num
+                    })
+                print(f"  ✅ Generated and saved study note")
+                
+            except Exception as note_error:
+                # If note generation fails, log it but don't fail the entire upload
+                print(f"  ⚠️ Note generation failed (source still saved): {note_error}")
+                # Save a placeholder note page
+                source_ref.collection('note_pages').document('page_0').set({
+                    'html': '<p>Note generation failed. Please try regenerating the note.</p>',
+                    'order': 0
+                })
             
             processed.append({"filename": filename, "id": safe_id})
             print(f"✅ SUCCESS: '{filename}' processed.")
+            
         except Exception as e:
             import traceback
             print(f"❌ CRITICAL ERROR processing '{filename}': {e}")
@@ -255,55 +297,63 @@ def delete_source(project_id, source_id):
 def get_note(project_id, source_id):
     note_key = f"note:{project_id}:{source_id}"
 
-    # 1. Check Level 1 Cache (In-Memory)
-    cached_html = L1_CACHE.get(note_key)
-    if cached_html:
+    # 1. Check L1 Cache
+    cached_value = L1_CACHE.get(note_key)
+    if cached_value:
         print(f"✅ L1 CACHE HIT for note: {note_key}")
-        return jsonify({"note_html": cached_html})
+        # If the cached value is our special null marker, return empty
+        return jsonify({"note_html": "" if cached_value == NULL_CACHE_VALUE else cached_value})
 
-    # 2. Check Level 2 Cache (Redis)
+    # 2. Check L2 Cache (Redis)
     if redis_client:
         try:
-            cached_html_bytes = redis_client.get(note_key)
-            if cached_html_bytes:
+            cached_bytes = redis_client.get(note_key)
+            if cached_bytes:
                 print(f"✅ L2 CACHE HIT (Redis) for note: {note_key}")
-                html_content = cached_html_bytes.decode('utf-8')
-                # Backfill L1 Cache
-                L1_CACHE.set(note_key, html_content)
-                return jsonify({"note_html": html_content})
+                content = cached_bytes.decode('utf-8')
+                L1_CACHE.set(note_key, content) # Backfill L1
+                return jsonify({"note_html": "" if content == NULL_CACHE_VALUE else content})
         except Exception as e:
             print(f"⚠️ Redis cache check failed for note: {e}")
 
     print(f"CACHE MISS for note: {note_key}. Fetching from Firestore...")
 
-    # 3. If miss, get from Firestore (Database)
-    try:
-        pages_query = db.collection('projects').document(project_id) \
-                      .collection('sources').document(source_id) \
-                      .collection('note_pages').order_by('order').stream()
-        
-        html = "".join(p.to_dict().get('html', '') for p in pages_query)
-        
-        if html:
-            # --- APPLY RANDOM EXPIRATION ---
-            # Base TTL of 5 minutes (300s) + a random value up to 60s
-            random_ttl = 300 + random.randint(0, 60)
-            
-            # 4. Backfill L2 Cache (Redis) with random TTL
-            if redis_client:
-                try:
-                    redis_client.setex(note_key, random_ttl, html)
-                    print(f"💾 Stored note in Redis cache with TTL: {random_ttl}s")
-                except Exception as e:
-                    print(f"⚠️ Failed to store note in Redis cache: {e}")
-            
-            # 5. Backfill L1 Cache (In-Memory)
-            L1_CACHE.set(note_key, html)
-            print(f"💾 Stored note in L1 cache.")
+    # 3. If miss, get from Firestore
+    # --- THIS IS THE FIX FOR CACHE BREAKDOWN (MUTEX LOCK) ---
+    lock_key = f"lock:{note_key}"
+    # Try to acquire a lock with a short timeout (e.g., 10s)
+    # nx=True means "set if not exists" - this is an atomic operation
+    lock_acquired = redis_client.set(lock_key, "1", ex=10, nx=True) if redis_client else False
 
-        return jsonify({"note_html": html or "<p>No note generated yet.</p>"})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    if lock_acquired:
+        print(f"  ✅ Lock acquired for {note_key}. Rebuilding cache...")
+        try:
+            # 3. Get from Firestore
+            pages_query = db.collection('projects').document(project_id).collection('sources').document(source_id).collection('note_pages').order_by('order').stream()
+            html = "".join(p.to_dict().get('html', '') for p in pages_query)
+            
+            # (Cache Penetration logic from before)
+            value_to_cache = html if html else NULL_CACHE_VALUE
+            ttl = 300 + random.randint(0, 60) if html else 30
+
+            if redis_client:
+                redis_client.setex(note_key, ttl, value_to_cache)
+            L1_CACHE.set(note_key, value_to_cache)
+            
+            return jsonify({"note_html": "" if value_to_cache == NULL_CACHE_VALUE else value_to_cache})
+
+        finally:
+            # IMPORTANT: Release the lock
+            if redis_client:
+                redis_client.delete(lock_key)
+            print(f"  🔑 Lock released for {note_key}.")
+            
+    else:
+        # We failed to get the lock, another process is rebuilding.
+        print(f"  ...Could not acquire lock. Waiting briefly for cache to be rebuilt...")
+        time.sleep(0.1) # Wait 100ms
+        # Try the whole function again. This time it should be a cache hit.
+        return get_note(project_id, source_id)
 
 @study_hub_bp.route('/update-note/<project_id>/<path:source_id>', methods=['POST'])
 def update_note(project_id, source_id):
@@ -404,7 +454,7 @@ def regenerate_note(project_id, source_id):
         # 1. Get the original text from Firestore
         original_text = get_original_text(project_id, source_id)
         if not original_text:
-            return jsonify({"error": "Original source text not found or is empty."}), 404
+            return jsonify({"error": "Original source text not found or is empty. Please re-upload the document."}), 404
 
         # 2. Generate the new note using the same function as upload
         new_note_html = generate_note(original_text)
@@ -417,11 +467,16 @@ def regenerate_note(project_id, source_id):
         for doc in note_pages_ref.stream():
             doc.reference.delete()
             
-        # Save new content in chunks
+        # Save new content in chunks - FIXED LOGIC
         chunk_size = 900000 
-        for i, chunk in enumerate(range(0, len(new_note_html), chunk_size)):
-            page_content = new_note_html[chunk:chunk + chunk_size]
-            note_pages_ref.document(f'page_{i}').set({'html': page_content, 'order': i})
+        for i in range(0, len(new_note_html), chunk_size):
+            page_content = new_note_html[i:i + chunk_size]
+            page_num = i // chunk_size
+            note_pages_ref.document(f'page_{page_num}').set({
+                'html': page_content, 
+                'order': page_num
+            })
+            print(f"  + Saved note page {page_num}")
 
         # 4. Invalidate the Redis cache for this specific note
         if redis_client:
@@ -429,8 +484,13 @@ def regenerate_note(project_id, source_id):
             redis_client.delete(note_redis_key)
             print(f"  ✅ Invalidated Redis cache for regenerated note: {note_redis_key}")
 
+        # 5. Invalidate L1 cache as well
+        note_key = f"note:{project_id}:{source_id}"
+        L1_CACHE.delete(note_key)
+        print(f"  ✅ Invalidated L1 cache for regenerated note")
+
         print(f"  ✅ SUCCESS: Note for '{source_id}' regenerated.")
-        # 5. Return the new HTML directly to the frontend
+        # 6. Return the new HTML directly to the frontend
         return jsonify({"success": True, "note_html": new_note_html})
 
     except Exception as e:

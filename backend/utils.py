@@ -10,11 +10,13 @@ from firebase_admin import firestore, auth
 from collections import OrderedDict
 import time
 from functools import wraps 
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from flask import request, jsonify
 
 TXT_OUTPUT_DIR = Path("converted_txt_projects") # Main output directory
 STRUCTURE_FILE_NAME = "file_structure.json"
 HASH_DB_FILE_NAME = "file_hashes.json"
+DOT_REPLACEMENT = "__DOT__"
 
 # Make sure this path is correct for your system
 try:
