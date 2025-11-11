@@ -345,21 +345,6 @@ class ApiService {
     throw Exception('Failed to get file content');
   }
 
-  Future<Map<String, String>> _getHeaders() async {
-    final user = FirebaseAuth.instance.currentUser;
-    String? token;
-    if (user != null) {
-      // Get the Firebase ID token for the current user.
-      token = await user.getIdToken();
-    }
-    
-    return {
-      'Content-Type': 'application/json',
-      // Send the token in the standard 'Authorization' header
-      if (token != null) 'Authorization': 'Bearer $token',
-    };
-  }
-
   Future<String> regenerateNote(String projectId, String sourceId) async {
     final response = await http.post(
       Uri.parse('$baseUrl/regenerate-note/$projectId/$sourceId'),
@@ -372,6 +357,31 @@ class ApiService {
     } else {
       final errorData = json.decode(response.body);
       throw Exception(errorData['error'] ?? 'Failed to regenerate note');
+    }
+  }
+
+  Future<String> getCodeSuggestion({
+    required String projectId, // <-- ADD
+    required List<String> extensions, // <-- ADD
+    required String prompt,
+  }) async {
+    final headers = await _getAuthHeaders();
+    
+    final response = await http.post(
+      Uri.parse('$baseUrl/generate-code-suggestion'), // This URL is now correct
+      headers: headers,
+      body: json.encode({
+        'project_id': projectId, // <-- SEND
+        'extensions': extensions, // <-- SEND
+        'prompt': prompt,
+      }),
+    );
+    
+    if (response.statusCode == 200) {
+      return json.decode(response.body)['suggestion'] ?? 'Sorry, I could not generate a suggestion.';
+    } else {
+      final error = json.decode(response.body)['error'] ?? 'Unknown error';
+      throw Exception('Failed to get code suggestion: $error');
     }
   }
 }

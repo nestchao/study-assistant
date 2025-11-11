@@ -6,6 +6,7 @@ from firebase_admin import firestore
 from utils import L1_CACHE
 import random  # For the random TTL in get_note
 import time 
+from pathlib import Path #
 
 # Import shared utility functions
 from utils import extract_text, delete_collection, split_chunks, token_required
@@ -498,3 +499,66 @@ def regenerate_note(project_id, source_id):
         print(f"❌ CRITICAL ERROR regenerating note '{source_id}': {e}")
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
+
+@study_hub_bp.route('/generate-code-suggestion', methods=['POST'])
+@token_required
+def generate_code_suggestion(): # You can keep the function name or change it too, it doesn't matter
+    data = request.json
+    project_id = data.get('project_id')
+    extensions = data.get('extensions', [])
+    prompt_text = data.get('prompt')
+    
+    # --- ADDED LOGGING ---
+    print("\n" + "="*50)
+    print(f"🤖 Generating PROJECT-WIDE code suggestion for project: {project_id}")
+    print(f"   Prompt: '{prompt_text[:100]}...'")
+    print(f"   Filtering for extensions: {extensions or 'All'}")
+    
+    if not all([project_id, prompt_text]):
+        return jsonify({"error": "Missing 'project_id' or 'prompt'"}), 400
+
+    full_project_context = ""
+    file_count = 0
+    try:
+        print("  - Building project context from Firestore...")
+        docs = db.collection('projects').document(project_id).collection('converted_files').stream()
+        dot_extensions = [f".{ext.lstrip('.').lower()}" for ext in extensions] if extensions else None
+        
+        for doc in docs:
+            file_data = doc.to_dict()
+            original_path = file_data.get('original_path', '')
+            
+            # Don't include the tree.txt file in the context
+            if original_path == 'tree.txt':
+                continue
+            
+            if not dot_extensions or Path(original_path).suffix.lower() in dot_extensions:
+                full_project_context += f"--- FILE: {original_path} ---\n"
+                full_project_context += file_data.get('content', '')
+                full_project_context += "\n\n"
+                file_count += 1
+        
+        print(f"  - Assembled context from {file_count} files ({len(full_project_context)} chars).")
+    except Exception as e:
+        print(f"  - ❌ ERROR building project context: {e}")
+        return jsonify({"error": f"Failed to build project context: {e}"}), 500
+    
+    if not full_project_context:
+        print("  - ⚠️ No matching files found to build context.")
+        return jsonify({"suggestion": "Could not find any code to analyze. Please sync your project with the correct file extensions first."})
+
+    system_prompt = f"""... (your system prompt is good) ..."""
+    
+    try:
+        print("  - Sending request to Gemini model...")
+        response = chat_model.generate_content([system_prompt, prompt_text])
+        print("  - ✅ Received response from Gemini.")
+        print("="*50 + "\n")
+        return jsonify({"suggestion": response.text})
+    except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
+        print(f"  - ❌ ERROR calling Gemini model: {e}")
+        print(error_details)
+        print("="*50 + "\n")
+        return jsonify({"error": str(e), "traceback": error_details}), 500
