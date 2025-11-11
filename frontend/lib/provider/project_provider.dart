@@ -753,14 +753,12 @@ class ProjectProvider with ChangeNotifier {
     }
   }
 
-  Future<void> generateCodeSuggestion(String prompt) async { 
+  Future<void> generateCodeSuggestion(String prompt) async {
     if (prompt.trim().isEmpty) return;
 
     // --- THIS IS THE FIX ---
-    // We need the currently selected PROJECT ID to build the context.
-    // The 'Code Sync' screen is not part of a single project context, so we
-    // need to get the projectId from the sync config.
-    // Let's assume the 'viewingProjectId' we added earlier is the correct one.
+    // Use the same '_viewingProjectId' that the file tree is using.
+    // Do NOT use '_currentProject'.
     if (_viewingProjectId == null) {
       _codeSuggestionHistory.add(CodeSuggestionMessage(content: "Error: No project context is loaded. Please view a synced project's files first.", isUser: false));
       notifyListeners();
@@ -773,11 +771,14 @@ class ProjectProvider with ChangeNotifier {
     notifyListeners();
 
     try {
-      // Get the extensions from the sync config associated with this project
-      final syncConfig = _syncConfigs.firstWhere((c) => c.projectId == _viewingProjectId);
+      // Find the sync config that matches the project we are currently viewing.
+      final syncConfig = _syncConfigs.firstWhere(
+        (c) => c.projectId == _viewingProjectId,
+        orElse: () => SyncConfig(id: '', projectId: '', localPath: '', allowedExtensions: [], isActive: false, status: 'unknown'), // Default value
+      );
       final extensions = syncConfig.allowedExtensions;
 
-      // Call the updated API method
+      // Call the API with the correct project ID.
       final suggestion = await _api.getCodeSuggestion(
         projectId: _viewingProjectId!,
         extensions: extensions,
@@ -791,4 +792,39 @@ class ProjectProvider with ChangeNotifier {
       notifyListeners();
     }
   }
+
+  Future<void> createProjectAndRegisterSync(
+    String projectName,
+    String folderPath,
+    List<String> extensions,
+  ) async {
+    try {
+      // Step 1: Create the project first
+      final projectId = await _api.createProjectAndGetId(projectName);
+      
+      if (projectId == null || projectId.isEmpty) {
+        throw Exception('Failed to create project: No ID returned');
+      }
+      
+      print('✅ Project created with ID: $projectId');
+      
+      // Step 2: Register the sync config with the new project ID
+      await _api.registerSyncConfig(projectId, folderPath, extensions);
+      
+      print('✅ Sync config registered for project: $projectId');
+      
+      // Step 3: Refresh both lists
+      await Future.wait([
+        fetchProjects(forceRefresh: true),
+        fetchSyncConfigs(),
+      ]);
+      
+      print('✅ Project and sync config created successfully');
+    } catch (e) {
+      print('❌ Error in createProjectAndRegisterSync: $e');
+      rethrow;
+    }
+  }
+
+  
 }
