@@ -179,38 +179,38 @@ def get_converted_file_ref(db, project_id, original_path_str: str):
 
 def convert_and_upload_to_firestore(db, project_id, file_path, source_root):
     """
-    Reads a file, converts its content to text, and uploads it to Firestore.
-    Returns the new hash if successful.
+    Reads a local file → text → uploads to Firestore.
+    Returns (hash, doc_id) on success, otherwise None.
     """
     rel_path_str = str(file_path.relative_to(source_root)).replace('\\', '/')
     print(f"  Processing: {rel_path_str}")
 
     try:
-        # Read the file's content into a variable.
-        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-            content = f.read()
-        
-        # Calculate the hash of the content.
+        # 1. Read content
+        content = file_path.read_text(encoding='utf-8', errors='ignore')
+
+        # 2. Hash
         current_hash = hashlib.sha256(content.encode('utf-8')).hexdigest()
 
-        # Get the reference to the document in Firestore.
-        doc_ref = get_converted_file_ref(db, project_id, rel_path_str)
-        
-        # --- THIS IS THE FIX ---
-        # Ensure the 'content' variable is included in the data being set.
+        # 3. **Create a document with an auto-generated ID**
+        doc_ref = db.collection('projects') \
+                    .document(project_id) \
+                    .collection('converted_files') \
+                    .document()               # <-- auto ID
+
+        # 4. Write
         doc_ref.set({
             'original_path': rel_path_str,
-            'content': content,  # This line ensures the text is saved.
+            'content': content,
             'hash': current_hash,
             'timestamp': firestore.SERVER_TIMESTAMP,
         })
-        # --- END OF FIX ---
 
-        print(f"    -> Uploaded to Firestore.")
-        return current_hash
+        print(f"    -> Uploaded (doc_id={doc_ref.id})")
+        return current_hash, doc_ref.id          # <-- RETURN BOTH!
 
     except Exception as e:
-        print(f"    -> FAILED to process {rel_path_str}: {e}")
+        print(f"    -> FAILED {rel_path_str}: {e}")
         return None
 
 def generate_tree_text(root_path: Path, allowed_extensions: list = None, prefix: str = "") -> str:

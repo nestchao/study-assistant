@@ -1,9 +1,6 @@
 // lib/screens/code_sync_desktop_layout.dart
 import 'dart:math';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:provider/provider.dart';
-import 'package:study_assistance/provider/project_provider.dart';
 import 'package:study_assistance/screens/code_sync_panels.dart';
 
 class CodeSyncDesktopLayout extends StatefulWidget {

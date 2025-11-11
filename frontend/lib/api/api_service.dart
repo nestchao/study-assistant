@@ -384,4 +384,21 @@ class ApiService {
       throw Exception('Failed to get code suggestion: $error');
     }
   }
+
+  Future<String?> createProjectAndGetId(String name) async {
+    final headers = await _getAuthHeaders();
+    
+    final response = await http.post(
+      Uri.parse('$baseUrl/create-project'),
+      headers: headers,
+      body: json.encode({'name': name}),
+    );
+    
+    if (response.statusCode == 200 || response.statusCode == 201) {
+      final data = json.decode(response.body);
+      return data['id']; // The backend returns {"id": "project_id"}
+    }
+    
+    throw Exception('Failed to create project: ${response.statusCode}');
+  }
 }
