@@ -1,10 +1,11 @@
 // lib/screens/code_sync_screen.dart
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:study_assistance/provider/project_provider.dart';
 import 'package:study_assistance/models/sync_config.dart';
 import 'package:study_assistance/models/project.dart';
+import 'package:study_assistance/screens/code_sync_desktop_layout.dart';
+import 'package:study_assistance/screens/code_sync_mobile_layout.dart';
 
 class CodeSyncScreen extends StatefulWidget {
   const CodeSyncScreen({super.key});
@@ -13,13 +14,17 @@ class CodeSyncScreen extends StatefulWidget {
   State<CodeSyncScreen> createState() => _CodeSyncScreenState();
 }
 
-class _CodeSyncScreenState extends State<CodeSyncScreen> {
+class _CodeSyncScreenState extends State<CodeSyncScreen> with SingleTickerProviderStateMixin {
+  late TabController _tabController;
   final _pathController = TextEditingController();
   final _extensionsController = TextEditingController();
+
+  static const double mobileBreakpoint = 900.0;
 
   @override
   void initState() {
     super.initState();
+    _tabController = TabController(length: 2, vsync: this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       Provider.of<ProjectProvider>(context, listen: false).fetchSyncConfigs();
     });
@@ -27,6 +32,7 @@ class _CodeSyncScreenState extends State<CodeSyncScreen> {
 
   @override
   void dispose() {
+    _tabController.dispose();
     _pathController.dispose();
     _extensionsController.dispose();
     super.dispose();
@@ -42,22 +48,71 @@ class _CodeSyncScreenState extends State<CodeSyncScreen> {
     showDialog(
       context: context,
       builder: (dialogContext) {
-        // Use a StatefulWidget to manage the dropdown's state
         return StatefulBuilder(
           builder: (context, setDialogState) {
-            return AlertDialog(
-              title: const Text('Register Folder to Sync'),
-              content: SingleChildScrollView( // Use a scroll view for smaller screens
+            return Dialog(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              child: Container(
+                constraints: const BoxConstraints(maxWidth: 500),
+                padding: const EdgeInsets.all(24),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // --- NEW: PROJECT SELECTOR DROPDOWN ---
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: Theme.of(context).primaryColor.withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Icon(Icons.folder_open, color: Theme.of(context).primaryColor),
+                        ),
+                        const SizedBox(width: 12),
+                        const Expanded(
+                          child: Text(
+                            'Register Folder to Sync',
+                            style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.close),
+                          onPressed: () => Navigator.pop(dialogContext),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 24),
                     if (provider.projects.isEmpty)
-                      const Text("Please create a project first.", style: TextStyle(color: Colors.red))
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.red.shade50,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.red.shade200),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(Icons.warning_amber_rounded, color: Colors.red.shade700),
+                            const SizedBox(width: 8),
+                            const Expanded(
+                              child: Text(
+                                "Please create a project first.",
+                                style: TextStyle(color: Colors.red),
+                              ),
+                            ),
+                          ],
+                        ),
+                      )
                     else
                       DropdownButtonFormField<Project>(
-                        initialValue: selectedProject,
-                        decoration: const InputDecoration(labelText: 'Associate with Project'),
+                        value: selectedProject,
+                        decoration: InputDecoration(
+                          labelText: 'Project',
+                          prefixIcon: const Icon(Icons.folder_special),
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                          filled: true,
+                        ),
                         items: provider.projects.map((Project project) {
                           return DropdownMenuItem<Project>(
                             value: project,
@@ -73,38 +128,63 @@ class _CodeSyncScreenState extends State<CodeSyncScreen> {
                     const SizedBox(height: 16),
                     TextField(
                       controller: _pathController,
-                      decoration: const InputDecoration(labelText: 'Absolute Folder Path', hintText: 'C:/...'),
+                      decoration: InputDecoration(
+                        labelText: 'Folder Path',
+                        hintText: 'C:/Projects/MyApp',
+                        prefixIcon: const Icon(Icons.create_new_folder),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                        filled: true,
+                      ),
                     ),
+                    const SizedBox(height: 16),
                     TextField(
                       controller: _extensionsController,
-                      decoration: const InputDecoration(labelText: 'File Extensions (comma-separated)', hintText: 'py, dart, kt'),
+                      decoration: InputDecoration(
+                        labelText: 'File Extensions',
+                        hintText: 'py, dart, kt, java',
+                        prefixIcon: const Icon(Icons.code),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                        filled: true,
+                        helperText: 'Comma-separated list of file types',
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(dialogContext),
+                          child: const Text('Cancel'),
+                        ),
+                        const SizedBox(width: 8),
+                        FilledButton.icon(
+                          onPressed: selectedProject == null ? null : () async {
+                            final path = _pathController.text.trim();
+                            final extensions = _extensionsController.text
+                                .split(',')
+                                .map((e) => e.trim())
+                                .where((e) => e.isNotEmpty)
+                                .toList();
+                            
+                            final projectId = selectedProject!.id;
+
+                            if (path.isNotEmpty) {
+                              try {
+                                await provider.registerSyncConfig(projectId, path, extensions);
+                                Navigator.pop(dialogContext);
+                              } catch (e) {
+                                // Error handling
+                              }
+                            }
+                          },
+                          icon: const Icon(Icons.add),
+                          label: const Text('Register'),
+                        ),
+                      ],
                     ),
                   ],
                 ),
               ),
-              actions: [
-                TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Cancel')),
-                ElevatedButton(
-                  // Disable button if no project is selected
-                  onPressed: selectedProject == null ? null : () async {
-                    final path = _pathController.text.trim();
-                    final extensions = _extensionsController.text.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
-                    
-                    // Use the projectId from the dropdown, not the global provider state
-                    final projectId = selectedProject!.id;
-
-                    if (path.isNotEmpty) {
-                      try {
-                        await provider.registerSyncConfig(projectId, path, extensions);
-                        Navigator.pop(dialogContext);
-                      } catch (e) {
-                        // ... error handling
-                      }
-                    }
-                  },
-                  child: const Text('Register'),
-                ),
-              ],
             );
           },
         );
@@ -116,44 +196,104 @@ class _CodeSyncScreenState extends State<CodeSyncScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Code Sync Service'),
+        title: const Text('Code Sync'),
         actions: [
           IconButton(
-            icon: const Icon(Icons.add_circle_outline),
+            icon: const Icon(Icons.add_rounded),
             onPressed: _showRegisterDialog,
-            tooltip: 'Register New Folder',
+            tooltip: 'Register Folder',
           ),
         ],
+        bottom: TabBar(
+          controller: _tabController,
+          tabs: const [
+            Tab(icon: Icon(Icons.folder_outlined), text: 'Configurations'),
+            Tab(icon: Icon(Icons.code), text: 'Code Viewer'),
+          ],
+        ),
       ),
-      endDrawer: const FileViewerDrawer(), // The file viewer panel
-      body: Consumer<ProjectProvider>(
-        builder: (context, provider, child) {
-          if (provider.isLoadingConfigs) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          if (provider.syncConfigs.isEmpty) {
-            return const Center(child: Text('No folders registered. Click "+" to add one.'));
-          }
+      body: TabBarView(
+        controller: _tabController,
+        children: [
+          _buildConfigurationsTab(),
+          _buildCodeViewerTab(),
+        ],
+      ),
+    );
+  }
 
-          return RefreshIndicator(
-            onRefresh: provider.fetchSyncConfigs,
-            child: ListView.builder(
-              itemCount: provider.syncConfigs.length,
-              itemBuilder: (context, index) {
-                final config = provider.syncConfigs[index];
-                return SyncConfigTile(config: config);
-              },
+  Widget _buildConfigurationsTab() {
+    return Consumer<ProjectProvider>(
+      builder: (context, provider, child) {
+        if (provider.isLoadingConfigs) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        if (provider.syncConfigs.isEmpty) {
+          return Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.folder_off, size: 80, color: Colors.grey.shade400),
+                const SizedBox(height: 16),
+                Text(
+                  'No folders registered',
+                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                    color: Colors.grey.shade600,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Click the + button to add your first folder',
+                  style: TextStyle(color: Colors.grey.shade500),
+                ),
+              ],
             ),
           );
-        },
-      ),
+        }
+
+        return RefreshIndicator(
+          onRefresh: provider.fetchSyncConfigs,
+          child: ListView.builder(
+            padding: const EdgeInsets.all(12),
+            itemCount: provider.syncConfigs.length,
+            itemBuilder: (context, index) {
+              final config = provider.syncConfigs[index];
+              return SyncConfigTile(
+                config: config,
+                onViewFiles: () {
+                  provider.fetchFileTree(config.projectId);
+                  _tabController.animateTo(1);
+                },
+              );
+            },
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildCodeViewerTab() {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxWidth < mobileBreakpoint) {
+          return const CodeSyncMobileLayout();
+        } else {
+          return const CodeSyncDesktopLayout();
+        }
+      },
     );
   }
 }
 
 class SyncConfigTile extends StatelessWidget {
   final SyncConfig config;
-  const SyncConfigTile({super.key, required this.config});
+  final VoidCallback onViewFiles;
+  
+  const SyncConfigTile({
+    super.key,
+    required this.config,
+    required this.onViewFiles,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -161,163 +301,173 @@ class SyncConfigTile extends StatelessWidget {
     final isSyncing = provider.syncingConfigId == config.id;
 
     return Card(
-      margin: const EdgeInsets.all(8.0),
+      margin: const EdgeInsets.only(bottom: 12),
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(color: Colors.grey.shade200),
+      ),
       child: Padding(
-        padding: const EdgeInsets.all(12.0),
+        padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(config.localPath, style: const TextStyle(fontWeight: FontWeight.bold)),
-            Text('File types: ${config.allowedExtensions.join(', ')}'),
-            Text('Status: ${config.status}'),
-            if (config.lastSynced != null) Text('Last Synced: ${config.lastSynced}'),
-            const Divider(),
             Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Row(
-                  children: [
-                    const Text('Active:'),
-                    Switch(
-                      value: config.isActive,
-                      onChanged: (value) => provider.updateSyncConfigStatus(config.id, value),
-                    ),
-                  ],
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: config.isActive ? Colors.green.shade50 : Colors.grey.shade100,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Icon(
+                    Icons.folder,
+                    color: config.isActive ? Colors.green.shade700 : Colors.grey.shade600,
+                    size: 24,
+                  ),
                 ),
-                ElevatedButton.icon(
-                  onPressed: isSyncing ? null : () {
-                    provider.runSync(config.id);
-                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Sync started...')));
-                  },
-                  icon: isSyncing ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.sync),
-                  label: Text(isSyncing ? 'Syncing...' : 'Sync Now'),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        config.localPath.split('/').last.split('\\').last,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        config.localPath,
+                        style: TextStyle(
+                          color: Colors.grey.shade600,
+                          fontSize: 12,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
                 ),
-                ElevatedButton(
-                  onPressed: () {
-                    provider.fetchFileTree(config.projectId);
-                    Scaffold.of(context).openEndDrawer();
-                  },
-                  child: const Text('View Files'),
+                Switch(
+                  value: config.isActive,
+                  onChanged: (value) => provider.updateSyncConfigStatus(config.id, value),
                 ),
-                IconButton(
-                  icon: const Icon(Icons.delete, color: Colors.red),
-                  onPressed: () => provider.deleteSyncConfig(config.id),
-                )
               ],
-            )
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: config.allowedExtensions.map((ext) {
+                return Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.blue.shade50,
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text(
+                    '.$ext',
+                    style: TextStyle(
+                      color: Colors.blue.shade700,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                );
+              }).toList(),
+            ),
+            if (config.lastSynced != null) ...[
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Icon(Icons.access_time, size: 14, color: Colors.grey.shade600),
+                  const SizedBox(width: 4),
+                  Text(
+                    'Last synced: ${config.lastSynced}',
+                    style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
+                  ),
+                ],
+              ),
+            ],
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: FilledButton.icon(
+                    onPressed: isSyncing ? null : () {
+                      provider.runSync(config.id);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Sync started...'),
+                          behavior: SnackBarBehavior.floating,
+                        ),
+                      );
+                    },
+                    icon: isSyncing
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                          )
+                        : const Icon(Icons.sync, size: 18),
+                    label: Text(isSyncing ? 'Syncing...' : 'Sync'),
+                    style: FilledButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: onViewFiles,
+                    icon: const Icon(Icons.visibility, size: 18),
+                    label: const Text('View'),
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                IconButton.filled(
+                  icon: const Icon(Icons.delete_outline, size: 20),
+                  onPressed: () => _showDeleteConfirmation(context, provider, config.id),
+                  style: IconButton.styleFrom(
+                    backgroundColor: Colors.red.shade50,
+                    foregroundColor: Colors.red.shade700,
+                  ),
+                ),
+              ],
+            ),
           ],
         ),
       ),
     );
   }
-}
 
-
-class FileViewerDrawer extends StatelessWidget {
-  const FileViewerDrawer({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return Drawer(
-      width: MediaQuery.of(context).size.width * 0.75, // Take up 75% of screen width
-      child: Consumer<ProjectProvider>(
-        builder: (context, provider, child) {
-          return Column(
-            children: [
-              AppBar(title: const Text('Converted Files'), automaticallyImplyLeading: false),
-              Expanded(
-                flex: 1, // File Tree takes 1/3 of the space
-                child: provider.isLoadingFileTree
-                    ? const Center(child: CircularProgressIndicator())
-                    : provider.fileTree == null
-                        ? const Center(child: Text('Select a project and click "View Files"'))
-                        : FileTreeWidget(tree: provider.fileTree!),
-              ),
-              const Divider(),
-              Expanded(
-                flex: 2, // File Content takes 2/3 of the space
-                child: provider.isLoadingFileContent
-                    ? const Center(child: CircularProgressIndicator())
-                    : FileContentWidget(content: provider.selectedFileContent ?? 'Select a file to view its content.'),
-              )
-            ],
-          );
-        },
+  void _showDeleteConfirmation(BuildContext context, ProjectProvider provider, String configId) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete Sync Configuration?'),
+        content: const Text('This action cannot be undone.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              provider.deleteSyncConfig(configId);
+              Navigator.pop(ctx);
+            },
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            child: const Text('Delete'),
+          ),
+        ],
       ),
     );
   }
 }
-
-class FileTreeWidget extends StatelessWidget {
-  final Map<String, dynamic> tree;
-  const FileTreeWidget({super.key, required this.tree});
-  
-  List<Widget> _buildTree(Map<String, dynamic> subTree, BuildContext context) {
-    final provider = context.read<ProjectProvider>();
-    final List<Widget> widgets = [];
-    final sortedKeys = subTree.keys.toList()..sort();
-
-    for (var key in sortedKeys) {
-      final value = subTree[key];
-      if (value is Map) {
-        // This part is for folders
-        widgets.add(
-          ExpansionTile(
-            leading: const Icon(Icons.folder_outlined, color: Colors.amber),
-            title: Text(key),
-            children: _buildTree(value as Map<String, dynamic>, context),
-          ),
-        );
-      } else if (value is String) {
-        widgets.add(
-          ListTile(
-            leading: const Icon(Icons.article),
-            title: Text(key),
-            onTap: () {
-              provider.fetchFileContent(value);
-            },
-          ),
-        );
-      }
-    }
-    return widgets;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return ListView(
-      children: _buildTree(tree, context),
-    );
-  }
-}
-
-class FileContentWidget extends StatelessWidget {
-  final String content;
-  const FileContentWidget({super.key, required this.content});
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      children: [
-        Align(
-          alignment: Alignment.centerRight,
-          child: IconButton(
-            icon: const Icon(Icons.copy),
-            onPressed: () {
-              Clipboard.setData(ClipboardData(text: content));
-              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Content copied to clipboard')));
-            },
-          ),
-        ),
-        Expanded(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.all(16.0),
-            child: SelectableText(content),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-//testing hello
