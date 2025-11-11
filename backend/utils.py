@@ -6,11 +6,17 @@ import git  # Ensure you have run 'pip install GitPython'
 from git.exc import InvalidGitRepositoryError
 from pathlib import Path
 import hashlib
-from firebase_admin import firestore
+from firebase_admin import firestore, auth
+from collections import OrderedDict
+import time
+from functools import wraps 
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from flask import request, jsonify
 
 TXT_OUTPUT_DIR = Path("converted_txt_projects") # Main output directory
 STRUCTURE_FILE_NAME = "file_structure.json"
 HASH_DB_FILE_NAME = "file_hashes.json"
+DOT_REPLACEMENT = "__DOT__"
 
 # Make sure this path is correct for your system
 try:
@@ -206,5 +212,112 @@ def convert_and_upload_to_firestore(db, project_id, file_path, source_root):
     except Exception as e:
         print(f"    -> FAILED to process {rel_path_str}: {e}")
         return None
+
+def generate_tree_text(root_path: Path, allowed_extensions: list = None, prefix: str = "") -> str:
+    """
+    Recursively generates a tree structure string for a directory,
+    optionally filtering by file extensions and omitting empty directories.
+    """
+    lines = []
+    
+    # Prepare the filter
+    dot_extensions = None
+    if allowed_extensions:
+        dot_extensions = [f".{ext.lstrip('.').lower()}" for ext in allowed_extensions]
+
+    # Get all items in the current directory
+    try:
+        items = sorted(
+            [item for item in root_path.iterdir() if '.git' not in item.parts and '__pycache__' not in item.parts and item.name != '.DS_Store']
+        )
+    except FileNotFoundError:
+        return "" # Directory might have been deleted during sync
+
+    # --- THIS IS THE IMPROVED LOGIC ---
+    # We need to filter the items we're going to display *before* we loop
+    displayable_items = []
+    for item in items:
+        if item.is_dir():
+            # For a directory, we only include it if it will contain matching files
+            # This is a recursive check, so it's accurate.
+            if generate_tree_text(item, allowed_extensions=allowed_extensions):
+                displayable_items.append(item)
+        elif item.is_file():
+            # For a file, we check its extension against the filter
+            if not dot_extensions or item.suffix.lower() in dot_extensions:
+                displayable_items.append(item)
+    # --- END OF IMPROVEMENT ---
+
+    for i, item in enumerate(displayable_items):
+        is_last = (i == len(displayable_items) - 1)
+        connector = "└── " if is_last else "├── "
+        
+        if item.is_dir():
+            lines.append(f"{prefix}{connector}{item.name}/")
+            new_prefix = prefix + ("    " if is_last else "│   ")
+            # The recursive call will now only be on non-empty, relevant directories
+            lines.append(generate_tree_text(item, allowed_extensions=allowed_extensions, prefix=new_prefix))
+        else: # It must be a file
+            lines.append(f"{prefix}{connector}{item.name}")
+
+    return "\n".join(lines)
+
+def token_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        # This check should only run on the actual POST/GET request, not the OPTIONS preflight.
+        # Flask and flask-cors handle this automatically.
+        auth_header = request.headers.get('Authorization')
+        if not auth_header or not auth_header.startswith('Bearer '):
+            return jsonify({'error': 'Authorization header is missing or invalid'}), 401
+        
+        id_token = auth_header.split('Bearer ')[1]
+        
+        try:
+            decoded_token = auth.verify_id_token(id_token)
+            request.user_id = decoded_token['uid']
+        except Exception as e:
+            return jsonify({'error': f'Token verification failed: {e}'}), 401
+
+        return f(*args, **kwargs)
+    return decorated_function
+
+# cache
+class SimpleL1Cache:
+    def __init__(self, max_size=256, ttl=10):
+        """
+        A simple in-memory LRU (Least Recently Used) cache.
+        :param max_size: The maximum number of items to store.
+        :param ttl: Time-to-live in seconds for each item.
+        """
+        self.cache = OrderedDict()
+        self.max_size = max_size
+        self.ttl = ttl
+
+    def get(self, key):
+        if key not in self.cache:
+            return None
+        
+        value, expiry = self.cache[key]
+        
+        # Check if the item has expired
+        if time.time() > expiry:
+            del self.cache[key]
+            return None
+            
+        # Move the item to the end to mark it as recently used
+        self.cache.move_to_end(key)
+        return value
+
+    def set(self, key, value):
+        # Check if we need to make space
+        if len(self.cache) >= self.max_size:
+            # Remove the oldest item
+            self.cache.popitem(last=False)
+            
+        expiry = time.time() + self.ttl
+        self.cache[key] = (value, expiry)
+
+L1_CACHE = SimpleL1Cache(max_size=512, ttl=20) # Store 512 items for 20 seconds
 
         

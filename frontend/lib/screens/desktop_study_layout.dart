@@ -216,7 +216,7 @@ class _DesktopStudyLayoutState extends State<DesktopStudyLayout> {
                 // Create a list of items: "Project Overview" + all sources
                 items: [
                   buildDropdownItem(null), // The "Project Overview" option
-                  ...p.sources.map((s) => buildDropdownItem(s)).toList(),
+                  ...p.sources.map((s) => buildDropdownItem(s)),
                 ],
                 onChanged: (Source? source) {
                   // When a new source is selected, call the provider method

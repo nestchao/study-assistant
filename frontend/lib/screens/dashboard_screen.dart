@@ -9,6 +9,7 @@ import 'package:study_assistance/models/project.dart';
 import 'package:flutter/services.dart';
 import 'package:study_assistance/widgets/auth_wrapper.dart';
 import 'package:study_assistance/screens/code_sync_screen.dart';
+import 'package:study_assistance/screens/local_converter_screen.dart'; 
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -222,6 +223,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
               },
               tooltip: 'Code Sync Service',
             ),
+          IconButton(
+            icon: const Icon(Icons.transform_rounded),
+            onPressed: () {
+              Navigator.of(context).push(MaterialPageRoute(builder: (_) => const LocalConverterScreen()));
+            },
+            tooltip: 'Local Code Converter',
+          ),
         ],
       ),
       body: Consumer<ProjectProvider>(
