@@ -56,7 +56,7 @@ class _CodeSyncScreenState extends State<CodeSyncScreen> {
                       const Text("Please create a project first.", style: TextStyle(color: Colors.red))
                     else
                       DropdownButtonFormField<Project>(
-                        value: selectedProject,
+                        initialValue: selectedProject,
                         decoration: const InputDecoration(labelText: 'Associate with Project'),
                         items: provider.projects.map((Project project) {
                           return DropdownMenuItem<Project>(
