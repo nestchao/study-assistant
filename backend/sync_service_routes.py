@@ -28,131 +28,161 @@ def perform_sync(config_id: str, config_data: dict):
     project_id = config_data.get('project_id')
     source_dir = config_data.get('local_path')
     extensions = config_data.get('allowed_extensions', [])
-    
-    # --- WRAP THE ENTIRE FUNCTION IN A try...except BLOCK ---
+
     try:
-        print("\n" + "="*50)
-        print(f"SYNC-SERVICE: Starting sync for config_id: {config_id}")
-        
+        print("\n" + "="*60)
+        print(f"SYNC-SERVICE: Starting sync – config_id: {config_id}")
+
         source_path = Path(source_dir)
         if not source_path.is_dir():
             raise FileNotFoundError(f"Source directory not found: {source_dir}")
 
         logs = []
-        updated_count = 0
-        deleted_count = 0
-        
+        updated_count = deleted_count = 0
+
+        # ------------------------------------------------------------------
+        # 0. Mark as syncing
+        # ------------------------------------------------------------------
         config_ref = db.collection(CONFIG_COLLECTION).document(config_id)
         config_ref.update({'status': 'syncing'})
-        print(f"SYNC-SERVICE: Status updated to 'syncing' for {config_id}")
 
-        # 1. READ ONCE: Get the manifest
-        print("SYNC-SERVICE: Step 1/5 - Reading manifest from Firestore...")
-        manifest_ref = db.collection('projects').document(project_id).collection('converted_files').document('_manifest')
+        # ------------------------------------------------------------------
+        # 1. READ manifest
+        # ------------------------------------------------------------------
+        manifest_ref = db.collection('projects') \
+                         .document(project_id) \
+                         .collection('converted_files') \
+                         .document('_manifest')
         manifest_doc = manifest_ref.get()
         files_in_db = manifest_doc.to_dict().get('files', {}) if manifest_doc.exists else {}
-        print(f"SYNC-SERVICE: Found {len(files_in_db)} files in existing manifest.")
 
-        # 2. Filter local files
-        print("SYNC-SERVICE: Step 2/5 - Scanning and filtering local files...")
-        all_local_files = [f for f in source_path.rglob("*") if f.is_file() and '.git' not in f.parts]
-        dot_extensions = [f".{ext.lstrip('.').lower()}" for ext in extensions] if extensions else None
-        files_to_process = [f for f in all_local_files if not dot_extensions or f.suffix.lower() in dot_extensions]
-        print(f"SYNC-SERVICE: Found {len(files_to_process)} local files to process.")
-        
-        # 3. Process local files for updates/creations
-        print("SYNC-SERVICE: Step 3/5 - Comparing hashes and processing updates...")
+        # ------------------------------------------------------------------
+        # 2. Scan local files
+        # ------------------------------------------------------------------
+        all_local_files = [f for f in source_path.rglob("*")
+                          if f.is_file() and '.git' not in f.parts]
+        dot_ext = [f".{e.lstrip('.').lower()}" for e in extensions] if extensions else None
+        files_to_process = [f for f in all_local_files
+                           if not dot_ext or f.suffix.lower() in dot_ext]
+
+        # ------------------------------------------------------------------
+        # 3. UPDATE / CREATE
+        # ------------------------------------------------------------------
         processed_paths = set()
-        manifest_has_changed = False
-
         for file_path in files_to_process:
-            rel_path_str = str(file_path.relative_to(source_path)).replace('\\', '/')
-            processed_paths.add(rel_path_str)
+            rel_path = str(file_path.relative_to(source_path)).replace('\\', '/')
+            processed_paths.add(rel_path)
 
-            current_hash = get_file_hash(file_path)
-            db_hash = files_in_db.get(rel_path_str, {}).get('hash')
+            local_hash = get_file_hash(file_path)
+            db_hash    = files_in_db.get(rel_path, {}).get('hash')
 
-            if current_hash != db_hash:
-                logs.append(f"UPDATE: {rel_path_str}")
-                uploaded_hash = convert_and_upload_to_firestore(db, project_id, file_path, source_path)
-                if uploaded_hash:
+            if local_hash != db_hash:
+                logs.append(f"UPDATE: {rel_path}")
+                result = convert_and_upload_to_firestore(db, project_id, file_path, source_path)
+                if result:
+                    uploaded_hash, doc_id = result
+                    files_in_db[rel_path] = {'hash': uploaded_hash, 'doc_id': doc_id}
                     updated_count += 1
-                    doc_id = get_converted_file_ref(db, project_id, rel_path_str).id
-                    files_in_db[rel_path_str] = {'hash': uploaded_hash, 'doc_id': doc_id}
-                    manifest_has_changed = True
-        print(f"SYNC-SERVICE: Processed {len(files_to_process)} local files. {updated_count} updates found.")
-        
-        # 4. Process deletions
-        print("SYNC-SERVICE: Step 4/5 - Checking for deleted files...")
-        db_paths_to_consider = {path for path in files_in_db if not dot_extensions or Path(path).suffix.lower() in dot_extensions}
-        paths_to_delete = db_paths_to_consider - processed_paths
-        
-        for path_to_delete in paths_to_delete:
-            logs.append(f"DELETE: {path_to_delete}")
-            doc_id_to_delete = files_in_db[path_to_delete].get('doc_id')
-            if doc_id_to_delete:
-                db.collection('projects').document(project_id).collection('converted_files').document(doc_id_to_delete).delete()
-            
-            del files_in_db[path_to_delete]
+
+        # ------------------------------------------------------------------
+        # 4. DELETE
+        # ------------------------------------------------------------------
+        db_paths = {p for p in files_in_db
+                    if not dot_ext or Path(p).suffix.lower() in dot_ext}
+        to_delete = db_paths - processed_paths
+
+        for p in to_delete:
+            logs.append(f"DELETE: {p}")
+            doc_id = files_in_db[p].get('doc_id')
+            if doc_id:
+                db.collection('projects').document(project_id) \
+                  .collection('converted_files').document(doc_id).delete()
+            del files_in_db[p]
             deleted_count += 1
-            manifest_has_changed = True
-        print(f"SYNC-SERVICE: Found {deleted_count} files to delete.")
 
-        # 5. WRITE ONCE: Update the manifest
-        print("SYNC-SERVICE: Step 5/5 - Updating manifest...")
-        if manifest_has_changed:
-            manifest_payload = {'files': files_in_db, 'last_updated': firestore.SERVER_TIMESTAMP}
+        # ------------------------------------------------------------------
+        # 5. WRITE MANIFEST (ALWAYS if we touched anything)
+        # ------------------------------------------------------------------
+        manifest_changed = bool(updated_count or deleted_count or files_to_process)
+        if manifest_changed:
+            payload = {
+                'files': files_in_db,
+                'last_updated': firestore.SERVER_TIMESTAMP
+            }
             if manifest_doc.exists:
-                manifest_ref.update(manifest_payload)
+                manifest_ref.update(payload)
             else:
-                manifest_ref.set(manifest_payload)
-            print("SYNC-SERVICE: ✅ Manifest updated successfully.")
+                manifest_ref.set(payload)
+            print("SYNC-SERVICE: Manifest written.")
         else:
-            print("SYNC-SERVICE: No changes to manifest needed.")
+            print("SYNC-SERVICE: Nothing to sync – manifest untouched.")
 
-        # (Logic for generating tree.txt is omitted for now to isolate the bug, you can add it back later)
+        # ------------------------------------------------------------------
+        # 6. SPECIAL FILES (tree.txt + _full_context.txt) – ONLY if we have files
+        # ------------------------------------------------------------------
+        if files_in_db:
+            try:
+                # ----- tree.txt -----
+                tree_txt = f"{source_path.name}/\n" + generate_tree_text(source_path, allowed_extensions=extensions)
+                db.collection('projects').document(project_id) \
+                  .collection('converted_files').document('project_tree_txt') \
+                  .set({
+                      'original_path': 'tree.txt',
+                      'content': tree_txt,
+                      'hash': hashlib.sha256(tree_txt.encode('utf-8')).hexdigest(),
+                      'timestamp': firestore.SERVER_TIMESTAMP,
+                  })
 
-        print(f"SYNC-SERVICE: 🏁 Sync complete: {updated_count} updated, {deleted_count} deleted")
+                # ----- _full_context.txt -----
+                chunks = []
+                for rel_path, meta in files_in_db.items():
+                    doc_id = meta.get('doc_id')
+                    if not doc_id:
+                        logs.append(f"WARN: No doc_id for {rel_path}")
+                        continue
+                    doc = db.collection('projects').document(project_id) \
+                            .collection('converted_files').document(doc_id).get()
+                    if doc.exists:
+                        chunks.append(f"--- FILE: {rel_path} ---\n\n{doc.to_dict().get('content','')}\n\n")
+                    else:
+                        logs.append(f"WARN: Missing doc {doc_id} for {rel_path}")
+
+                full_txt = "".join(chunks)
+                db.collection('projects').document(project_id) \
+                  .collection('converted_files').document('project_full_context_txt') \
+                  .set({
+                      'original_path': '_full_context.txt',
+                      'content': full_txt,
+                      'hash': hashlib.sha256(full_txt.encode('utf-8')).hexdigest(),
+                      'timestamp': firestore.SERVER_TIMESTAMP,
+                  })
+                print("SYNC-SERVICE: Special files generated.")
+            except Exception as e:
+                logs.append(f"ERROR special files: {e}")
+                raise   # <-- fail the whole sync
+
+        # ------------------------------------------------------------------
+        # 7. FINISH
+        # ------------------------------------------------------------------
+        print(f"SYNC-SERVICE: Sync complete – {updated_count} updated, {deleted_count} deleted")
         config_ref.update({'status': 'idle', 'last_synced': firestore.SERVER_TIMESTAMP})
-
-        try:
-            print("SYNC-SERVICE: Step 6/6 - Generating and saving tree.txt...")
-            tree_content = f"{source_path.name}/\n"
-            tree_content += generate_tree_text(source_path, allowed_extensions=extensions)
-            
-            # Use a predictable ID for the tree document
-            tree_doc_ref = db.collection('projects').document(project_id).collection('converted_files').document('project_tree_txt')
-            
-            tree_doc_ref.set({
-                'original_path': 'tree.txt',
-                'content': tree_content,
-                'hash': hashlib.sha256(tree_content.encode('utf-8')).hexdigest(),
-                'timestamp': firestore.SERVER_TIMESTAMP,
-            })
-            print("SYNC-SERVICE: ✅ Saved tree.txt to Firestore.")
-        except Exception as tree_error:
-            print(f"SYNC-SERVICE: ❌ Failed to generate tree.txt: {tree_error}")
-            logs.append(f"ERROR: Failed to generate file tree: {tree_error}")
-        
         return {"logs": logs, "updated": updated_count, "deleted": deleted_count}
 
     except Exception as e:
-        # --- THIS WILL CATCH THE ERROR AND PRINT A DETAILED TRACEBACK ---
-        print("\n" + "!"*50)
-        print("‼️  CRITICAL ERROR INSIDE perform_sync  ‼️")
-        print(f"Error Type: {type(e).__name__}")
-        print(f"Error Details: {e}")
-        print("Full Traceback:")
+        # ------------------------------------------------------------------
+        # GLOBAL ERROR HANDLER
+        # ------------------------------------------------------------------
+        print("\n" + "!"*60)
+        print("CRITICAL ERROR IN perform_sync")
+        print(f"Type: {type(e).__name__} | Msg: {e}")
+        import traceback
         print(traceback.format_exc())
-        print("!"*50 + "\n")
-        
-        # Try to update the config status to 'error'
+        print("!"*60 + "\n")
+
         try:
             config_ref.update({'status': 'error'})
-        except Exception as status_update_error:
-            print(f"  - Also failed to update config status to 'error': {status_update_error}")
-        
-        # Re-raise the exception so the route handler still returns a 500
+        except Exception:
+            pass
         raise
 
 # --- ROUTES FOR CRUD ON SYNC CONFIGURATIONS ---
@@ -231,17 +261,57 @@ def delete_config(config_id):
 @sync_service_bp.route('/sync/run/<config_id>', methods=['POST'])
 def run_sync_route(config_id):
     try:
+        # 1. Fetch the configuration for this sync job from Firestore.
         config_doc = db.collection(CONFIG_COLLECTION).document(config_id).get()
         if not config_doc.exists:
-            return jsonify({"error": "Configuration not found"}), 404
+            return jsonify({"error": "Sync configuration not found"}), 404
         
         config_data = config_doc.to_dict()
         if not config_data.get('is_active'):
             return jsonify({"message": "Sync is disabled for this configuration."}), 200
 
+        # 2. Call the main logic function with the fetched data.
         result = perform_sync(config_id, config_data)
+        
+        # 3. Return the results from the sync operation.
         return jsonify({"success": True, **result})
 
     except Exception as e:
+        # This will catch any crashes from perform_sync and log them.
         import traceback
+        print("="*50)
+        print(f"‼️  CRITICAL ERROR in run_sync_route for config_id: {config_id} ‼️")
+        print(traceback.format_exc())
+        print("="*50)
         return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+def _generate_special_files(db, project_id, source_path, extensions, files_in_db):
+    # 1. tree.txt
+    tree_content = f"{source_path.name}/\n" + generate_tree_text(source_path, allowed_extensions=extensions)
+    db.collection('projects').document(project_id) \
+      .collection('converted_files').document('project_tree_txt').set({
+          'original_path': 'tree.txt',
+          'content': tree_content,
+          'hash': hashlib.sha256(tree_content.encode('utf-8')).hexdigest(),
+          'timestamp': firestore.SERVER_TIMESTAMP,
+      })
+
+    # 2. _full_context.txt – **only from the in-memory manifest**
+    full = []
+    for rel_path, info in files_in_db.items():
+        doc_id = info.get('doc_id')
+        if not doc_id:
+            continue
+        doc = db.collection('projects').document(project_id) \
+                .collection('converted_files').document(doc_id).get()
+        if doc.exists:
+            full.append(f"--- FILE: {rel_path} ---\n\n{doc.to_dict().get('content','')}\n\n")
+
+    full_txt = "".join(full)
+    db.collection('projects').document(project_id) \
+      .collection('converted_files').document('project_full_context_txt').set({
+          'original_path': '_full_context.txt',
+          'content': full_txt,
+          'hash': hashlib.sha256(full_txt.encode('utf-8')).hexdigest(),
+          'timestamp': firestore.SERVER_TIMESTAMP,
+      })

@@ -111,7 +111,15 @@ class FileTreeWidget extends StatelessWidget {
             title: Text(key, style: const TextStyle(fontSize: 13)),
             contentPadding: EdgeInsets.only(left: 28.0 + (depth * 12), right: 16),
             dense: true,
-            onTap: () => provider.fetchFileContent(value),
+            onTap: () {
+              // --- THIS IS THE FIX ---
+              // 1. Clear the chat history for the previous file.
+              provider.clearCodeSuggestionHistory();
+              
+              // 2. Fetch the content for the NEW file.
+              provider.fetchFileContent(value);
+              // --- END OF FIX ---
+            },
           ),
         );
       }
@@ -384,17 +392,6 @@ class FileViewerPanel extends StatefulWidget {
 }
 
 class _FileViewerPanelState extends State<FileViewerPanel> {
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    // Clear chat history when a new file is selected
-    final provider = context.watch<ProjectProvider>();
-    if (provider.selectedFileContent != null) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        provider.clearCodeSuggestionHistory();
-      });
-    }
-  }
 
   @override
   Widget build(BuildContext context) {

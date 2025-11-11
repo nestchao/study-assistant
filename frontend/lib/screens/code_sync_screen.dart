@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:study_assistance/provider/project_provider.dart';
 import 'package:study_assistance/models/sync_config.dart';
-import 'package:study_assistance/models/project.dart';
 import 'package:study_assistance/screens/code_sync_desktop_layout.dart';
 import 'package:study_assistance/screens/code_sync_mobile_layout.dart';
 
@@ -16,6 +15,7 @@ class CodeSyncScreen extends StatefulWidget {
 
 class _CodeSyncScreenState extends State<CodeSyncScreen> with SingleTickerProviderStateMixin {
   late TabController _tabController;
+  final _projectNameController = TextEditingController();
   final _pathController = TextEditingController();
   final _extensionsController = TextEditingController();
 
@@ -33,6 +33,7 @@ class _CodeSyncScreenState extends State<CodeSyncScreen> with SingleTickerProvid
   @override
   void dispose() {
     _tabController.dispose();
+    _projectNameController.dispose();
     _pathController.dispose();
     _extensionsController.dispose();
     super.dispose();
@@ -40,10 +41,9 @@ class _CodeSyncScreenState extends State<CodeSyncScreen> with SingleTickerProvid
   
   void _showRegisterDialog() {
     final provider = Provider.of<ProjectProvider>(context, listen: false);
+    _projectNameController.clear();
     _pathController.clear();
     _extensionsController.clear();
-
-    Project? selectedProject = provider.projects.isNotEmpty ? provider.projects.first : null;
 
     showDialog(
       context: context,
@@ -55,134 +55,183 @@ class _CodeSyncScreenState extends State<CodeSyncScreen> with SingleTickerProvid
               child: Container(
                 constraints: const BoxConstraints(maxWidth: 500),
                 padding: const EdgeInsets.all(24),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(8),
-                          decoration: BoxDecoration(
-                            color: Theme.of(context).primaryColor.withOpacity(0.1),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Icon(Icons.folder_open, color: Theme.of(context).primaryColor),
-                        ),
-                        const SizedBox(width: 12),
-                        const Expanded(
-                          child: Text(
-                            'Register Folder to Sync',
-                            style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-                          ),
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.close),
-                          onPressed: () => Navigator.pop(dialogContext),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 24),
-                    if (provider.projects.isEmpty)
-                      Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: Colors.red.shade50,
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: Colors.red.shade200),
-                        ),
-                        child: Row(
-                          children: [
-                            Icon(Icons.warning_amber_rounded, color: Colors.red.shade700),
-                            const SizedBox(width: 8),
-                            const Expanded(
-                              child: Text(
-                                "Please create a project first.",
-                                style: TextStyle(color: Colors.red),
-                              ),
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: Theme.of(context).primaryColor.withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(8),
                             ),
-                          ],
+                            child: Icon(Icons.folder_open, color: Theme.of(context).primaryColor),
+                          ),
+                          const SizedBox(width: 12),
+                          const Expanded(
+                            child: Text(
+                              'Register New Project',
+                              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.close),
+                            onPressed: () => Navigator.pop(dialogContext),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Create a new project and sync a folder',
+                        style: TextStyle(
+                          color: Colors.grey.shade600,
+                          fontSize: 14,
                         ),
-                      )
-                    else
-                      DropdownButtonFormField<Project>(
-                        value: selectedProject,
+                      ),
+                      const SizedBox(height: 24),
+                      
+                      // NEW: Project Name Field
+                      TextField(
+                        controller: _projectNameController,
                         decoration: InputDecoration(
-                          labelText: 'Project',
+                          labelText: 'Project Name',
+                          hintText: 'My Awesome Project',
                           prefixIcon: const Icon(Icons.folder_special),
                           border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                           filled: true,
+                          helperText: 'This will be the name of your new project',
                         ),
-                        items: provider.projects.map((Project project) {
-                          return DropdownMenuItem<Project>(
-                            value: project,
-                            child: Text(project.name),
-                          );
-                        }).toList(),
-                        onChanged: (Project? newValue) {
-                          setDialogState(() {
-                            selectedProject = newValue;
-                          });
-                        },
+                        textCapitalization: TextCapitalization.words,
                       ),
-                    const SizedBox(height: 16),
-                    TextField(
-                      controller: _pathController,
-                      decoration: InputDecoration(
-                        labelText: 'Folder Path',
-                        hintText: 'C:/Projects/MyApp',
-                        prefixIcon: const Icon(Icons.create_new_folder),
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                        filled: true,
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    TextField(
-                      controller: _extensionsController,
-                      decoration: InputDecoration(
-                        labelText: 'File Extensions',
-                        hintText: 'py, dart, kt, java',
-                        prefixIcon: const Icon(Icons.code),
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                        filled: true,
-                        helperText: 'Comma-separated list of file types',
-                      ),
-                    ),
-                    const SizedBox(height: 24),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.end,
-                      children: [
-                        TextButton(
-                          onPressed: () => Navigator.pop(dialogContext),
-                          child: const Text('Cancel'),
+                      const SizedBox(height: 16),
+                      
+                      TextField(
+                        controller: _pathController,
+                        decoration: InputDecoration(
+                          labelText: 'Folder Path',
+                          hintText: 'C:/Projects/MyApp',
+                          prefixIcon: const Icon(Icons.create_new_folder),
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                          filled: true,
                         ),
-                        const SizedBox(width: 8),
-                        FilledButton.icon(
-                          onPressed: selectedProject == null ? null : () async {
-                            final path = _pathController.text.trim();
-                            final extensions = _extensionsController.text
-                                .split(',')
-                                .map((e) => e.trim())
-                                .where((e) => e.isNotEmpty)
-                                .toList();
-                            
-                            final projectId = selectedProject!.id;
+                      ),
+                      const SizedBox(height: 16),
+                      TextField(
+                        controller: _extensionsController,
+                        decoration: InputDecoration(
+                          labelText: 'File Extensions',
+                          hintText: 'py, dart, kt, java',
+                          prefixIcon: const Icon(Icons.code),
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                          filled: true,
+                          helperText: 'Comma-separated list of file types',
+                        ),
+                      ),
+                      const SizedBox(height: 24),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(dialogContext),
+                            child: const Text('Cancel'),
+                          ),
+                          const SizedBox(width: 8),
+                          FilledButton.icon(
+                            onPressed: () async {
+                              final projectName = _projectNameController.text.trim();
+                              final path = _pathController.text.trim();
+                              final extensions = _extensionsController.text
+                                  .split(',')
+                                  .map((e) => e.trim())
+                                  .where((e) => e.isNotEmpty)
+                                  .toList();
 
-                            if (path.isNotEmpty) {
-                              try {
-                                await provider.registerSyncConfig(projectId, path, extensions);
-                                Navigator.pop(dialogContext);
-                              } catch (e) {
-                                // Error handling
+                              // Validation
+                              if (projectName.isEmpty) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text('Please enter a project name'),
+                                    behavior: SnackBarBehavior.floating,
+                                  ),
+                                );
+                                return;
                               }
-                            }
-                          },
-                          icon: const Icon(Icons.add),
-                          label: const Text('Register'),
-                        ),
-                      ],
-                    ),
-                  ],
+
+                              if (path.isEmpty) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text('Please enter a folder path'),
+                                    behavior: SnackBarBehavior.floating,
+                                  ),
+                                );
+                                return;
+                              }
+
+                              try {
+                                // Show loading indicator
+                                showDialog(
+                                  context: dialogContext,
+                                  barrierDismissible: false,
+                                  builder: (ctx) => const Center(
+                                    child: Card(
+                                      child: Padding(
+                                        padding: EdgeInsets.all(24.0),
+                                        child: Column(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            CircularProgressIndicator(),
+                                            SizedBox(height: 16),
+                                            Text('Creating project and registering folder...'),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                );
+
+                                // Call the new combined method
+                                await provider.createProjectAndRegisterSync(
+                                  projectName,
+                                  path,
+                                  extensions,
+                                );
+
+                                // Close loading dialog
+                                Navigator.pop(dialogContext);
+                                // Close register dialog
+                                Navigator.pop(dialogContext);
+
+                                // Show success message
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text('✅ Project "$projectName" created and synced!'),
+                                    behavior: SnackBarBehavior.floating,
+                                    backgroundColor: Colors.green,
+                                  ),
+                                );
+                              } catch (e) {
+                                // Close loading dialog if it's open
+                                Navigator.pop(dialogContext);
+                                
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text('❌ Error: ${e.toString()}'),
+                                    behavior: SnackBarBehavior.floating,
+                                    backgroundColor: Colors.red,
+                                  ),
+                                );
+                              }
+                            },
+                            icon: const Icon(Icons.add),
+                            label: const Text('Create & Register'),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
                 ),
               ),
             );

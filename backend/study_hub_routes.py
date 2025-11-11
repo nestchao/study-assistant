@@ -500,9 +500,9 @@ def regenerate_note(project_id, source_id):
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
-@study_hub_bp.route('/generate-code-suggestion', methods=['POST'])
+@study_hub_bp.route('/generate-code-suggestion', methods=['POST']) # <-- CHANGED from sync_service_bp
 @token_required
-def generate_code_suggestion(): # You can keep the function name or change it too, it doesn't matter
+def generate_code_suggestion():
     data = request.json
     project_id = data.get('project_id')
     extensions = data.get('extensions', [])
@@ -523,13 +523,15 @@ def generate_code_suggestion(): # You can keep the function name or change it to
         print("  - Building project context from Firestore...")
         docs = db.collection('projects').document(project_id).collection('converted_files').stream()
         dot_extensions = [f".{ext.lstrip('.').lower()}" for ext in extensions] if extensions else None
+
+        special_files_to_ignore = {'_full_context.txt'}
         
         for doc in docs:
             file_data = doc.to_dict()
             original_path = file_data.get('original_path', '')
             
             # Don't include the tree.txt file in the context
-            if original_path == 'tree.txt':
+            if original_path in special_files_to_ignore:
                 continue
             
             if not dot_extensions or Path(original_path).suffix.lower() in dot_extensions:
