@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:study_assistance/provider/project_provider.dart';
 import 'package:study_assistance/models/sync_config.dart';
+import 'package:study_assistance/models/project.dart';
 
 class CodeSyncScreen extends StatefulWidget {
   const CodeSyncScreen({super.key});
@@ -36,44 +37,78 @@ class _CodeSyncScreenState extends State<CodeSyncScreen> {
     _pathController.clear();
     _extensionsController.clear();
 
+    Project? selectedProject = provider.projects.isNotEmpty ? provider.projects.first : null;
+
     showDialog(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Register Folder to Sync'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: _pathController,
-              decoration: const InputDecoration(labelText: 'Absolute Folder Path', hintText: 'C:/Users/YourUser/Project'),
-            ),
-            TextField(
-              controller: _extensionsController,
-              decoration: const InputDecoration(labelText: 'File Extensions (comma-separated)', hintText: 'py, dart, kt, md'),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Cancel')),
-          ElevatedButton(
-            onPressed: () async {
-              final path = _pathController.text.trim();
-              final extensions = _extensionsController.text.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
-              final projectId = provider.currentProject?.id;
+      builder: (dialogContext) {
+        // Use a StatefulWidget to manage the dropdown's state
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: const Text('Register Folder to Sync'),
+              content: SingleChildScrollView( // Use a scroll view for smaller screens
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // --- NEW: PROJECT SELECTOR DROPDOWN ---
+                    if (provider.projects.isEmpty)
+                      const Text("Please create a project first.", style: TextStyle(color: Colors.red))
+                    else
+                      DropdownButtonFormField<Project>(
+                        initialValue: selectedProject,
+                        decoration: const InputDecoration(labelText: 'Associate with Project'),
+                        items: provider.projects.map((Project project) {
+                          return DropdownMenuItem<Project>(
+                            value: project,
+                            child: Text(project.name),
+                          );
+                        }).toList(),
+                        onChanged: (Project? newValue) {
+                          setDialogState(() {
+                            selectedProject = newValue;
+                          });
+                        },
+                      ),
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: _pathController,
+                      decoration: const InputDecoration(labelText: 'Absolute Folder Path', hintText: 'C:/...'),
+                    ),
+                    TextField(
+                      controller: _extensionsController,
+                      decoration: const InputDecoration(labelText: 'File Extensions (comma-separated)', hintText: 'py, dart, kt'),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Cancel')),
+                ElevatedButton(
+                  // Disable button if no project is selected
+                  onPressed: selectedProject == null ? null : () async {
+                    final path = _pathController.text.trim();
+                    final extensions = _extensionsController.text.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+                    
+                    // Use the projectId from the dropdown, not the global provider state
+                    final projectId = selectedProject!.id;
 
-              if (path.isNotEmpty && projectId != null) {
-                try {
-                  await provider.registerSyncConfig(projectId, path, extensions);
-                  Navigator.pop(dialogContext);
-                } catch (e) {
-                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red));
-                }
-              }
-            },
-            child: const Text('Register'),
-          ),
-        ],
-      ),
+                    if (path.isNotEmpty) {
+                      try {
+                        await provider.registerSyncConfig(projectId, path, extensions);
+                        Navigator.pop(dialogContext);
+                      } catch (e) {
+                        // ... error handling
+                      }
+                    }
+                  },
+                  child: const Text('Register'),
+                ),
+              ],
+            );
+          },
+        );
+      },
     );
   }
 

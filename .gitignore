@@ -78,3 +78,9 @@ desktop.ini
 
 # Linux
 *~
+
+# Log files
+*.log
+npm-debug.log*
+yarn-error.log
+# ... other log files

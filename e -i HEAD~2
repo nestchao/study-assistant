@@ -1,0 +1,334 @@
+[33mcommit 3dbbe0489895738fbb87d6c5131a35d5d3f029cb[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mCalaweh[m[33m)[m
+Author: Calaweh <weelikhui@gmail.com>
+Date:   Mon Nov 10 00:28:14 2025 +0800
+
+    feat: Add new features (secret removed)
+
+[33mcommit 9fd8c57b123d083bc0733eb3d08aaeec35a7ee71[m
+Author: Calaweh <weelikhui@gmail.com>
+Date:   Mon Nov 10 00:21:16 2025 +0800
+
+    fix bugs
+
+[33mcommit cce96d6f2a5304e1c39185da5031d81015d47621[m[33m ([m[1;31morigin/Calaweh[m[33m)[m
+Author: Calaweh <weelikhui@gmail.com>
+Date:   Sat Nov 8 14:40:43 2025 +0800
+
+    update
+
+[33mcommit 3b4fbb3ee8b827f420c77993636a711753ffa294[m
+Author: Calaweh <weelikhui@gmail.com>
+Date:   Sat Nov 8 14:40:31 2025 +0800
+
+    update .gitignore
+
+[33mcommit 324b0056195e31d55a61c6071754c5e2f4a131ec[m
+Author: Calaweh <weelikhui@gmail.com>
+Date:   Sat Nov 8 14:36:57 2025 +0800
+
+    git ignore update
+
+[33mcommit 96b8f07ef171889cb88b4d5c055bf2df4e69ce95[m
+Merge: 609f1b4 e81e3ae
+Author: Calaweh <weelikhui@gmail.com>
+Date:   Sat Nov 8 14:34:58 2025 +0800
+
+    Merge branch 'main' into Calaweh
+
+[33mcommit e81e3aedb0fa56ffd975fe1bbe3e9603a82b8c3e[m[33m ([m[1;32mmain[m[33m)[m
+Merge: 224607d 220b886
+Author: nestchao <nestchao14@gmail.com>
+Date:   Sat Nov 8 12:00:42 2025 +0800
+
+    Merge pull request #11 from nestchao/nestchao
+    
+    Nestchao
+
+[33mcommit 220b886a9e6ed9a566ecb3629818681e33e6018d[m
+Merge: 0b1a1ff 224607d
+Author: nestchao <nestchao14@gmail.com>
+Date:   Sat Nov 8 11:59:22 2025 +0800
+
+    feat: Add PaperSolverView for analyzing past papers and displaying solutions
+    
+    - Implemented PaperSolverView with options for text-only and full analysis of uploaded papers.
+    - Added loading indicators and error handling for paper uploads.
+    - Created responsive layouts for mobile and desktop views of solved papers.
+    - Enhanced UI with improved dialog for analysis method selection and empty state handling.
+    - Refactored workspace_screen.dart to remove unused code and improve organization.
+    - Updated SourceTile to enhance visual feedback during selection.
+
+[33mcommit 609f1b4e3aa5ad5e5f38f2d1c4fb844fe3d4db57[m
+Author: Calaweh <weelikhui@gmail.com>
+Date:   Sat Nov 8 11:40:47 2025 +0800
+
+    better coding func
+
+[33mcommit 0b1a1ff5474101ba0218d36614ca7991c8416c83[m
+Author: nestchao <nestchao14@gmail.com>
+Date:   Fri Nov 7 14:09:16 2025 +0800
+
+    fix: update model reference to use 'gemini-2.5-flash-lite'
+
+[33mcommit 224607d05411f591b55a204774277acc19e24f8d[m
+Merge: 2a30afb b7c14cf
+Author: Calaweh <weelikhui@gmail.com>
+Date:   Fri Nov 7 13:49:14 2025 +0800
+
+    Merge pull request #10 from nestchao/Calaweh
+    
+    Calaweh
+
+[33mcommit b7c14cf8b99c6c54676261d33d453bcbb1ad8f26[m
+Author: Calaweh <weelikhui@gmail.com>
+Date:   Fri Nov 7 13:48:46 2025 +0800
+
+    fix button clr error
+
+[33mcommit 8f3a461dc12d090b113a15fd613bf7fa8d3c7d68[m
+Author: Calaweh <weelikhui@gmail.com>
+Date:   Fri Nov 7 11:41:22 2025 +0800
+
+    separate func to different file, yeah
+
+[33mcommit 337bd9f13556e4f55e7bb18c30761c06c2379125[m
+Author: Calaweh <weelikhui@gmail.com>
+Date:   Fri Nov 7 10:49:44 2025 +0800
+
+    better backend architecture
+    (separate func to different file only hh
+
+[33mcommit 2a30afbf6ed395c6d6d99935c61c81a38bfca24e[m
+Merge: f964efc fc6f6da
+Author: Calaweh <weelikhui@gmail.com>
+Date:   Wed Nov 5 23:28:44 2025 +0800
+
+    Merge pull request #9 from nestchao/Calaweh
+    
+    Calaweh
+
+[33mcommit fc6f6dac8bf78dddd5ca49d02be36b9a9dad2b9a[m
+Author: Calaweh <weelikhui@gmail.com>
+Date:   Wed Nov 5 23:28:13 2025 +0800
+
+    fix merge problem
+
+[33mcommit 43dddbdf543914ca7540ab8286eddb1e49c6f196[m
+Merge: 246cbe4 f964efc
+Author: Calaweh <weelikhui@gmail.com>
+Date:   Wed Nov 5 19:25:31 2025 +0800
+
+    Merge branch 'main' of https://github.com/nestchao/study-assistant into Calaweh
+    
+    # Conflicts:
+    #       frontend/lib/provider/project_provider.dart
+    #       frontend/lib/screens/workspace_screen.dart
+    #       frontend/macos/Flutter/GeneratedPluginRegistrant.swift
+    #       frontend/pubspec.lock
+
+[33mcommit 246cbe493326b3762d9b67f87933f1dfa10a79bf[m
+Author: Calaweh <weelikhui@gmail.com>
+Date:   Wed Nov 5 19:21:30 2025 +0800
+
+    feat: Update CORS policy
+    
+    Enable 'X-User-ID' and 'Content-Type' in allowed headers and expose 'Content-Disposition' header.
+
+[33mcommit 224f29879b9a4861b6459dbf3c822c2a24e2a4a0[m
+Author: Calaweh <weelikhui@gmail.com>
+Date:   Wed Nov 5 19:21:21 2025 +0800
+
+    feat: Add Firestore image caching and widget
+    
+    Refactors image handling by introducing a dedicated `FirestoreImage` widget and a `FirestoreImageCacheManager`.
+    
+    - Adds `flutter_cache_manager` and `cached_network_image` dependencies to handle image caching, improving performance and reducing network requests.
+    - Implements `FirestoreImageCacheManager` and a custom `FirestoreFileService` to fetch images from the backend API and store them locally.
+    - Creates a reusable `FirestoreImage` widget to display images from Firestore, abstracting away the caching and fetching logic.
+    - Updates the workspace screen to use the new `FirestoreImage` widget for rendering embedded images in notes.
+    - Corrects the backend `/media/get/<media_id>` endpoint to properly serve raw image bytes with `Access-Control-Allow-Origin` headers for web compatibility.
+    - Adds `redis` and `async-timeout` Python packages to the backend, using Redis as a server-side cache for media bytes to reduce Firestore reads.
+
+[33mcommit f964efcc05c82a8e43855ceb791d37501536a544[m
+Merge: 88c2957 eb578e8
+Author: nestchao <nestchao14@gmail.com>
+Date:   Wed Nov 5 16:55:54 2025 +0800
+
+    Merge pull request #8 from nestchao/nestchao
+    
+    Refactor WorkspaceScreen to use a single layout with responsive tabs …
+
+[33mcommit eb578e82c6b9531e5851292651bd5353efc06039[m
+Author: nestchao <nestchao14@gmail.com>
+Date:   Wed Nov 5 16:55:12 2025 +0800
+
+    Refactor WorkspaceScreen to use a single layout with responsive tabs for Study Hub and Paper Solver; separate mobile and desktop views; implement new SourceTile widget; enhance paper upload and processing features.
+
+[33mcommit 88c29571eaa565b4cb4c864e1fcd878a1294da91[m
+Merge: 449a0e6 8469c53
+Author: nestchao <nestchao14@gmail.com>
+Date:   Wed Nov 5 14:52:17 2025 +0800
+
+    Merge pull request #7 from nestchao/nestchao
+    
+    Nestchao
+
+[33mcommit 8469c5340e76972e39edada4406e48f85705f4c0[m
+Author: nestchao <nestchao14@gmail.com>
+Date:   Wed Nov 5 14:51:51 2025 +0800
+
+    feat: Add MobileWorkspaceLayout for improved mobile experience and integrate tabbed navigation
+
+[33mcommit 42fff9199e7094a405e0e174009c4a8dc2fb7dbc[m
+Merge: c12268b 449a0e6
+Author: nestchao <nestchao14@gmail.com>
+Date:   Wed Nov 5 14:45:30 2025 +0800
+
+    Merge branch 'main' of https://github.com/nestchao/study-assistant into nestchao
+
+[33mcommit c12268bad5718fb7e2d5e617d2e71b6caf1463ee[m
+Author: nestchao <nestchao14@gmail.com>
+Date:   Wed Nov 5 14:42:49 2025 +0800
+
+    feat: Add run script for backend and frontend setup
+
+[33mcommit 449a0e69ed4cc1fdec3c6c09cb248d5d8bd1bc7f[m
+Merge: 08c2e37 7d02ffa
+Author: Calaweh <weelikhui@gmail.com>
+Date:   Wed Nov 5 14:40:33 2025 +0800
+
+    Merge pull request #6 from nestchao/Calaweh
+    
+    merge ba child
+
+[33mcommit 7d02ffa06f120886e7ab308dfd66a67bbd6c015e[m
+Author: Calaweh <weelikhui@gmail.com>
+Date:   Wed Nov 5 14:40:06 2025 +0800
+
+    merge ba child
+
+[33mcommit 83555f5d9760096127d87b93e6942115be1a2016[m
+Author: nestchao <nestchao14@gmail.com>
+Date:   Wed Nov 5 14:13:00 2025 +0800
+
+    feat: Add delete project API endpoint and improve error handling
+    
+    refactor: Enhance DashboardScreen with better state management and UI updates
+    
+    style: Update WorkspaceScreen layout and add animated typing indicator
+    
+    fix: Improve project list rendering and add loading states for better UX
+
+[33mcommit 0701e01b698c6a00e0037da077f49d26876aa8aa[m
+Author: nestchao <nestchao14@gmail.com>
+Date:   Wed Nov 5 13:58:40 2025 +0800
+
+    Refactor backend and frontend code for improved functionality and performance
+    
+    - Backend:
+      - Removed unnecessary imports and simplified the app structure.
+      - Added a helper function for recursive deletion of Firestore collections.
+      - Introduced a health-check API route for better integration with the Flutter app.
+      - Corrected duplicate function definitions and improved error handling.
+      - Updated the text extraction and note generation process for better clarity.
+    
+    - Frontend:
+      - Implemented project deletion functionality with confirmation dialogs.
+      - Enhanced UI with improved styling and user experience.
+      - Added caching logic for project data to optimize performance.
+      - Updated dependencies in pubspec.yaml for better compatibility.
+      - Refactored project model to handle different data sources more effectively.
+
+[33mcommit 08c2e375771a031ed0e161da3e5a5be2eaa418c0[m
+Merge: d295f09 e4e152a
+Author: Calaweh <weelikhui@gmail.com>
+Date:   Mon Nov 3 19:07:42 2025 +0800
+
+    Merge pull request #5 from nestchao/Calaweh
+    
+    wow version
+
+[33mcommit e4e152a6cc366b75546cfc1c45da822891907fc0[m
+Author: Calaweh <weelikhui@gmail.com>
+Date:   Mon Nov 3 19:07:11 2025 +0800
+
+    wow version
+
+[33mcommit d295f09f5bb7231d921649a60b2543368b41b334[m
+Merge: c7c9080 6862044
+Author: Calaweh <weelikhui@gmail.com>
+Date:   Fri Oct 31 18:29:46 2025 +0800
+
+    Merge pull request #4 from nestchao/Calaweh
+    
+    3.0.......architecture
+
+[33mcommit 68620446f6b94ac423b2d9e9e7f53f992f11d461[m
+Author: Calaweh <weelikhui@gmail.com>
+Date:   Fri Oct 31 18:29:15 2025 +0800
+
+    3.0.......architecture
+
+[33mcommit c7c9080440ecf1422cd1b70217785fe2f29a1257[m
+Merge: 34cc613 f346538
+Author: Calaweh <weelikhui@gmail.com>
+Date:   Fri Oct 31 18:24:41 2025 +0800
+
+    Merge pull request #3 from nestchao/Calaweh
+    
+    better architecture 2.0!
+
+[33mcommit f3465385bd3a28b18b33769e4db75f8c881b9e50[m
+Author: Calaweh <weelikhui@gmail.com>
+Date:   Fri Oct 31 18:23:00 2025 +0800
+
+    better architecture 2.0!
+
+[33mcommit 34cc613d6f5e26253fac2c5f6030c4b895a7aada[m
+Merge: 00684bc 0876aea
+Author: Calaweh <weelikhui@gmail.com>
+Date:   Fri Oct 31 17:43:52 2025 +0800
+
+    Merge pull request #2 from nestchao/Calaweh
+    
+    fix crash
+
+[33mcommit 0876aea2618f755a5e5f8172f410d680b84c03e2[m
+Author: Calaweh <weelikhui@gmail.com>
+Date:   Fri Oct 31 17:42:53 2025 +0800
+
+    fix crash
+    place template in correct folder liao
+
+[33mcommit 00684bce805790a599745089b11d76f51225dd27[m
+Merge: 20f9933 44a330c
+Author: Calaweh <weelikhui@gmail.com>
+Date:   Fri Oct 31 17:26:21 2025 +0800
+
+    Merge pull request #1 from nestchao/Calaweh
+    
+    super upgrade for architecture
+
+[33mcommit 44a330cb0f7fa561c9a89a4653bf37d199664610[m
+Author: Calaweh <weelikhui@gmail.com>
+Date:   Fri Oct 31 17:24:25 2025 +0800
+
+    super upgrade for architecture
+
+[33mcommit 20f9933cf4e37503cc4940ddfbbecbf3e4e440d6[m
+Author: nestchao <nestchao14@gmail.com>
+Date:   Tue Oct 21 02:23:30 2025 +0800
+
+    Add topic note generation feature and API key validation script
+
+[33mcommit 8c6ddab7b872f5e0263dc252e4768ff422acd454[m
+Author: nestchao <nestchao14@gmail.com>
+Date:   Tue Oct 21 01:35:41 2025 +0800
+
+    Enhance app.py with secure API key handling and environment variable loading
+
+[33mcommit 74bc743b59a2a626af38e5452bccf6fea3069baa[m
+Author: nestchao <nestchao14@gmail.com>
+Date:   Tue Oct 21 01:28:00 2025 +0800
+
+    first commit

@@ -11,7 +11,7 @@ GitPython
 redis
 Pillow
 firebase-admin
-html2text 
+html2text
 
 # Use langchain-google-genai directly and a core version of langchain
 langchain-google-genai==0.0.9

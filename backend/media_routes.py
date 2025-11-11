@@ -4,6 +4,8 @@ import base64
 from flask import Blueprint, request, jsonify, Response
 from firebase_admin import firestore
 import redis
+import random
+from utils import L1_CACHE
 
 redis_client = None 
 
@@ -84,13 +86,20 @@ def store_media(media_id: str, base64_string: str, file_name: str, media_type: s
         raise
 
 def get_media_data(media_id: str) -> bytes:
+
+    cached_bytes = L1_CACHE.get(media_id)
+    if cached_bytes:
+        print(f"✅ L1 CACHE HIT for mediaId: {media_id}")
+        return cached_bytes
+
     if redis_client:
         try:
-            cached_data = redis_client.get(media_id)
-            if cached_data:
-                print(f"CACHE HIT for mediaId: {media_id}")
-                # This is correct. It returns the raw bytes directly.
-                return cached_data
+            cached_data_redis = redis_client.get(media_id)
+            if cached_data_redis:
+                print(f"✅ L2 CACHE HIT (Redis) for mediaId: {media_id}")
+                # Backfill L1 Cache
+                L1_CACHE.set(media_id, cached_data_redis)
+                return cached_data_redis
         except Exception as e:
             print(f"Redis cache check failed: {e}")
 
@@ -125,15 +134,23 @@ def get_media_data(media_id: str) -> bytes:
     
     media_bytes = base64.b64decode(full_base64_string)
 
-    # 3. Store the reassembled data in Redis for next time
-    if redis_client and media_bytes:
-        try:
-            # Cache for 1 hour
-            redis_client.setex(media_id, 3600, media_bytes)
-            print(f"Successfully stored mediaId {media_id} in Redis cache.")
-        except Exception as e:
-            print(f"Failed to store media in Redis cache: {e}")
-            
+    if media_bytes:
+        # --- APPLY RANDOM EXPIRATION ---
+        # Base TTL of 1 hour (3600s) + a random value up to 5 minutes (300s)
+        random_ttl = 3600 + random.randint(0, 300)
+
+        # 4. Backfill L2 Cache (Redis)
+        if redis_client:
+            try:
+                redis_client.setex(media_id, random_ttl, media_bytes)
+                print(f"💾 Stored media in Redis cache with TTL: {random_ttl}s.")
+            except Exception as e:
+                print(f"Failed to store media in Redis cache: {e}")
+        
+        # 5. Backfill L1 Cache (In-Memory)
+        L1_CACHE.set(media_id, media_bytes)
+        print(f"💾 Stored media in L1 cache.")
+
     return media_bytes
 
 @media_bp.route('/media/upload', methods=['POST'])
