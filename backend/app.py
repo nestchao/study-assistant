@@ -8,6 +8,8 @@ from flask_cors import CORS
 from dotenv import load_dotenv
 import pytesseract 
 import redis
+import google.api_core.exceptions
+from google.api_core import retry
 
 # --- 1. CORRECTED IMPORTS ---
 # Import all blueprints and their dependency setters
@@ -27,6 +29,17 @@ API_KEY = os.getenv("GEMINI_API_KEY")
 if not API_KEY:
     raise ValueError("GEMINI_API_KEY missing in .env")
 genai.configure(api_key=API_KEY, transport='rest')
+
+custom_retry = retry.Retry(
+    predicate=retry.if_exception_type(
+        google.api_core.exceptions.ResourceExhausted, # This is the 429 error
+        google.api_core.exceptions.ServiceUnavailable, # This is the 503 error
+    ),
+    initial=5.0,     # Start with a 5-second wait
+    maximum=60.0,    # Max wait time between retries is 60 seconds
+    multiplier=2.0,  # Double the wait time each time
+    deadline=300.0,  # Stop retrying after 5 minutes (300 seconds)
+)
 
 # Initialize model objects ONCE and reuse them
 note_generation_model = genai.GenerativeModel("gemini-2.5-flash-lite") # Updated for better performance

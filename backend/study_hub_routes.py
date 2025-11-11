@@ -6,7 +6,8 @@ from firebase_admin import firestore
 from utils import L1_CACHE
 import random  # For the random TTL in get_note
 import time 
-from pathlib import Path #
+from pathlib import Path 
+import google.api_core.exceptions
 
 # Import shared utility functions
 from utils import extract_text, delete_collection, split_chunks, token_required
@@ -500,7 +501,7 @@ def regenerate_note(project_id, source_id):
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
-@study_hub_bp.route('/generate-code-suggestion', methods=['POST']) # <-- CHANGED from sync_service_bp
+@study_hub_bp.route('/generate-code-suggestion', methods=['POST'])
 @token_required
 def generate_code_suggestion():
     data = request.json
@@ -508,7 +509,7 @@ def generate_code_suggestion():
     extensions = data.get('extensions', [])
     prompt_text = data.get('prompt')
     
-    # --- ADDED LOGGING ---
+    # --- LOGGING & VALIDATION ---
     print("\n" + "="*50)
     print(f"🤖 Generating PROJECT-WIDE code suggestion for project: {project_id}")
     print(f"   Prompt: '{prompt_text[:100]}...'")
@@ -516,51 +517,101 @@ def generate_code_suggestion():
     
     if not all([project_id, prompt_text]):
         return jsonify({"error": "Missing 'project_id' or 'prompt'"}), 400
+    
+    # --- 1. DYNAMIC CACHE KEY GENERATION ---
+    # Create a unique key based on the project and the specific file extensions requested.
+    # Sorting ensures ['js', 'py'] and ['py', 'js'] result in the same key.
+    ext_key_part = "_".join(sorted([ext.lower().lstrip('.') for ext in extensions])) if extensions else "all"
+    context_cache_key = f"project_context:{project_id}:{ext_key_part}"
+    
+    print(f"   Cache key: {context_cache_key}")
 
-    full_project_context = ""
-    file_count = 0
-    try:
-        print("  - Building project context from Firestore...")
-        docs = db.collection('projects').document(project_id).collection('converted_files').stream()
-        dot_extensions = [f".{ext.lstrip('.').lower()}" for ext in extensions] if extensions else None
+    full_project_context = None # Initialize to None
 
-        special_files_to_ignore = {'_full_context.txt'}
-        
-        for doc in docs:
-            file_data = doc.to_dict()
-            original_path = file_data.get('original_path', '')
+    # --- 2. CACHE CHECK (L2 - Redis) ---
+    if redis_client:
+        try:
+            cached_context_bytes = redis_client.get(context_cache_key)
+            if cached_context_bytes:
+                print("  ✅ CACHE HIT. Using cached project context.")
+                full_project_context = cached_context_bytes.decode('utf-8')
+        except Exception as e:
+            print(f"  ⚠️ Redis cache check failed: {e}") # Log error but continue, allowing fallback to DB
+
+    # --- 3. DATABASE FETCH (ONLY on cache miss) ---
+    if full_project_context is None:
+        print("  CACHE MISS. Building project context from Firestore...")
+        try:
+            temp_context = ""
+            file_count = 0
+            docs = db.collection('projects').document(project_id).collection('converted_files').stream()
+            dot_extensions = [f".{ext.lstrip('.').lower()}" for ext in extensions] if extensions else None
+            special_files_to_ignore = {'_full_context.txt'}
             
-            # Don't include the tree.txt file in the context
-            if original_path in special_files_to_ignore:
-                continue
+            for doc in docs:
+                file_data = doc.to_dict()
+                original_path = file_data.get('original_path', '')
+                
+                if original_path in special_files_to_ignore:
+                    continue
+                
+                if not dot_extensions or Path(original_path).suffix.lower() in dot_extensions:
+                    temp_context += f"--- FILE: {original_path} ---\n"
+                    temp_context += file_data.get('content', '')
+                    temp_context += "\n\n"
+                    file_count += 1
             
-            if not dot_extensions or Path(original_path).suffix.lower() in dot_extensions:
-                full_project_context += f"--- FILE: {original_path} ---\n"
-                full_project_context += file_data.get('content', '')
-                full_project_context += "\n\n"
-                file_count += 1
-        
-        print(f"  - Assembled context from {file_count} files ({len(full_project_context)} chars).")
-    except Exception as e:
-        print(f"  - ❌ ERROR building project context: {e}")
-        return jsonify({"error": f"Failed to build project context: {e}"}), 500
+            full_project_context = temp_context
+            print(f"  - Assembled context from {file_count} files ({len(full_project_context)} chars).")
+
+            # --- 4. POPULATE CACHE after building context ---
+            if redis_client and full_project_context:
+                try:
+                    # Cache the result for 1 hour (3600 seconds)
+                    redis_client.setex(context_cache_key, 3600, full_project_context)
+                    print(f"  - ✅ Context stored in Redis cache with 1hr TTL.")
+                except Exception as e:
+                    print(f"  ⚠️ Failed to store context in Redis cache: {e}")
+
+        except Exception as e:
+            print(f"  - ❌ ERROR building project context from Firestore: {e}")
+            return jsonify({"error": f"Failed to build project context: {e}"}), 500
     
     if not full_project_context:
         print("  - ⚠️ No matching files found to build context.")
         return jsonify({"suggestion": "Could not find any code to analyze. Please sync your project with the correct file extensions first."})
 
-    system_prompt = f"""... (your system prompt is good) ..."""
+    # --- 5. AI MODEL INVOCATION ---
+    # Construct a clear prompt for the model, separating the context from the user's question.
+    system_prompt = """You are an expert AI software developer. You will be given the entire codebase for a project as context. Your task is to analyze this context and then answer the user's question or fulfill their request. Provide complete, runnable code blocks where appropriate. Be clear, concise, and accurate."""
     
+    final_prompt = f"{system_prompt}\n\nPROJECT CONTEXT:\n---\n{full_project_context}\n---\n\nUSER QUESTION: {prompt_text}"
+
     try:
         print("  - Sending request to Gemini model...")
-        response = chat_model.generate_content([system_prompt, prompt_text])
+        response = chat_model.generate_content(final_prompt)
         print("  - ✅ Received response from Gemini.")
         print("="*50 + "\n")
         return jsonify({"suggestion": response.text})
+    
+    # except google.api_core.exceptions.TooManyRequests as e: # <-- CATCH THE CORRECT EXCEPTION
+    #     error_message = ("You have exceeded the free tier's rate limit (1 million tokens/minute). "
+    #                      "Please wait a minute or enable billing on your Google Cloud project for higher limits.")
+    #     print(f"  - ❌ ERROR: TooManyRequests (429 Rate Limit): {e}")
+    #     print("="*50 + "\n")
+    #     return jsonify({"error": error_message}), 429 # Return a 429 status code
+    
+    # except google.api_core.exceptions.InvalidArgument as e:
+    #     error_message = ("The project context is too large for the AI model to process. "
+    #                      "Please try selecting fewer file extensions to reduce the amount of code sent.")
+    #     print(f"  - ❌ ERROR: InvalidArgument (likely token limit exceeded): {e}")
+    #     print("="*50 + "\n")
+    #     return jsonify({"error": error_message}), 400 # 400 Bad Request is appropriate
+    
     except Exception as e:
         import traceback
         error_details = traceback.format_exc()
-        print(f"  - ❌ ERROR calling Gemini model: {e}")
+        print(f"  - ❌ CRITICAL ERROR calling Gemini model: {e}")
         print(error_details)
         print("="*50 + "\n")
         return jsonify({"error": str(e), "traceback": error_details}), 500
