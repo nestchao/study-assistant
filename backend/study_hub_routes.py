@@ -547,6 +547,16 @@ def generate_code_suggestion():
             docs = db.collection('projects').document(project_id).collection('converted_files').stream()
             dot_extensions = [f".{ext.lstrip('.').lower()}" for ext in extensions] if extensions else None
             special_files_to_ignore = {'_full_context.txt'}
+
+            if 'tree' in prompt_text.lower() or 'structure' in prompt_text.lower():
+                print("  - Prompt suggests a structure query. Including tree.txt.")
+                tree_doc = converted_files_ref.document('project_tree_txt').get()
+                if tree_doc.exists:
+                    full_project_context += "--- FILE: tree.txt (Project File Structure) ---\n"
+                    full_project_context += tree_doc.to_dict().get('content', '')
+                    full_project_context += "\n\n"
+                    # Add it to the ignore list so we don't add it again in the main loop
+                    special_files_to_ignore.add('tree.txt')
             
             for doc in docs:
                 file_data = doc.to_dict()
@@ -591,22 +601,25 @@ def generate_code_suggestion():
         print("  - Sending request to Gemini model...")
         response = chat_model.generate_content(final_prompt)
         print("  - ✅ Received response from Gemini.")
+        if not response.candidates:
+        # This can happen if the prompt itself was blocked.
+            block_reason = response.prompt_feedback.block_reason.name if response.prompt_feedback else "Unknown"
+            error_message = f"AI response was blocked. Reason: {block_reason}. The project context might be too large or contain sensitive information."
+            print(f"  - ❌ ERROR: Prompt was blocked. Reason: {block_reason}")
+            return jsonify({"error": error_message}), 400
+
+        # Safely access the text from the first candidate's parts.
+        try:
+            suggestion_text = response.candidates[0].content.parts[0].text
+        except (IndexError, AttributeError):
+            # This handles cases where the response is empty or malformed.
+            finish_reason = response.candidates[0].finish_reason.name if response.candidates[0].finish_reason else "Unknown"
+            error_message = f"AI generated an empty or invalid response. Finish Reason: {finish_reason}."
+            print(f"  - ❌ ERROR: AI response was empty or invalid. Finish Reason: {finish_reason}")
+            return jsonify({"error": error_message}), 500
+
         print("="*50 + "\n")
-        return jsonify({"suggestion": response.text})
-    
-    # except google.api_core.exceptions.TooManyRequests as e: # <-- CATCH THE CORRECT EXCEPTION
-    #     error_message = ("You have exceeded the free tier's rate limit (1 million tokens/minute). "
-    #                      "Please wait a minute or enable billing on your Google Cloud project for higher limits.")
-    #     print(f"  - ❌ ERROR: TooManyRequests (429 Rate Limit): {e}")
-    #     print("="*50 + "\n")
-    #     return jsonify({"error": error_message}), 429 # Return a 429 status code
-    
-    # except google.api_core.exceptions.InvalidArgument as e:
-    #     error_message = ("The project context is too large for the AI model to process. "
-    #                      "Please try selecting fewer file extensions to reduce the amount of code sent.")
-    #     print(f"  - ❌ ERROR: InvalidArgument (likely token limit exceeded): {e}")
-    #     print("="*50 + "\n")
-    #     return jsonify({"error": error_message}), 400 # 400 Bad Request is appropriate
+        return jsonify({"suggestion": suggestion_text})
     
     except Exception as e:
         import traceback

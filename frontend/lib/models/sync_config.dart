@@ -6,6 +6,7 @@ class SyncConfig {
   final String projectId;
   final String localPath;
   final List<String> allowedExtensions;
+  final List<String> ignoredPaths; 
   final bool isActive;
   final String status;
   // Timestamps can be complex, so we'll handle them as strings for now
@@ -16,6 +17,7 @@ class SyncConfig {
     required this.projectId,
     required this.localPath,
     required this.allowedExtensions,
+    required this.ignoredPaths, 
     required this.isActive,
     required this.status,
     this.lastSynced,
@@ -27,6 +29,7 @@ class SyncConfig {
       projectId: map['project_id'],
       localPath: map['local_path'],
       allowedExtensions: List<String>.from(map['allowed_extensions'] ?? []),
+      ignoredPaths: List<String>.from(map['ignored_paths'] ?? []),
       isActive: map['is_active'] ?? false,
       status: map['status'] ?? 'idle',
       lastSynced: map['last_synced'], // Keep it dynamic for now
