@@ -18,6 +18,7 @@ class _CodeSyncScreenState extends State<CodeSyncScreen> with SingleTickerProvid
   final _projectNameController = TextEditingController();
   final _pathController = TextEditingController();
   final _extensionsController = TextEditingController();
+  final _ignoreController = TextEditingController();
 
   static const double mobileBreakpoint = 900.0;
 
@@ -44,6 +45,7 @@ class _CodeSyncScreenState extends State<CodeSyncScreen> with SingleTickerProvid
     _projectNameController.clear();
     _pathController.clear();
     _extensionsController.clear();
+    _ignoreController.clear(); 
 
     showDialog(
       context: context,
@@ -130,6 +132,21 @@ class _CodeSyncScreenState extends State<CodeSyncScreen> with SingleTickerProvid
                           helperText: 'Comma-separated list of file types',
                         ),
                       ),
+
+                      const SizedBox(height: 16),
+
+                      TextField(
+                        controller: _ignoreController,
+                        decoration: InputDecoration(
+                          labelText: 'Ignored Paths (one per line)',
+                          hintText: 'build/\n.dart_tool/\nnode_modules/',
+                          prefixIcon: const Icon(Icons.visibility_off),
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                          filled: true,
+                        ),
+                        maxLines: 3,
+                      ),
+
                       const SizedBox(height: 24),
                       Row(
                         mainAxisAlignment: MainAxisAlignment.end,
@@ -145,6 +162,11 @@ class _CodeSyncScreenState extends State<CodeSyncScreen> with SingleTickerProvid
                               final path = _pathController.text.trim();
                               final extensions = _extensionsController.text
                                   .split(',')
+                                  .map((e) => e.trim())
+                                  .where((e) => e.isNotEmpty)
+                                  .toList();
+                              final ignoredPaths = _ignoreController.text
+                                  .split('\n')
                                   .map((e) => e.trim())
                                   .where((e) => e.isNotEmpty)
                                   .toList();
@@ -197,6 +219,7 @@ class _CodeSyncScreenState extends State<CodeSyncScreen> with SingleTickerProvid
                                   projectName,
                                   path,
                                   extensions,
+                                  ignoredPaths,
                                 );
 
                                 // Close loading dialog
@@ -428,6 +451,7 @@ class SyncConfigTile extends StatelessWidget {
                 );
               }).toList(),
             ),
+
             if (config.lastSynced != null) ...[
               const SizedBox(height: 12),
               Row(
@@ -480,6 +504,13 @@ class SyncConfigTile extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(width: 8),
+
+                IconButton(
+                  onPressed: () => _showEditIgnoreDialog(context, provider, config),
+                  icon: const Icon(Icons.playlist_remove_outlined),
+                  tooltip: 'Edit Ignored Paths',
+                ),
+
                 IconButton.filled(
                   icon: const Icon(Icons.delete_outline, size: 20),
                   onPressed: () => _showDeleteConfirmation(context, provider, config.id),
@@ -490,6 +521,18 @@ class SyncConfigTile extends StatelessWidget {
                 ),
               ],
             ),
+            if (config.ignoredPaths.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              const Text('Ignoring:', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.grey)),
+              Padding(
+                padding: const EdgeInsets.only(left: 8.0, top: 4.0),
+                child: Text(
+                  config.ignoredPaths.join(', '),
+                  style: const TextStyle(fontSize: 12, fontFamily: 'monospace', color: Colors.grey),
+                ),
+              ),
+            ],
+            const Divider(),
           ],
         ),
       ),
@@ -514,6 +557,47 @@ class SyncConfigTile extends StatelessWidget {
             },
             style: FilledButton.styleFrom(backgroundColor: Colors.red),
             child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showEditIgnoreDialog(BuildContext context, ProjectProvider provider, SyncConfig config) {
+    final ignoreController = TextEditingController(
+      text: config.ignoredPaths.join('\n'), // Pre-fill with existing paths
+    );
+
+    showDialog(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Edit Ignored Paths'),
+        content: TextField(
+          controller: ignoreController,
+          decoration: const InputDecoration(
+            hintText: 'Enter paths to ignore, one per line...',
+            border: OutlineInputBorder(),
+          ),
+          maxLines: 5,
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () async {
+              final newIgnoredPaths = ignoreController.text
+                  .split('\n')
+                  .map((e) => e.trim())
+                  .where((e) => e.isNotEmpty)
+                  .toList();
+              
+              try {
+                await provider.updateIgnoredPaths(config.id, newIgnoredPaths);
+                Navigator.pop(dialogContext);
+              } catch (e) {
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red));
+              }
+            },
+            child: const Text('Save'),
           ),
         ],
       ),
