@@ -66,37 +66,36 @@ def generate_note(text):
     """Generates a simplified study note using the injected AI model."""
     print("  🤖 Generating AI study note...")
     prompt = f"""
-    You are an expert academic study assistant. Your mission is to transform dense academic texts into simplified, well-structured study notes that are easy to understand, while strictly preserving the original document's structure.
+    You are an expert academic study assistant. Your mission is to transform dense academic texts into simplified, well-structured study notes that are easy to understand.
 
     Your output must be in the **same language as the source text**. Follow these rules meticulously.
 
-    **0. 🏛️ The Golden Rule: Preserve the Original Structure**
-    *   This is your most important command. You MUST follow the structure, headings, and topic order of the original text EXACTLY.
-    *   Do not merge sections, re-order paragraphs, or write new introductory paragraphs. Your task is to simplify the content *within* each original section.
+    # 🚀 Core Transformation Rules
 
-    **1. 💡 The Simplification Rule: Clarify In-Place**
-    *   Replace complex, technical, or academic words with simpler, more common equivalents in the same language.
-    *   Break down long, complex sentences into shorter, clearer ones.
+    ## 0. 🏛️ Preserve the Original Structure (The Golden Rule)
+    *   You MUST follow the structure, headings, and topic order of the original text **EXACTLY**.
+    *   Do not merge or re-order sections. Simplify content **within** the original structure.
 
-    **2. ✍️ The Annotation Rule: Translate Simplified Words**
-    *   For **every single word** that you simplified, you MUST provide its Chinese translation immediately after.
-    *   Format: `new simplified word (中文翻译)`. Example: "The **widespread (普遍的)** nature of the **event (事件)**..."
+    ## 1. 💡 Simplify and Shorten Content
+    *   **Keep Key Points:** Ensure all essential definitions and arguments are retained.
+    *   **Sentence Compression:** Break down long, complex sentences into shorter, clearer ones.
+    *   **Word Replacement:** Replace complex or technical words with simpler, more common equivalents.
 
-    **3. 🎨 The Formatting & Tone Rule: Be Clear and Direct**
-    *   Use markdown headings (`#`, `##`) that match the original text's structure. Add a relevant emoji to each main heading.
+    ## 2. ✍️ Annotate Simplified Words (Mandatory)
+    *   For **every single word** you simplify, you MUST provide its Chinese translation immediately after.
+    *   Format: `new simplified word (中文翻译)`. 
+        *   Example: "The **widespread (普遍的)** nature of the **event (事件)**..."
+
+    ## 3. 🎨 Formatting and Tone
+    *   Use markdown headings (`#`, `##`) that match the original text's structure. Add a relevant **emoji** to each main heading.
     *   Use **bold text** to emphasize key simplified concepts.
-    *   Adopt a clear, direct, and helpful academic tone.
+    *   Maintain a clear, direct, and helpful academic tone.
 
-    **4. 🎯 The Content Rule: Be Comprehensive and Accurate**
-    *   Cover all major topics and key concepts from the original text. Do not skip sections.
-    *   Extract only the most critical information—definitions, key arguments, and essential examples.
+    ## 4. 🧠 Memory Aid and Accuracy
+    *   Cover all major topics accurately. Do not skip sections or add new information.
+    *   At the end of each major section, create a short, creative **Mnemonic Tip (记忆技巧)** to aid recall.
 
-    **5. 🧠 The Memory Aid Rule: Add a Mnemonic Tip (记忆技巧)**
-    *   At the end of each major section, create a short, creative Mnemonic Tip (记忆技巧) to help recall the main points.
-
-    **Constraint:**
-    *   You must not add any new information that is not present in the original text.
-
+    ---
     Here is the text to process:
     ---
     {text}
@@ -105,7 +104,7 @@ def generate_note(text):
     try:
         # Use the injected note_gen_model
         response = note_gen_model.generate_content(prompt)
-        return markdown.markdown(response.text)
+        return markdown.markdown(response.text, extensions=['tables'])
     except Exception as e:
         print(f"  ❌ Note generation failed: {e}")
         raise
@@ -443,7 +442,7 @@ def topic_note(project_id):
     
     try:
         response_text = note_gen_model.generate_content(prompt).text
-        html = markdown.markdown(response_text)
+        html = markdown.markdown(response_text, extensions=['tables'])
         return jsonify({"note_html": html})
     except Exception as e:
         return jsonify({"note_html": f"<p>Error generating topic note: {e}</p>"})
@@ -469,7 +468,7 @@ def regenerate_note(project_id, source_id):
         for doc in note_pages_ref.stream():
             doc.reference.delete()
             
-        # Save new content in chunks - FIXED LOGIC
+        # Save new content in chunks
         chunk_size = 900000 
         for i in range(0, len(new_note_html), chunk_size):
             page_content = new_note_html[i:i + chunk_size]
@@ -488,8 +487,19 @@ def regenerate_note(project_id, source_id):
 
         # 5. Invalidate L1 cache as well
         note_key = f"note:{project_id}:{source_id}"
-        L1_CACHE.delete(note_key)
-        print(f"  ✅ Invalidated L1 cache for regenerated note")
+        
+        # FIX: Use .pop() instead of .delete() if L1_CACHE is a dictionary or dict-like object.
+        if hasattr(L1_CACHE, 'pop'):
+            L1_CACHE.pop(note_key, None)
+            print(f"  ✅ Invalidated L1 cache (using .pop) for regenerated note")
+        elif hasattr(L1_CACHE, 'delete'):
+            # Keep this check in case the class is updated later
+            L1_CACHE.delete(note_key)
+            print(f"  ✅ Invalidated L1 cache (using .delete) for regenerated note")
+        else:
+            # Fallback if the cache implementation is unknown
+            print("  ⚠️ Warning: Could not invalidate L1 cache. Missing delete/pop method.")
+
 
         print(f"  ✅ SUCCESS: Note for '{source_id}' regenerated.")
         # 6. Return the new HTML directly to the frontend
