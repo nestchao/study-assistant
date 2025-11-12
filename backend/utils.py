@@ -12,6 +12,11 @@ import time
 from functools import wraps 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from flask import request, jsonify
+import fitz
+import io
+import re
+import cv2
+import numpy as np
 
 TXT_OUTPUT_DIR = Path("converted_txt_projects") # Main output directory
 STRUCTURE_FILE_NAME = "file_structure.json"
@@ -24,37 +29,132 @@ try:
 except Exception:
     print("Warning: Tesseract path not found. OCR will fail if needed.")
 
+def preprocess_for_ocr(image: Image.Image) -> Image.Image:
+    """
+    Prepares an image for OCR by applying a standard set of cleaning filters.
+    
+    Args:
+        image: A PIL Image object.
+
+    Returns:
+        A cleaned-up PIL Image object, ready for Tesseract.
+    """
+    print("    - Pre-processing image for OCR...")
+    # 1. Convert PIL Image to an OpenCV format (numpy array)
+    #    Make sure it's in a color format that OpenCV expects (BGR)
+    open_cv_image = np.array(image.convert('RGB'))
+    open_cv_image = open_cv_image[:, :, ::-1].copy() # Convert RGB to BGR
+
+    # 2. Grayscale: Simplifies the image, removing color noise.
+    gray = cv2.cvtColor(open_cv_image, cv2.COLOR_BGR2GRAY)
+
+    # 3. Binarization (Thresholding): Converts the image to pure black and white.
+    #    This is CRUCIAL for Tesseract. Otsu's thresholding is great because it
+    #    automatically determines the best threshold value.
+    _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
+
+    # 4. Denoising (Optional but often helpful)
+    #    Removes small dots/speckles from the image.
+    denoised = cv2.medianBlur(thresh, 3)
+
+    # 5. Convert back to PIL Image format to pass to Pytesseract
+    final_image = Image.fromarray(denoised)
+    print("    - Pre-processing complete.")
+    return final_image
+
+def simplify_text(text):
+    """A helper to normalize text for comparison by removing whitespace and making it lowercase."""
+    return re.sub(r'\s+', '', text).lower()
+
 def extract_text(pdf_stream):
-    """Extracts text from a PDF stream, falling back to OCR if needed."""
-    print("  🔍 Attempting direct text extraction from PDF...")
-    text = ""
+    """
+    Extracts text from a PDF stream using a MAXIMUM COMPLETENESS approach.
+    For each page, it extracts native text and performs OCR, then intelligently
+    merges the results to capture all possible content.
+
+    Args:
+        pdf_stream: A file-like object representing the PDF file.
+
+    Returns:
+        A string containing all extracted text from the PDF.
+    """
+    print("  🔎 Starting Maximum Completeness text extraction...")
+    all_page_texts = []
+    
     try:
-        reader = PyPDF2.PdfReader(pdf_stream)
-        print(f"  📄 PDF has {len(reader.pages)} pages.")
-        for i, page in enumerate(reader.pages):
-            page_text = page.extract_text() or ""
-            text += page_text
-        print(f"  ✅ PyPDF2 extracted {len(text)} characters.")
-    except Exception as e:
-        print(f"  ⚠️ PyPDF2 failed: {e}")
-    
-    # If direct extraction yields very little text, attempt OCR as a fallback
-    if len(text.strip()) < 100 * len(reader.pages):
-        print("  🔄 Text seems short, trying OCR fallback...")
-        try:
-            pdf_stream.seek(0) # Reset stream pointer
-            images = convert_from_bytes(pdf_stream.read())
-            print(f"  📸 Converted PDF to {len(images)} images for OCR.")
+        doc = fitz.open(stream=pdf_stream.read(), filetype="pdf")
+
+        for page_num, page in enumerate(doc):
+            print(f"  - Processing Page {page_num + 1}/{len(doc)}...")
+
+            # --- Step 1: Get Native Text (The High-Quality Base) ---
+            native_text = page.get_text("text")
+            print(f"    - Native text found: {len(native_text)} chars.")
+
+            # --- Step 2: Perform OCR (The Comprehensive Source) ---
             ocr_text = ""
-            for i, img in enumerate(images):
-                page_text = pytesseract.image_to_string(img)
-                ocr_text += page_text
-            text = ocr_text
-            print(f"  ✅ OCR extracted {len(text)} characters.")
-        except Exception as e:
-            print(f"  ❌ OCR failed: {e}. Returning any text found so far.")
+            try:
+                pix = page.get_pixmap(dpi=300)
+                img_bytes = pix.tobytes("ppm")
+                img = Image.open(io.BytesIO(img_bytes))
+
+                # --- THIS IS THE NEW LINE ---
+                processed_img = preprocess_for_ocr(img) 
+                # ---------------------------
+
+                ocr_text = pytesseract.image_to_string(processed_img) # Use the processed image
+                print(f"    - OCR text found: {len(ocr_text)} chars.")
+            except Exception as ocr_error:
+                print(f"    - ❌ OCR failed for page {page_num + 1}: {ocr_error}")
+
+            # --- Step 3: Intelligently Merge ---
+            # If there's no native text, the page is purely an image. Use OCR text directly.
+            if not native_text.strip():
+                print("    - Verdict: Image-only page. Using OCR text.")
+                all_page_texts.append(ocr_text)
+                continue
+
+            # If OCR text is negligible, the page is purely text. Use native text.
+            if not ocr_text.strip():
+                 print("    - Verdict: Text-only page. Using native text.")
+                 all_page_texts.append(native_text)
+                 continue
+
+            # The complex case: Mixed content. Merge them.
+            print("    - Verdict: Mixed content page. Merging results.")
+            
+            # Use the clean native text as our starting point.
+            final_page_text = native_text
+            
+            # Create a simplified version of the native text for fast searching.
+            simplified_native = simplify_text(native_text)
+
+            # Find lines in OCR text that are NOT in the native text.
+            unique_ocr_lines = []
+            for line in ocr_text.splitlines():
+                if line.strip() and simplify_text(line) not in simplified_native:
+                    unique_ocr_lines.append(line)
+            
+            if unique_ocr_lines:
+                print(f"    - Found {len(unique_ocr_lines)} unique lines from OCR. Appending them.")
+                # Append the unique findings, separated clearly.
+                unique_content = "\n".join(unique_ocr_lines)
+                final_page_text += f"\n\n--- OCR Additions ---\n{unique_content}"
+
+            all_page_texts.append(final_page_text)
+
+    except Exception as e:
+        print(f"  ❌ CRITICAL ERROR during PDF processing: {e}")
+        return "\n\n".join(all_page_texts)
     
-    return text
+    finally:
+        if 'doc' in locals() and doc:
+            doc.close()
+            
+    full_text = "\n\n".join(all_page_texts)
+    print(f"  ✅ Max-completeness extraction complete. Total characters: {len(full_text)}")
+    return full_text
+    
 
 def extract_text_from_image(image_stream):
     """Extracts text from an image file stream using OCR."""
