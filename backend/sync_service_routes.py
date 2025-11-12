@@ -9,7 +9,7 @@ from utils import (
     convert_and_upload_to_firestore, 
     get_converted_file_ref, 
     delete_collection, 
-    generate_tree_text,
+    generate_tree_text_from_paths,
     DOT_REPLACEMENT
 )
 
@@ -28,10 +28,12 @@ def perform_sync(config_id: str, config_data: dict):
     project_id = config_data.get('project_id')
     source_dir = config_data.get('local_path')
     extensions = config_data.get('allowed_extensions', [])
+    ignored_paths = config_data.get('ignored_paths', [])
 
     try:
         print("\n" + "="*60)
         print(f"SYNC-SERVICE: Starting sync – config_id: {config_id}")
+        print(f"SYNC-SERVICE: Ignoring paths: {ignored_paths}") # Log the ignored paths
 
         source_path = Path(source_dir)
         if not source_path.is_dir():
@@ -59,11 +61,33 @@ def perform_sync(config_id: str, config_data: dict):
         # ------------------------------------------------------------------
         # 2. Scan local files
         # ------------------------------------------------------------------
-        all_local_files = [f for f in source_path.rglob("*")
-                          if f.is_file() and '.git' not in f.parts]
+        print("SYNC-SERVICE: Step 2/7 - Scanning and filtering local files...")
+
+        # Normalize ignored paths to use forward slashes
+        normalized_ignored_paths = [Path(p.replace('\\', '/')) for p in ignored_paths]
+
+        all_local_files = []
+        for f in source_path.rglob("*"):
+            if not f.is_file() or '.git' in f.parts:
+                continue
+
+            rel_path = f.relative_to(source_path)
+            
+            # Check if the file's path is a subpath of any ignored path
+            is_ignored = any(
+                rel_path.is_relative_to(ignored) for ignored in normalized_ignored_paths
+            )
+            
+            if is_ignored:
+                # print(f"  - Ignoring {rel_path}") # Optional: for verbose logging
+                continue
+            
+            all_local_files.append(f)
+        
         dot_ext = [f".{e.lstrip('.').lower()}" for e in extensions] if extensions else None
         files_to_process = [f for f in all_local_files
                            if not dot_ext or f.suffix.lower() in dot_ext]
+        print(f"SYNC-SERVICE: Found {len(files_to_process)} files to process after filtering.")
 
         # ------------------------------------------------------------------
         # 3. UPDATE / CREATE
@@ -120,46 +144,57 @@ def perform_sync(config_id: str, config_data: dict):
         # ------------------------------------------------------------------
         # 6. SPECIAL FILES (tree.txt + _full_context.txt) – ONLY if we have files
         # ------------------------------------------------------------------
-        if files_in_db:
-            try:
-                # ----- tree.txt -----
-                tree_txt = f"{source_path.name}/\n" + generate_tree_text(source_path, allowed_extensions=extensions)
-                db.collection('projects').document(project_id) \
-                  .collection('converted_files').document('project_tree_txt') \
-                  .set({
-                      'original_path': 'tree.txt',
-                      'content': tree_txt,
-                      'hash': hashlib.sha256(tree_txt.encode('utf-8')).hexdigest(),
-                      'timestamp': firestore.SERVER_TIMESTAMP,
-                  })
+        try:
+            # Use the final, correct in-memory manifest as the source of truth
+            final_file_paths = sorted(list(files_in_db.keys()))
 
-                # ----- _full_context.txt -----
-                chunks = []
-                for rel_path, meta in files_in_db.items():
-                    doc_id = meta.get('doc_id')
-                    if not doc_id:
-                        logs.append(f"WARN: No doc_id for {rel_path}")
-                        continue
-                    doc = db.collection('projects').document(project_id) \
-                            .collection('converted_files').document(doc_id).get()
-                    if doc.exists:
-                        chunks.append(f"--- FILE: {rel_path} ---\n\n{doc.to_dict().get('content','')}\n\n")
-                    else:
-                        logs.append(f"WARN: Missing doc {doc_id} for {rel_path}")
+            # ----- Part A: tree.txt -----
+            print("SYNC-SERVICE: Generating filtered tree.txt...")
+            # Use the new utility that builds from a list of paths
+            tree_content = generate_tree_text_from_paths(source_path.name, final_file_paths)
+            
+            db.collection('projects').document(project_id) \
+            .collection('converted_files').document('project_tree_txt').set({
+                'original_path': 'tree.txt',
+                'content': tree_content,
+                'hash': hashlib.sha256(tree_content.encode('utf-8')).hexdigest(),
+                'timestamp': firestore.SERVER_TIMESTAMP,
+            })
+            print("SYNC-SERVICE: ✅ Saved filtered tree.txt.")
 
-                full_txt = "".join(chunks)
-                db.collection('projects').document(project_id) \
-                  .collection('converted_files').document('project_full_context_txt') \
-                  .set({
-                      'original_path': '_full_context.txt',
-                      'content': full_txt,
-                      'hash': hashlib.sha256(full_txt.encode('utf-8')).hexdigest(),
-                      'timestamp': firestore.SERVER_TIMESTAMP,
-                  })
-                print("SYNC-SERVICE: Special files generated.")
-            except Exception as e:
-                logs.append(f"ERROR special files: {e}")
-                raise   # <-- fail the whole sync
+            # ----- Part B: _full_context.txt -----
+            print("SYNC-SERVICE: Generating filtered _full_context.txt...")
+            chunks = []
+            # Iterate through the final, sorted, filtered list of paths
+            for rel_path in final_file_paths:
+                doc_id = files_in_db[rel_path].get('doc_id')
+                if not doc_id:
+                    logs.append(f"WARN: Missing doc_id for {rel_path} in manifest.")
+                    continue
+                
+                doc = db.collection('projects').document(project_id) \
+                        .collection('converted_files').document(doc_id).get()
+                
+                if doc.exists:
+                    chunks.append(f"--- FILE: {rel_path} ---\n\n{doc.to_dict().get('content','')}\n\n")
+                else:
+                    logs.append(f"WARN: Doc {doc_id} not found for path {rel_path} during full_context generation.")
+
+            full_txt = "".join(chunks)
+            db.collection('projects').document(project_id) \
+            .collection('converted_files').document('project_full_context_txt').set({
+                'original_path': '_full_context.txt',
+                'content': full_txt,
+                'hash': hashlib.sha256(full_txt.encode('utf-8')).hexdigest(),
+                'timestamp': firestore.SERVER_TIMESTAMP,
+            })
+            print("SYNC-SERVICE: ✅ Saved filtered _full_context.txt.")
+
+        except Exception as e:
+            logs.append(f"ERROR generating special files: {e}")
+            # Optionally re-raise if this should be a critical failure
+            # raise
+
 
         # ------------------------------------------------------------------
         # 7. FINISH
@@ -194,6 +229,7 @@ def register_folder():
     project_id = data.get('project_id')
     local_path = data.get('local_path')
     allowed_extensions = data.get('extensions', [])
+    ignored_paths = data.get('ignored_paths', []) 
 
     if not all([project_id, local_path]):
         return jsonify({"error": "Missing 'project_id' or 'local_path'"}), 400
@@ -205,6 +241,7 @@ def register_folder():
             "project_id": project_id,
             "local_path": local_path,
             "allowed_extensions": allowed_extensions,
+            "ignored_paths": ignored_paths,
             "is_active": True,
             "status": "idle",
             "created_at": firestore.SERVER_TIMESTAMP,
@@ -234,8 +271,28 @@ def list_configs():
 @sync_service_bp.route('/sync/config/<config_id>', methods=['PUT'])
 def update_config(config_id):
     data = request.json
-    # We only allow updating these specific fields for safety
-    allowed_updates = ['allowed_extensions', 'is_active']
+    allowed_updates = ['allowed_extensions', 'is_active', 'ignored_paths']
+    
+    if 'ignored_paths' in data:
+        # Validate that each path is a valid subpath
+        try:
+            config_doc = db.collection(CONFIG_COLLECTION).document(config_id).get()
+            if not config_doc.exists:
+                return jsonify({"error": "Config not found"}), 404
+            
+            root_path_str = config_doc.to_dict().get('local_path')
+            if not root_path_str:
+                return jsonify({"error": "Root path not set for this config"}), 400
+            
+            root_path = Path(root_path_str)
+            for path_to_ignore in data['ignored_paths']:
+                full_path_to_ignore = root_path / Path(path_to_ignore)
+                # This check ensures it's a valid subdirectory and prevents ".." traversal attacks
+                if not full_path_to_ignore.is_relative_to(root_path):
+                    return jsonify({"error": f"Invalid path: '{path_to_ignore}' is not a subpath of the root directory."}), 400
+        except Exception as path_error:
+             return jsonify({"error": f"Path validation error: {path_error}"}), 400
+
     updates = {key: data[key] for key in data if key in allowed_updates}
 
     if not updates:
@@ -285,33 +342,39 @@ def run_sync_route(config_id):
         print("="*50)
         return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
 
-def _generate_special_files(db, project_id, source_path, extensions, files_in_db):
-    # 1. tree.txt
-    tree_content = f"{source_path.name}/\n" + generate_tree_text(source_path, allowed_extensions=extensions)
-    db.collection('projects').document(project_id) \
-      .collection('converted_files').document('project_tree_txt').set({
-          'original_path': 'tree.txt',
-          'content': tree_content,
-          'hash': hashlib.sha256(tree_content.encode('utf-8')).hexdigest(),
-          'timestamp': firestore.SERVER_TIMESTAMP,
-      })
+# def _generate_special_files(db, project_id, source_path, extensions, files_in_db):
+#     # 1. tree.txt
+#     _generate_tree_txt(db, project_id, source_path, extensions)
 
-    # 2. _full_context.txt – **only from the in-memory manifest**
-    full = []
-    for rel_path, info in files_in_db.items():
-        doc_id = info.get('doc_id')
-        if not doc_id:
-            continue
-        doc = db.collection('projects').document(project_id) \
-                .collection('converted_files').document(doc_id).get()
-        if doc.exists:
-            full.append(f"--- FILE: {rel_path} ---\n\n{doc.to_dict().get('content','')}\n\n")
+#     # 2. _full_context.txt – **only from the in-memory manifest**
+#     _generate_full_context_txt(db, project_id)
 
-    full_txt = "".join(full)
-    db.collection('projects').document(project_id) \
-      .collection('converted_files').document('project_full_context_txt').set({
-          'original_path': '_full_context.txt',
-          'content': full_txt,
-          'hash': hashlib.sha256(full_txt.encode('utf-8')).hexdigest(),
-          'timestamp': firestore.SERVER_TIMESTAMP,
-      })
+# def _generate_tree_txt(db, project_id, source_path, extensions):
+#     tree_content = f"{source_path.name}/\n" + generate_tree_text_from_paths(source_path, allowed_extensions=extensions)
+#     db.collection('projects').document(project_id) \
+#       .collection('converted_files').document('project_tree_txt').set({
+#           'original_path': 'tree.txt',
+#           'content': tree_content,
+#           'hash': hashlib.sha256(tree_content.encode('utf-8')).hexdigest(),
+#           'timestamp': firestore.SERVER_TIMESTAMP,
+#       })
+
+# def _generate_full_context_txt(db, project_id):
+#     full = []
+#     for rel_path, info in files_in_db.items():
+#         doc_id = info.get('doc_id')
+#         if not doc_id:
+#             continue
+#         doc = db.collection('projects').document(project_id) \
+#                 .collection('converted_files').document(doc_id).get()
+#         if doc.exists:
+#             full.append(f"--- FILE: {rel_path} ---\n\n{doc.to_dict().get('content','')}\n\n")
+
+#     full_txt = "".join(full)
+#     db.collection('projects').document(project_id) \
+#       .collection('converted_files').document('project_full_context_txt').set({
+#           'original_path': '_full_context.txt',
+#           'content': full_txt,
+#           'hash': hashlib.sha256(full_txt.encode('utf-8')).hexdigest(),
+#           'timestamp': firestore.SERVER_TIMESTAMP,
+#       })
