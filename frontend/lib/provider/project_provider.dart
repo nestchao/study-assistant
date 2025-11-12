@@ -635,12 +635,23 @@ class ProjectProvider with ChangeNotifier {
     }
   }
 
-  Future<void> registerSyncConfig(String projectId, String path, List<String> extensions) async {
+  Future<void> registerSyncConfig(String projectId, String path, List<String> extensions, List<String> ignoredPaths) async {
     try {
-      await _api.registerSyncConfig(projectId, path, extensions);
+      await _api.registerSyncConfig(projectId, path, extensions, ignoredPaths);
       await fetchSyncConfigs(); // Refresh the list
     } catch (e) {
       print("Error registering sync config: $e");
+      rethrow;
+    }
+  }
+
+  Future<void> updateIgnoredPaths(String configId, List<String> ignoredPaths) async {
+    try {
+      await _api.updateSyncConfig(configId, ignoredPaths: ignoredPaths);
+      // Refresh to get the latest config state
+      await fetchSyncConfigs();
+    } catch (e) {
+      print("Error updating ignored paths: $e");
       rethrow;
     }
   }
@@ -774,7 +785,7 @@ class ProjectProvider with ChangeNotifier {
       // Find the sync config that matches the project we are currently viewing.
       final syncConfig = _syncConfigs.firstWhere(
         (c) => c.projectId == _viewingProjectId,
-        orElse: () => SyncConfig(id: '', projectId: '', localPath: '', allowedExtensions: [], isActive: false, status: 'unknown'), // Default value
+        orElse: () => SyncConfig(id: '', projectId: '', localPath: '', allowedExtensions: [], ignoredPaths: [], isActive: false, status: 'unknown'), // Default value
       );
       final extensions = syncConfig.allowedExtensions;
 
@@ -797,6 +808,7 @@ class ProjectProvider with ChangeNotifier {
     String projectName,
     String folderPath,
     List<String> extensions,
+    List<String> ignoredPaths, 
   ) async {
     try {
       // Step 1: Create the project first
@@ -809,7 +821,7 @@ class ProjectProvider with ChangeNotifier {
       print('✅ Project created with ID: $projectId');
       
       // Step 2: Register the sync config with the new project ID
-      await _api.registerSyncConfig(projectId, folderPath, extensions);
+      await _api.registerSyncConfig(projectId, folderPath, extensions, ignoredPaths);
       
       print('✅ Sync config registered for project: $projectId');
       

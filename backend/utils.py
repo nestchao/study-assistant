@@ -313,54 +313,36 @@ def convert_and_upload_to_firestore(db, project_id, file_path, source_root):
         print(f"    -> FAILED {rel_path_str}: {e}")
         return None
 
-def generate_tree_text(root_path: Path, allowed_extensions: list = None, prefix: str = "") -> str:
+def generate_tree_text_from_paths(root_name: str, file_paths: list) -> str:
     """
-    Recursively generates a tree structure string for a directory,
-    optionally filtering by file extensions and omitting empty directories.
+    Builds a tree structure string from a flat list of relative file paths.
     """
-    lines = []
-    
-    # Prepare the filter
-    dot_extensions = None
-    if allowed_extensions:
-        dot_extensions = [f".{ext.lstrip('.').lower()}" for ext in allowed_extensions]
+    tree = {}
+    for path_str in file_paths:
+        parts = Path(path_str).parts
+        d = tree
+        for part in parts[:-1]:
+            d = d.setdefault(part, {})
+        d[parts[-1]] = parts[-1] # Value can be anything, we only care about keys
 
-    # Get all items in the current directory
-    try:
-        items = sorted(
-            [item for item in root_path.iterdir() if '.git' not in item.parts and '__pycache__' not in item.parts and item.name != '.DS_Store']
-        )
-    except FileNotFoundError:
-        return "" # Directory might have been deleted during sync
+    def build_lines(sub_tree, prefix=""):
+        lines = []
+        items = sorted(sub_tree.keys())
+        for i, key in enumerate(items):
+            is_last = (i == len(items) - 1)
+            connector = "└── " if is_last else "├── "
+            value = sub_tree[key]
+            
+            if isinstance(value, dict): # It's a directory
+                lines.append(f"{prefix}{connector}{key}/")
+                new_prefix = prefix + ("    " if is_last else "│   ")
+                lines.extend(build_lines(value, new_prefix))
+            else: # It's a file
+                lines.append(f"{prefix}{connector}{key}")
+        return lines
 
-    # --- THIS IS THE IMPROVED LOGIC ---
-    # We need to filter the items we're going to display *before* we loop
-    displayable_items = []
-    for item in items:
-        if item.is_dir():
-            # For a directory, we only include it if it will contain matching files
-            # This is a recursive check, so it's accurate.
-            if generate_tree_text(item, allowed_extensions=allowed_extensions):
-                displayable_items.append(item)
-        elif item.is_file():
-            # For a file, we check its extension against the filter
-            if not dot_extensions or item.suffix.lower() in dot_extensions:
-                displayable_items.append(item)
-    # --- END OF IMPROVEMENT ---
-
-    for i, item in enumerate(displayable_items):
-        is_last = (i == len(displayable_items) - 1)
-        connector = "└── " if is_last else "├── "
-        
-        if item.is_dir():
-            lines.append(f"{prefix}{connector}{item.name}/")
-            new_prefix = prefix + ("    " if is_last else "│   ")
-            # The recursive call will now only be on non-empty, relevant directories
-            lines.append(generate_tree_text(item, allowed_extensions=allowed_extensions, prefix=new_prefix))
-        else: # It must be a file
-            lines.append(f"{prefix}{connector}{item.name}")
-
-    return "\n".join(lines)
+    tree_lines = build_lines(tree)
+    return f"{root_name}/\n" + "\n".join(tree_lines)
 
 def token_required(f):
     @wraps(f)
