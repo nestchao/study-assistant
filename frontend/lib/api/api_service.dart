@@ -274,7 +274,7 @@ class ApiService {
   throw Exception('Failed to load sync configs');
 }
 
-  Future<String> registerSyncConfig(String projectId, String path, List<String> extensions) async {
+  Future<String> registerSyncConfig(String projectId, String path, List<String> extensions, List<String> ignoredPaths) async {
     final response = await http.post(
       Uri.parse('$baseUrl/sync/register'),
       headers: {'Content-Type': 'application/json'},
@@ -282,6 +282,7 @@ class ApiService {
         'project_id': projectId,
         'local_path': path,
         'extensions': extensions,
+        'ignored_paths': ignoredPaths,
       }),
     );
     if (response.statusCode == 201) {
@@ -290,10 +291,11 @@ class ApiService {
     throw Exception('Failed to register sync config');
   }
 
-  Future<void> updateSyncConfig(String configId, {bool? isActive, List<String>? extensions}) async {
+  Future<void> updateSyncConfig(String configId, {bool? isActive, List<String>? extensions, List<String>? ignoredPaths}) async {
     final Map<String, dynamic> body = {};
     if (isActive != null) body['is_active'] = isActive;
     if (extensions != null) body['allowed_extensions'] = extensions;
+    if (ignoredPaths != null) body['ignored_paths'] = ignoredPaths;
 
     final response = await http.put(
       Uri.parse('$baseUrl/sync/config/$configId'),
