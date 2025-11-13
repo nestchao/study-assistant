@@ -176,3 +176,24 @@ def upload_paper(project_id):
         print(f"❌ Error processing past paper: {e}")
         print(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
+    
+@paper_solver_bp.route('/delete-paper/<project_id>/<paper_id>', methods=['DELETE'])
+def delete_paper(project_id, paper_id):
+    """Deletes a specific past paper document from Firestore."""
+    print(f"🗑️ DELETE request for past paper: {paper_id} in project: {project_id}")
+    try:
+        paper_ref = db.collection('projects').document(project_id).collection('past_papers').document(paper_id)
+        
+        # Check if the document exists before trying to delete
+        if not paper_ref.get().exists:
+            print(f"  - Paper not found: {paper_id}")
+            return jsonify({"error": "Past paper not found"}), 404
+
+        paper_ref.delete()
+        print(f"  ✅ Successfully deleted past paper: {paper_id}")
+        return jsonify({"success": True, "message": "Past paper deleted successfully."}), 200
+    except Exception as e:
+        import traceback
+        print(f"❌ Error deleting past paper {paper_id}: {e}")
+        print(traceback.format_exc())
+        return jsonify({"error": str(e)}), 500

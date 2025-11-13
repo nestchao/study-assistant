@@ -1,3 +1,4 @@
+// --- FILE: frontend/lib/screens/paper_solver_view.dart ---
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:study_assistance/provider/project_provider.dart';
@@ -78,6 +79,51 @@ class _PaperSolverViewState extends State<PaperSolverView> {
           ],
         );
       },
+    );
+  }
+
+  void _showDeletePaperConfirmation(BuildContext context, ProjectProvider provider, PastPaper paper) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete Past Paper?'),
+        content: Text('Are you sure you want to delete "${paper.filename}"? This action cannot be undone.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () async {
+              Navigator.of(ctx).pop(); // Close the dialog first
+              try {
+                await provider.deletePastPaper(paper.id);
+
+                // If the deleted paper was the one being viewed, clear the view
+                if (mounted && _selectedPaper?.id == paper.id) {
+                  setState(() {
+                    _selectedPaper = null;
+                  });
+                }
+                
+                if(mounted) {
+                   ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('"${paper.filename}" deleted.'), backgroundColor: Colors.green),
+                  );
+                }
+              } catch (e) {
+                 if(mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('Error: ${e.toString()}'), backgroundColor: Colors.red),
+                    );
+                 }
+              }
+            },
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
     );
   }
 
@@ -235,6 +281,8 @@ class _PaperSolverViewState extends State<PaperSolverView> {
               itemBuilder: (context, index) {
                 final paper = p.pastPapers[index];
                 final isSelected = !isMobile && _selectedPaper?.id == paper.id;
+                final isDeleting = p.deletingPaperId == paper.id;
+
                 return ListTile(
                   leading: const Icon(Icons.article_outlined),
                   title: Text(paper.filename, maxLines: 2, overflow: TextOverflow.ellipsis),
@@ -245,8 +293,15 @@ class _PaperSolverViewState extends State<PaperSolverView> {
                       color: paper.analysisMode == 'multimodal' ? Colors.indigo : Colors.black54,
                     ),
                   ),
+                  trailing: isDeleting
+                      ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2))
+                      : IconButton(
+                          icon: Icon(Icons.delete_outline, color: Colors.red[700]),
+                          onPressed: () => _showDeletePaperConfirmation(context, p, paper),
+                          tooltip: 'Delete Paper',
+                        ),
                   tileColor: isSelected ? Colors.indigo.withOpacity(0.1) : null,
-                  onTap: () {
+                  onTap: isDeleting ? null : () {
                     setState(() {
                       _selectedPaper = paper;
                     });

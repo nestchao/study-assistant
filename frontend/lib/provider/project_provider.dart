@@ -1,3 +1,4 @@
+// --- FILE: frontend/lib/provider/project_provider.dart ---
 import 'dart:developer';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -50,6 +51,9 @@ class ProjectProvider with ChangeNotifier {
 
   String? _paperError;
   String? get paperError => _paperError;
+
+  String? _deletingPaperId;
+  String? get deletingPaperId => _deletingPaperId;
 
   bool _isGuestMode = false;
   bool get isGuestMode => _isGuestMode;
@@ -538,6 +542,26 @@ class ProjectProvider with ChangeNotifier {
         _isUploadingPaper = false;
         notifyListeners();
       }
+    }
+  }
+
+  Future<void> deletePastPaper(String paperId) async {
+    if (_currentProject == null) return;
+    
+    _deletingPaperId = paperId;
+    notifyListeners();
+
+    try {
+      await _api.deletePastPaper(_currentProject!.id, paperId);
+      // If successful, remove from the local list
+      _pastPapers.removeWhere((paper) => paper.id == paperId);
+    } catch (e) {
+      print("Error deleting past paper: $e");
+      // Re-throw to be caught by the UI and shown in a snackbar or dialog
+      rethrow;
+    } finally {
+      _deletingPaperId = null;
+      notifyListeners();
     }
   }
 
