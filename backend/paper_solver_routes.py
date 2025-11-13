@@ -106,10 +106,29 @@ def solve_paper_with_text(file_stream, filename, context):
 def get_papers(project_id):
     try:
         papers_ref = db.collection('projects').document(project_id).collection('past_papers').order_by('timestamp', direction=firestore.Query.DESCENDING)
-        # The .to_dict() method correctly converts Firestore Timestamps to Python datetimes, which are JSON serializable
-        papers = [{"id": doc.id, **doc.to_dict()} for doc in papers_ref.stream()]
+        
+        # --- THIS IS THE FIX ---
+        papers = []
+        for doc in papers_ref.stream():
+            data = doc.to_dict()
+            
+            # 1. Check if 'timestamp' exists and is not None
+            if 'timestamp' in data and data['timestamp']:
+                # 2. Convert the Python datetime object to a standard ISO 8601 string.
+                #    This format ('2025-11-13T18:29:01.123Z') is universally understood.
+                data['timestamp'] = data['timestamp'].isoformat()
+            
+            # 3. Combine the document ID with the processed data.
+            papers.append({"id": doc.id, **data})
+            
+        print(f"  ✅ Found and serialized {len(papers)} past papers for project {project_id}.")
         return jsonify(papers)
+        # --- END OF FIX ---
+
     except Exception as e:
+        import traceback
+        print(f"❌ Error in get_papers for project {project_id}: {e}")
+        print(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
 
 @paper_solver_bp.route('/upload-paper/<project_id>', methods=['POST'])
@@ -135,9 +154,6 @@ def upload_paper(project_id):
 
         paper_ref = db.collection('projects').document(project_id).collection('past_papers').document()
         
-        # --- THIS IS THE FIX ---
-
-        # 1. This dictionary is for saving to the database. It contains the Sentinel.
         paper_data_for_db = {
             "filename": filename,
             "timestamp": firestore.SERVER_TIMESTAMP,
@@ -146,19 +162,14 @@ def upload_paper(project_id):
         }
         paper_ref.set(paper_data_for_db)
 
-        # 2. This dictionary is for the JSON response. It does NOT contain the Sentinel.
         response_data = {
             "id": paper_ref.id,
             "filename": filename,
             "qa_pairs": qa_pairs,
             "analysis_mode": analysis_mode
-            # The client doesn't need the timestamp immediately. It will get it on the next fetch.
         }
 
-        # 3. Return the safe dictionary.
         return jsonify(response_data), 200
-
-        # --- END OF FIX ---
 
     except Exception as e:
         import traceback

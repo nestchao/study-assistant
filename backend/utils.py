@@ -157,15 +157,43 @@ def extract_text(pdf_stream):
     
 
 def extract_text_from_image(image_stream):
-    """Extracts text from an image file stream using OCR."""
-    print("  🖼️ Extracting text from image via OCR...")
+    """
+    Extracts text from an image file stream using OCR, utilizing OpenCV for image processing.
+    """
+    print("  🖼️ Extracting text from image via OCR (using OpenCV preprocessing)...")
     try:
-        image = Image.open(image_stream)
-        text = pytesseract.image_to_string(image)
+        # 1. Open the image stream using PIL
+        pil_image = Image.open(image_stream)
+        
+        # 2. Convert the PIL Image to an OpenCV (numpy) array
+        # This converts the image to the format OpenCV works with (BGR by default)
+        opencv_image = np.array(pil_image)
+        
+        # 3. OpenCV Preprocessing (Optional but recommended for better OCR)
+        
+        # Convert to grayscale
+        gray_image = cv2.cvtColor(opencv_image, cv2.COLOR_BGR2GRAY)
+        
+        # Apply a binary threshold (useful for text on simple backgrounds)
+        # Adjusting the threshold values (e.g., 128 and 255) might be necessary 
+        # based on the image type.
+        _, processed_image = cv2.threshold(gray_image, 150, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
+        
+        # 4. Convert the processed OpenCV array back to a PIL Image 
+        # This is because pytesseract.image_to_string often works best 
+        # when passing a PIL Image object or a file path.
+        pil_processed_image = Image.fromarray(processed_image)
+        
+        # 5. Perform OCR using pytesseract
+        text = pytesseract.image_to_string(pil_processed_image)
+        
         print(f"  ✅ OCR extracted {len(text)} characters from image.")
         return text
+        
     except Exception as e:
         print(f"  ❌ Image OCR failed: {e}")    
+        # If the error is related to stream reading, ensure the stream is rewinded 
+        # or properly handled before passing it to Image.open
         return ""
 
 def split_chunks(text):

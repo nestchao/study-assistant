@@ -224,12 +224,17 @@ class ApiService {
   Future<List<Map<String, dynamic>>> getPastPapers(String projectId) async {
     final response = await http.get(Uri.parse('$baseUrl/get-papers/$projectId'));
     if (response.statusCode == 200) {
-      return List<Map<String, dynamic>>.from(json.decode(response.body));
+      // --- MODIFY THIS PART ---
+      try {
+        return List<Map<String, dynamic>>.from(json.decode(response.body));
+      } catch (e) {
+        throw Exception('Failed to parse server response.');
+      }
     } else {
       throw Exception('Failed to load past papers');
     }
   }
-
+  
   // --- NEW: Upload Past Paper ---
   Future<Map<String, dynamic>> uploadPastPaper(
     String projectId,
