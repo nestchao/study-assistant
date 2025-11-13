@@ -331,6 +331,7 @@ class ProjectProvider with ChangeNotifier {
   // --- REST OF YOUR METHODS ---
 
   void setCurrentProject(Project project) {
+
     _currentProject = project;
     _sources = [];
     _selectedSource = null;
@@ -340,6 +341,8 @@ class ProjectProvider with ChangeNotifier {
     _scratchpadContent = "<p>Select a source and click 'Show Source Note'.</p>";
     _mediaCache.clear();
     _pastPapers = []; // Clear old papers
+    
+    
     fetchSources();
     fetchPastPapers(); // Fetch papers for the new project
     notifyListeners();
@@ -491,13 +494,16 @@ class ProjectProvider with ChangeNotifier {
     if (_currentProject == null) return;
     if (_isLoadingPapers) return;
 
+
     _isLoadingPapers = true;
     notifyListeners();
-    try {
-      final data = await _api.getPastPapers(_currentProject!.id);
+    try {      
+      final data = await _api.getPastPapers(_currentProject!.id);      
       _pastPapers = data.map((map) => PastPaper.fromMap(map)).toList();
     } catch (e) {
-      print("Error fetching past papers: $e");
+      // --- THIS LOG WILL CATCH ANY ERROR DURING THE PROCESS ---
+      print("[PROVIDER DEBUG] ==> X. CRITICAL ERROR in fetchPastPapers: $e");
+      
     } finally {
       _isLoadingPapers = false;
       notifyListeners();
