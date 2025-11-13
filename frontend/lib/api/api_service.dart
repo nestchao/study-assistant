@@ -271,6 +271,17 @@ class ApiService {
     }
   }
 
+  Future<void> deletePastPaper(String projectId, String paperId) async {
+    final response = await http.delete(
+      Uri.parse('$baseUrl/delete-paper/$projectId/$paperId'),
+    );
+
+    if (response.statusCode != 200) {
+      final error = json.decode(response.body)['error'] ?? 'Failed to delete past paper';
+      throw Exception(error);
+    }
+  }
+
   Future<List<Map<String, dynamic>>> getSyncConfigs() async {
   final response = await http.get(Uri.parse('$baseUrl/sync/configs'));
   if (response.statusCode == 200) {
