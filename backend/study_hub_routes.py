@@ -67,7 +67,7 @@ def generate_note(text):
     print("  🤖 Generating AI study note...")
     prompt = f"""
     You are an expert academic study assistant. Your mission is to transform dense academic texts into simplified, well-structured study notes that are easy to understand.
-
+    
     Your output must be in the **same language as the source text**. Follow these rules meticulously.
 
     # 🚀 Core Transformation Rules
@@ -76,10 +76,11 @@ def generate_note(text):
     *   You MUST follow the structure, headings, and topic order of the original text **EXACTLY**.
     *   Do not merge or re-order sections. Simplify content **within** the original structure.
 
-    ## 1. 💡 Simplify and Shorten Content
-    *   **Keep Key Points:** Ensure all essential definitions and arguments are retained.
-    *   **Sentence Compression:** Break down long, complex sentences into shorter, clearer ones.
-    *   **Word Replacement:** Replace complex or technical words with simpler, more common equivalents.
+    ## 1. 💡 Simplify and Shorten Content (Aggressive Simplification)
+    *   **Clarity Priority:** **REWRITE** dense, convoluted academic sentences into short, direct, simple statements. The resulting text must be immediately clear to a novice reader.
+    *   **Sentence Compression:** Aim for maximum brevity. Sentences should be **no more than 15 words** where grammatically possible. Keep the flow simple (Subject-Verb-Object).
+    *   **Word Replacement:** Replace complex or academic terminology (e.g., 'paradigm,' 'utilization,' 'delineate') with simpler, everyday equivalents (e.g., 'model,' 'use,' 'show').
+    *   **Keep Key Points:** Retain all essential definitions, data, and core arguments accurately.
 
     ## 2. ✍️ Annotate Simplified Words (Mandatory)
     *   For **every single word** you simplify, you MUST provide its Chinese translation immediately after.

@@ -13,6 +13,7 @@ Pillow
 firebase-admin
 html2text
 opencv-python
+fitz
 
 # Use langchain-google-genai directly and a core version of langchain
 langchain-google-genai==0.0.9
