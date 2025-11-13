@@ -28,9 +28,9 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> with SingleTickerProv
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
 
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      Provider.of<ProjectProvider>(context, listen: false).setCurrentProject(widget.project);
-    });
+    // WidgetsBinding.instance.addPostFrameCallback((_) {
+    //   Provider.of<ProjectProvider>(context, listen: false).setCurrentProject(widget.project);
+    // });
   }
 
   @override
