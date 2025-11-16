@@ -10,6 +10,7 @@ import 'dart:convert';
 import 'package:image_picker/image_picker.dart';
 import 'package:study_assistance/models/past_paper.dart';
 import 'package:study_assistance/models/sync_config.dart';
+import 'package:study_assistance/models/code_project.dart';
 
 class Source {
   final String id;
@@ -154,6 +155,7 @@ class ProjectProvider with ChangeNotifier {
   ProjectProvider() {
     _loadProjectsFromCache();
     fetchProjects();
+    fetchSyncProjects();
   }
 
   @override
@@ -165,11 +167,17 @@ class ProjectProvider with ChangeNotifier {
   }
 
   // State
-  List<Project> _projects = [];
-  bool _isLoadingProjects = false;
+  List<Project> _projects = []; // For Study Hub
   List<Project> get projects => _projects;
+  bool _isLoadingProjects = false;
   bool get isLoadingProjects => _isLoadingProjects;
 
+  List<CodeProject> _syncProjects = [];
+  List<CodeProject> get syncProjects => _syncProjects;
+  bool _isLoadingSyncProjects = false;
+  bool get isLoadingSyncProjects => _isLoadingSyncProjects;
+  String? _syncingProjectId; // <-- Changed from configId to projectId
+  String? get syncingProjectId => _syncingProjectId;
   Project? _currentProject;
   Project? get currentProject => _currentProject;
 
@@ -216,7 +224,7 @@ class ProjectProvider with ChangeNotifier {
     if (projectsJson != null) {
       final List<dynamic> projectList = jsonDecode(projectsJson);
       _projects = projectList.map((map) => Project.fromMap(map)).toList();
-      print("✅ Loaded ${_projects.length} projects from cache.");
+      print("✅ Loaded ${_projects.length} study projects from cache.");
       notifyListeners();
     }
   }
@@ -675,17 +683,6 @@ class ProjectProvider with ChangeNotifier {
     }
   }
 
-  Future<void> updateIgnoredPaths(String configId, List<String> ignoredPaths) async {
-    try {
-      await _api.updateSyncConfig(configId, ignoredPaths: ignoredPaths);
-      // Refresh to get the latest config state
-      await fetchSyncConfigs();
-    } catch (e) {
-      print("Error updating ignored paths: $e");
-      rethrow;
-    }
-  }
-
   Future<void> updateSyncConfigStatus(String configId, bool isActive) async {
     try {
       await _api.updateSyncConfig(configId, isActive: isActive);
@@ -712,22 +709,6 @@ class ProjectProvider with ChangeNotifier {
     } catch (e) {
       print("Error deleting sync config: $e");
       rethrow;
-    }
-  }
-
-  Future<Map<String, dynamic>> runSync(String configId) async {
-    _syncingConfigId = configId;
-    notifyListeners();
-    try {
-      final result = await _api.runSync(configId);
-      await fetchSyncConfigs(); // Refresh status and last synced time
-      return result;
-    } catch (e) {
-      print("Error running sync: $e");
-      rethrow;
-    } finally {
-      _syncingConfigId = null;
-      notifyListeners();
     }
   }
 
@@ -832,41 +813,93 @@ class ProjectProvider with ChangeNotifier {
       _isGeneratingSuggestion = false;
       notifyListeners();
     }
+  }  
+
+  Future<void> fetchSyncProjects() async {
+    _isLoadingSyncProjects = true;
+    notifyListeners();
+    try {
+      final data = await _api.getSyncProjects();
+      _syncProjects = data.map((map) => CodeProject.fromMap(map)).toList();
+    } catch (e) {
+      print("Error fetching sync projects: $e");
+    } finally {
+      _isLoadingSyncProjects = false;
+      notifyListeners();
+    }
   }
 
-  Future<void> createProjectAndRegisterSync(
+   Future<void> createCodeProjectAndRegisterFolder(
     String projectName,
     String folderPath,
     List<String> extensions,
-    List<String> ignoredPaths, 
+    List<String> ignoredPaths,
   ) async {
     try {
-      // Step 1: Create the project first
-      final projectId = await _api.createProjectAndGetId(projectName);
+      // Step 1: Create the code project document
+      final projectId = await _api.createCodeProjectAndGetId(projectName);
+      if (projectId == null) throw Exception("Failed to create code project");
       
-      if (projectId == null || projectId.isEmpty) {
-        throw Exception('Failed to create project: No ID returned');
-      }
+      // Step 2: Register the folder by updating the new project document
+      await _api.registerFolderToProject(projectId, folderPath, extensions, ignoredPaths);
       
-      print('✅ Project created with ID: $projectId');
-      
-      // Step 2: Register the sync config with the new project ID
-      await _api.registerSyncConfig(projectId, folderPath, extensions, ignoredPaths);
-      
-      print('✅ Sync config registered for project: $projectId');
-      
-      // Step 3: Refresh both lists
-      await Future.wait([
-        fetchProjects(forceRefresh: true),
-        fetchSyncConfigs(),
-      ]);
-      
-      print('✅ Project and sync config created successfully');
+      // Step 3: Refresh the list
+      await fetchSyncProjects();
     } catch (e) {
-      print('❌ Error in createProjectAndRegisterSync: $e');
+      print('Error in createCodeProjectAndRegisterFolder: $e');
       rethrow;
     }
   }
 
-  
+  Future<void> updateIgnoredPaths(String projectId, List<String> ignoredPaths) async {
+    try {
+      await _api.updateSyncProject(projectId, ignoredPaths: ignoredPaths);
+      await fetchSyncProjects();
+    } catch (e) {
+      print("Error updating ignored paths: $e");
+      rethrow;
+    }
+  }
+
+  Future<void> updateSyncProjectStatus(String projectId, bool isActive) async {
+    try {
+      await _api.updateSyncProject(projectId, isActive: isActive);
+      final index = _syncProjects.indexWhere((p) => p.id == projectId);
+      if (index != -1) {
+        // Just refetch for simplicity and to ensure all data is up-to-date
+        await fetchSyncProjects(); 
+      }
+    } catch (e) {
+      print("Error updating sync project status: $e");
+      rethrow;
+    }
+  }
+
+  Future<void> deleteSyncFromProject(String projectId) async {
+    try {
+      await _api.deleteSyncFromProject(projectId);
+      // After deleting, the project won't have a local_path, so it will disappear from the list.
+      await fetchSyncProjects();
+    } catch (e) {
+      print("Error deleting sync from project: $e");
+      rethrow;
+    }
+  }
+
+  Future<Map<String, dynamic>> runSync(String projectId) async {
+    _syncingProjectId = projectId;
+    notifyListeners();
+    try {
+      final result = await _api.runSync(projectId);
+      await fetchSyncProjects(); // Refresh status and last synced time
+      return result;
+    } catch (e) {
+      print("Error running sync: $e");
+      await fetchSyncProjects(); // Also refresh on error to update status
+      rethrow;
+    } finally {
+      _syncingProjectId = null;
+      notifyListeners();
+    }
+  }
 }
