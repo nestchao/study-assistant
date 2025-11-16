@@ -1,3 +1,4 @@
+# backend/study_hub_routes.py
 import re
 import markdown
 import html2text
@@ -25,6 +26,12 @@ redis_client = None
 
 NULL_CACHE_VALUE = "##NULL##"
 
+# --- NEW: Define collection names as constants ---
+STUDY_PROJECTS_COLLECTION = "projects"
+CODE_PROJECTS_COLLECTION = "code_projects"
+CODE_FILES_SUBCOLLECTION = "synced_code_files"
+
+
 def set_dependencies(db_instance, note_model_instance, chat_model_instance, redis_instance):
     """Injects database and AI model dependencies from the main app."""
     global db, note_gen_model, chat_model, redis_client
@@ -40,7 +47,7 @@ def get_original_text(project_id, source_id):
     print(f"  📚 Retrieving original text for source '{source_id}' in project '{project_id}'...")
     
     try:
-        source_ref = db.collection('projects').document(project_id).collection('sources').document(source_id)
+        source_ref = db.collection(STUDY_PROJECTS_COLLECTION).document(project_id).collection('sources').document(source_id)
         chunks_query = source_ref.collection('chunks').order_by('order').stream()
         
         all_chunks = []
@@ -117,10 +124,10 @@ def get_simplified_note_context(project_id, source_id=None):
     sources_to_query = []
 
     if source_id:
-        source_ref = db.collection('projects').document(project_id).collection('sources').document(source_id)
+        source_ref = db.collection(STUDY_PROJECTS_COLLECTION).document(project_id).collection('sources').document(source_id)
         sources_to_query.append(source_ref)
     else:
-        sources_stream = db.collection('projects').document(project_id).collection('sources').stream()
+        sources_stream = db.collection(STUDY_PROJECTS_COLLECTION).document(project_id).collection('sources').stream()
         sources_to_query = [source.reference for source in sources_stream]
 
     for source_ref in sources_to_query:
@@ -143,9 +150,10 @@ def get_simplified_note_context(project_id, source_id=None):
 
 # --- ROUTES ---
 
+# --- STUDY HUB PROJECT ROUTES ---
 @study_hub_bp.route('/get-projects', methods=['GET'])
 def get_projects():
-    docs = db.collection('projects').order_by('timestamp', direction=firestore.Query.DESCENDING).stream()
+    docs = db.collection(STUDY_PROJECTS_COLLECTION).order_by('timestamp', direction=firestore.Query.DESCENDING).stream()
     projects = [{"id": d.id, "name": d.to_dict().get('name')} for d in docs]
     return jsonify(projects)
 
@@ -153,10 +161,9 @@ def get_projects():
 @token_required 
 def create_project():
     name = request.json.get('name')
-    user_id = request.user_id # <-- Get the verified user ID from the decorator
+    user_id = request.user_id 
     
-    ref = db.collection('projects').document()
-    # --- ADD THE userId TO THE DOCUMENT ---
+    ref = db.collection(STUDY_PROJECTS_COLLECTION).document()
     ref.set({
         'name': name,
         'timestamp': firestore.SERVER_TIMESTAMP,
@@ -170,7 +177,7 @@ def rename_project(project_id):
     if not new_name:
         return jsonify({"success": False, "error": "New name not provided"}), 400
     try:
-        project_ref = db.collection('projects').document(project_id)
+        project_ref = db.collection(STUDY_PROJECTS_COLLECTION).document(project_id)
         project_ref.update({'name': new_name})
         return jsonify({"success": True, "message": f"Project renamed to {new_name}."}), 200
     except Exception as e:
@@ -180,7 +187,7 @@ def rename_project(project_id):
 def delete_project(project_id):
     print(f"\n🗑️  DELETE REQUEST for project: {project_id}")
     try:
-        project_ref = db.collection('projects').document(project_id)
+        project_ref = db.collection(STUDY_PROJECTS_COLLECTION).document(project_id)
         for collection_ref in project_ref.collections():
             delete_collection(collection_ref, batch_size=50)
         project_ref.delete()
@@ -188,10 +195,32 @@ def delete_project(project_id):
         return jsonify({"success": True}), 200
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
+        
+# --- NEW: CODE ASSISTANT PROJECT ROUTES ---
+@study_hub_bp.route('/get-code-projects', methods=['GET'])
+def get_code_projects():
+    docs = db.collection(CODE_PROJECTS_COLLECTION).order_by('timestamp', direction=firestore.Query.DESCENDING).stream()
+    projects = [{"id": d.id, "name": d.to_dict().get('name')} for d in docs]
+    return jsonify(projects)
+
+@study_hub_bp.route('/create-code-project', methods=['POST'])
+@token_required
+def create_code_project():
+    name = request.json.get('name')
+    user_id = request.user_id
+
+    ref = db.collection(CODE_PROJECTS_COLLECTION).document()
+    ref.set({
+        'name': name,
+        'timestamp': firestore.SERVER_TIMESTAMP,
+        'userId': user_id
+    })
+    return jsonify({"id": ref.id})
+
 
 @study_hub_bp.route('/get-sources/<project_id>', methods=['GET'])
 def get_sources(project_id):
-    docs = db.collection('projects').document(project_id).collection('sources').stream()
+    docs = db.collection(STUDY_PROJECTS_COLLECTION).document(project_id).collection('sources').stream()
     sources = [{"id": d.id, "filename": d.to_dict().get('filename')} for d in docs]
     return jsonify(sources)
 
@@ -217,7 +246,7 @@ def upload_source(project_id):
                 errors.append({"filename": filename, "error": "No text could be extracted."})
                 continue
 
-            source_ref = db.collection('projects').document(project_id).collection('sources').document(safe_id)
+            source_ref = db.collection(STUDY_PROJECTS_COLLECTION).document(project_id).collection('sources').document(safe_id)
             source_ref.set({
                 'filename': filename, 
                 'timestamp': firestore.SERVER_TIMESTAMP, 
@@ -276,7 +305,7 @@ def upload_source(project_id):
 def delete_source(project_id, source_id):
     print(f"\n🗑️  DELETE REQUEST for source: {source_id}")
     try:
-        source_ref = db.collection('projects').document(project_id).collection('sources').document(source_id)
+        source_ref = db.collection(STUDY_PROJECTS_COLLECTION).document(project_id).collection('sources').document(source_id)
         for collection_ref in source_ref.collections():
             delete_collection(collection_ref, batch_size=50)
         source_ref.delete()
@@ -321,20 +350,15 @@ def get_note(project_id, source_id):
     print(f"CACHE MISS for note: {note_key}. Fetching from Firestore...")
 
     # 3. If miss, get from Firestore
-    # --- THIS IS THE FIX FOR CACHE BREAKDOWN (MUTEX LOCK) ---
     lock_key = f"lock:{note_key}"
-    # Try to acquire a lock with a short timeout (e.g., 10s)
-    # nx=True means "set if not exists" - this is an atomic operation
     lock_acquired = redis_client.set(lock_key, "1", ex=10, nx=True) if redis_client else False
 
     if lock_acquired:
         print(f"  ✅ Lock acquired for {note_key}. Rebuilding cache...")
         try:
-            # 3. Get from Firestore
-            pages_query = db.collection('projects').document(project_id).collection('sources').document(source_id).collection('note_pages').order_by('order').stream()
+            pages_query = db.collection(STUDY_PROJECTS_COLLECTION).document(project_id).collection('sources').document(source_id).collection('note_pages').order_by('order').stream()
             html = "".join(p.to_dict().get('html', '') for p in pages_query)
             
-            # (Cache Penetration logic from before)
             value_to_cache = html if html else NULL_CACHE_VALUE
             ttl = 300 + random.randint(0, 60) if html else 30
 
@@ -345,16 +369,13 @@ def get_note(project_id, source_id):
             return jsonify({"note_html": "" if value_to_cache == NULL_CACHE_VALUE else value_to_cache})
 
         finally:
-            # IMPORTANT: Release the lock
             if redis_client:
                 redis_client.delete(lock_key)
             print(f"  🔑 Lock released for {note_key}.")
             
     else:
-        # We failed to get the lock, another process is rebuilding.
         print(f"  ...Could not acquire lock. Waiting briefly for cache to be rebuilt...")
-        time.sleep(0.1) # Wait 100ms
-        # Try the whole function again. This time it should be a cache hit.
+        time.sleep(0.1) 
         return get_note(project_id, source_id)
 
 @study_hub_bp.route('/update-note/<project_id>/<path:source_id>', methods=['POST'])
@@ -363,15 +384,14 @@ def update_note(project_id, source_id):
     if new_html is None:
         return jsonify({"error": "Missing 'html_content'"}), 400
     try:
-        source_ref = db.collection('projects').document(project_id).collection('sources').document(source_id)
+        source_ref = db.collection(STUDY_PROJECTS_COLLECTION).document(project_id).collection('sources').document(source_id)
         note_pages_ref = source_ref.collection('note_pages')
         
-        # Delete old pages
         for doc in note_pages_ref.stream():
             doc.reference.delete()
         
-        # Save new content in chunks
         chunk_size = 900000
+        note_pages_saved = 0
         for i in range(0, len(new_html), chunk_size):
             chunk = new_html[i:i+chunk_size]
             page_num = i // chunk_size
@@ -400,19 +420,43 @@ def update_note(project_id, source_id):
 def ask_chatbot(project_id):
     data = request.json
     question = data.get('question')
-    source_id = data.get('source_id') # Can be a specific source ID or null for 'all'
+    source_id = data.get('source_id') 
+    history = data.get('history', []) 
     
     context = get_simplified_note_context(project_id, source_id)
     if not context:
         return jsonify({"answer": "I couldn't find any generated notes to read. Please upload a document first!"})
 
-    prompt = f"You are a helpful study assistant. Answer the user's question based *only* on the provided study notes. The notes are simplified summaries, so be concise. If the answer is not in the notes, say 'I'm sorry, that information isn't in my simplified notes.'\n\nStudy Notes:\n---\n{context}\n---\n\nQuestion: {question}\n\nAnswer:"
+    system_prompt = f"""You are a helpful study assistant. Your primary goal is to answer the user's questions based *only* on the provided study notes.
+    - Be concise and clear in your answers.
+    - If the answer is not in the notes, you MUST say 'I'm sorry, that information isn't in my simplified notes.'
+    - Do not use any external knowledge.
+
+    Here are the study notes you must use as your knowledge base:
+    ---
+    {context}
+    ---
+    """
+
+    messages = [{'role': 'user', 'parts': [system_prompt]}]
+    messages.append({'role': 'model', 'parts': ["Okay, I have read the study notes. I am ready to answer your questions based on them."]})
     
+    for turn in history:
+        role = turn.get('role')
+        content = turn.get('content')
+        if role and content:
+            messages.append({'role': role, 'parts': [content]})
+
+    messages.append({'role': 'user', 'parts': [question]})
+
     try:
-        # Use the injected chat_model
-        answer = chat_model.generate_content(prompt).text
+        print(f"  🤖 Sending chat request with {len(history)} history turns...")
+        response = chat_model.generate_content(messages)
+        answer = response.text
+        print("  ✅ Received chat response.")
         return jsonify({"answer": answer})
     except Exception as e:
+        print(f"  ❌ Error during chatbot generation: {e}")
         return jsonify({"answer": f"Sorry, an error occurred: {e}"})
 
 @study_hub_bp.route('/generate-topic-note/<project_id>', methods=['POST'])
@@ -450,26 +494,20 @@ def topic_note(project_id):
     
 @study_hub_bp.route('/regenerate-note/<project_id>/<path:source_id>', methods=['POST'])
 def regenerate_note(project_id, source_id):
-    """Regenerates the simplified note for a single source and returns the new HTML."""
     print(f"\n🔄 REGENERATE NOTE request for source: {source_id} in project: {project_id}")
     try:
-        # 1. Get the original text from Firestore
         original_text = get_original_text(project_id, source_id)
         if not original_text:
             return jsonify({"error": "Original source text not found or is empty. Please re-upload the document."}), 404
 
-        # 2. Generate the new note using the same function as upload
         new_note_html = generate_note(original_text)
         
-        # 3. Overwrite the old note pages in Firestore
-        source_ref = db.collection('projects').document(project_id).collection('sources').document(source_id)
+        source_ref = db.collection(STUDY_PROJECTS_COLLECTION).document(project_id).collection('sources').document(source_id)
         note_pages_ref = source_ref.collection('note_pages')
         
-        # Delete old pages first for a clean slate
         for doc in note_pages_ref.stream():
             doc.reference.delete()
             
-        # Save new content in chunks
         chunk_size = 900000 
         for i in range(0, len(new_note_html), chunk_size):
             page_content = new_note_html[i:i + chunk_size]
@@ -480,30 +518,23 @@ def regenerate_note(project_id, source_id):
             })
             print(f"  + Saved note page {page_num}")
 
-        # 4. Invalidate the Redis cache for this specific note
         if redis_client:
             note_redis_key = f"note:{project_id}:{source_id}"
             redis_client.delete(note_redis_key)
             print(f"  ✅ Invalidated Redis cache for regenerated note: {note_redis_key}")
 
-        # 5. Invalidate L1 cache as well
         note_key = f"note:{project_id}:{source_id}"
-        
-        # FIX: Use .pop() instead of .delete() if L1_CACHE is a dictionary or dict-like object.
         if hasattr(L1_CACHE, 'pop'):
             L1_CACHE.pop(note_key, None)
             print(f"  ✅ Invalidated L1 cache (using .pop) for regenerated note")
         elif hasattr(L1_CACHE, 'delete'):
-            # Keep this check in case the class is updated later
             L1_CACHE.delete(note_key)
             print(f"  ✅ Invalidated L1 cache (using .delete) for regenerated note")
         else:
-            # Fallback if the cache implementation is unknown
             print("  ⚠️ Warning: Could not invalidate L1 cache. Missing delete/pop method.")
 
 
         print(f"  ✅ SUCCESS: Note for '{source_id}' regenerated.")
-        # 6. Return the new HTML directly to the frontend
         return jsonify({"success": True, "note_html": new_note_html})
 
     except Exception as e:
@@ -520,7 +551,6 @@ def generate_code_suggestion():
     extensions = data.get('extensions', [])
     prompt_text = data.get('prompt')
     
-    # --- LOGGING & VALIDATION ---
     print("\n" + "="*50)
     print(f"🤖 Generating PROJECT-WIDE code suggestion for project: {project_id}")
     print(f"   Prompt: '{prompt_text[:100]}...'")
@@ -529,17 +559,13 @@ def generate_code_suggestion():
     if not all([project_id, prompt_text]):
         return jsonify({"error": "Missing 'project_id' or 'prompt'"}), 400
     
-    # --- 1. DYNAMIC CACHE KEY GENERATION ---
-    # Create a unique key based on the project and the specific file extensions requested.
-    # Sorting ensures ['js', 'py'] and ['py', 'js'] result in the same key.
     ext_key_part = "_".join(sorted([ext.lower().lstrip('.') for ext in extensions])) if extensions else "all"
     context_cache_key = f"project_context:{project_id}:{ext_key_part}"
     
     print(f"   Cache key: {context_cache_key}")
 
-    full_project_context = None # Initialize to None
+    full_project_context = None 
 
-    # --- 2. CACHE CHECK (L2 - Redis) ---
     if redis_client:
         try:
             cached_context_bytes = redis_client.get(context_cache_key)
@@ -547,26 +573,26 @@ def generate_code_suggestion():
                 print("  ✅ CACHE HIT. Using cached project context.")
                 full_project_context = cached_context_bytes.decode('utf-8')
         except Exception as e:
-            print(f"  ⚠️ Redis cache check failed: {e}") # Log error but continue, allowing fallback to DB
+            print(f"  ⚠️ Redis cache check failed: {e}") 
 
-    # --- 3. DATABASE FETCH (ONLY on cache miss) ---
     if full_project_context is None:
         print("  CACHE MISS. Building project context from Firestore...")
         try:
             temp_context = ""
             file_count = 0
-            docs = db.collection('projects').document(project_id).collection('converted_files').stream()
+            # --- MODIFIED: Query the correct top-level collection ---
+            docs = db.collection(CODE_PROJECTS_COLLECTION).document(project_id).collection(CODE_FILES_SUBCOLLECTION).stream()
             dot_extensions = [f".{ext.lstrip('.').lower()}" for ext in extensions] if extensions else None
             special_files_to_ignore = {'_full_context.txt'}
 
             if 'tree' in prompt_text.lower() or 'structure' in prompt_text.lower():
                 print("  - Prompt suggests a structure query. Including tree.txt.")
-                tree_doc = converted_files_ref.document('project_tree_txt').get()
+                # --- MODIFIED: Query the correct top-level collection ---
+                tree_doc = db.collection(CODE_PROJECTS_COLLECTION).document(project_id).collection(CODE_FILES_SUBCOLLECTION).document('project_tree_txt').get()
                 if tree_doc.exists:
-                    full_project_context += "--- FILE: tree.txt (Project File Structure) ---\n"
-                    full_project_context += tree_doc.to_dict().get('content', '')
-                    full_project_context += "\n\n"
-                    # Add it to the ignore list so we don't add it again in the main loop
+                    temp_context += "--- FILE: tree.txt (Project File Structure) ---\n"
+                    temp_context += tree_doc.to_dict().get('content', '')
+                    temp_context += "\n\n"
                     special_files_to_ignore.add('tree.txt')
             
             for doc in docs:
@@ -585,10 +611,8 @@ def generate_code_suggestion():
             full_project_context = temp_context
             print(f"  - Assembled context from {file_count} files ({len(full_project_context)} chars).")
 
-            # --- 4. POPULATE CACHE after building context ---
             if redis_client and full_project_context:
                 try:
-                    # Cache the result for 1 hour (3600 seconds)
                     redis_client.setex(context_cache_key, 3600, full_project_context)
                     print(f"  - ✅ Context stored in Redis cache with 1hr TTL.")
                 except Exception as e:
@@ -602,8 +626,6 @@ def generate_code_suggestion():
         print("  - ⚠️ No matching files found to build context.")
         return jsonify({"suggestion": "Could not find any code to analyze. Please sync your project with the correct file extensions first."})
 
-    # --- 5. AI MODEL INVOCATION ---
-    # Construct a clear prompt for the model, separating the context from the user's question.
     system_prompt = """You are an expert AI software developer. You will be given the entire codebase for a project as context. Your task is to analyze this context and then answer the user's question or fulfill their request. Provide complete, runnable code blocks where appropriate. Be clear, concise, and accurate."""
     
     final_prompt = f"{system_prompt}\n\nPROJECT CONTEXT:\n---\n{full_project_context}\n---\n\nUSER QUESTION: {prompt_text}"
@@ -613,17 +635,14 @@ def generate_code_suggestion():
         response = chat_model.generate_content(final_prompt)
         print("  - ✅ Received response from Gemini.")
         if not response.candidates:
-        # This can happen if the prompt itself was blocked.
             block_reason = response.prompt_feedback.block_reason.name if response.prompt_feedback else "Unknown"
             error_message = f"AI response was blocked. Reason: {block_reason}. The project context might be too large or contain sensitive information."
             print(f"  - ❌ ERROR: Prompt was blocked. Reason: {block_reason}")
             return jsonify({"error": error_message}), 400
 
-        # Safely access the text from the first candidate's parts.
         try:
             suggestion_text = response.candidates[0].content.parts[0].text
         except (IndexError, AttributeError):
-            # This handles cases where the response is empty or malformed.
             finish_reason = response.candidates[0].finish_reason.name if response.candidates[0].finish_reason else "Unknown"
             error_message = f"AI generated an empty or invalid response. Finish Reason: {finish_reason}."
             print(f"  - ❌ ERROR: AI response was empty or invalid. Finish Reason: {finish_reason}")
