@@ -1,6 +1,5 @@
 import pytesseract
 import PyPDF2 
-from pdf2image import convert_from_bytes
 from PIL import Image # Add this import: pip install Pillow
 import git  # Ensure you have run 'pip install GitPython'
 from git.exc import InvalidGitRepositoryError

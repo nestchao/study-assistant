@@ -398,21 +398,62 @@ def update_note(project_id, source_id):
 
 @study_hub_bp.route('/ask-chatbot/<project_id>', methods=['POST'])
 def ask_chatbot(project_id):
+    """
+    Handles conversational requests to the chatbot, remembering chat history.
+    The frontend is responsible for sending the conversation history with each request.
+    """
     data = request.json
     question = data.get('question')
     source_id = data.get('source_id') # Can be a specific source ID or null for 'all'
     
+    # --- NEW: Accept conversation history from the client ---
+    # The expected format is: [{'role': 'user', 'content': '...'}, {'role': 'model', 'content': '...'}]
+    history = data.get('history', []) 
+    
+    # 1. Get the RAG context (the study notes)
     context = get_simplified_note_context(project_id, source_id)
     if not context:
         return jsonify({"answer": "I couldn't find any generated notes to read. Please upload a document first!"})
 
-    prompt = f"You are a helpful study assistant. Answer the user's question based *only* on the provided study notes. The notes are simplified summaries, so be concise. If the answer is not in the notes, say 'I'm sorry, that information isn't in my simplified notes.'\n\nStudy Notes:\n---\n{context}\n---\n\nQuestion: {question}\n\nAnswer:"
+    # 2. Construct the multi-turn prompt for the model
+    # The system prompt sets the AI's core instructions and provides the knowledge base (the notes).
+    system_prompt = f"""You are a helpful study assistant. Your primary goal is to answer the user's questions based *only* on the provided study notes.
+    - Be concise and clear in your answers.
+    - If the answer is not in the notes, you MUST say 'I'm sorry, that information isn't in my simplified notes.'
+    - Do not use any external knowledge.
+
+    Here are the study notes you must use as your knowledge base:
+    ---
+    {context}
+    ---
+    """
+
+    # We build a list of messages for the model.
+    # The first message contains the system prompt and context.
+    messages = [{'role': 'user', 'parts': [system_prompt]}]
+    # The model's "first" response is just an acknowledgement to set up the conversation flow.
+    messages.append({'role': 'model', 'parts': ["Okay, I have read the study notes. I am ready to answer your questions based on them."]})
     
+    # Now, add the actual conversation history sent from the client
+    for turn in history:
+        # Map client roles ('user', 'model') to what the Gemini API expects
+        role = turn.get('role')
+        content = turn.get('content')
+        if role and content:
+            messages.append({'role': role, 'parts': [content]})
+
+    # Finally, add the new user question to the end of the conversation
+    messages.append({'role': 'user', 'parts': [question]})
+
     try:
-        # Use the injected chat_model
-        answer = chat_model.generate_content(prompt).text
+        # Use the injected chat_model with the full conversational history
+        print(f"  🤖 Sending chat request with {len(history)} history turns...")
+        response = chat_model.generate_content(messages)
+        answer = response.text
+        print("  ✅ Received chat response.")
         return jsonify({"answer": answer})
     except Exception as e:
+        print(f"  ❌ Error during chatbot generation: {e}")
         return jsonify({"answer": f"Sorry, an error occurred: {e}"})
 
 @study_hub_bp.route('/generate-topic-note/<project_id>', methods=['POST'])
