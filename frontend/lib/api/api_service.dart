@@ -26,10 +26,91 @@ class ApiService {
     print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
   }
 
+  // --- MODIFIED: SYNC SERVICE METHODS ---
+  Future<List<Map<String, dynamic>>> getSyncProjects() async {
+  final response = await http.get(Uri.parse('$baseUrl/sync/projects'));
+  if (response.statusCode == 200) {
+    return List<Map<String, dynamic>>.from(json.decode(response.body));
+  }
+  throw Exception('Failed to load sync projects');
+}
+
+Future<void> registerFolderToProject(String projectId, String path, List<String> extensions, List<String> ignoredPaths) async {
+  final response = await http.post(
+    Uri.parse('$baseUrl/sync/register/$projectId'), // <-- Note the ID in the URL
+    headers: {'Content-Type': 'application/json'},
+    body: json.encode({
+      'local_path': path,
+      'extensions': extensions,
+      'ignored_paths': ignoredPaths,
+    }),
+  );
+  if (response.statusCode != 200) {
+    throw Exception('Failed to register folder to project');
+  }
+}
+
+Future<void> updateSyncProject(String projectId, {bool? isActive, List<String>? extensions, List<String>? ignoredPaths}) async {
+  final Map<String, dynamic> body = {};
+  if (isActive != null) body['is_active'] = isActive;
+  if (extensions != null) body['allowed_extensions'] = extensions;
+  if (ignoredPaths != null) body['ignored_paths'] = ignoredPaths;
+
+  final response = await http.put(
+    Uri.parse('$baseUrl/sync/project/$projectId'),
+    headers: {'Content-Type': 'application/json'},
+    body: json.encode(body),
+  );
+  if (response.statusCode != 200) {
+    throw Exception('Failed to update sync project');
+  }
+}
+
+Future<void> deleteSyncFromProject(String projectId) async {
+  final response = await http.delete(Uri.parse('$baseUrl/sync/project/$projectId'));
+  if (response.statusCode != 200) {
+    throw Exception('Failed to delete sync from project');
+  }
+}
+
   // GET /api/get-projects
   Future<List<Map<String, dynamic>>> getProjects() async {
     final response = await http.get(Uri.parse('$baseUrl/get-projects'));
     return List<Map<String, dynamic>>.from(json.decode(response.body));
+  }
+
+  Future<String?> createStudyProjectAndGetId(String name) async {
+    final headers = await _getAuthHeaders();
+    final response = await http.post(
+      Uri.parse('$baseUrl/create-project'),
+      headers: headers,
+      body: json.encode({'name': name}),
+    );
+    if (response.statusCode == 200 || response.statusCode == 201) {
+      return json.decode(response.body)['id'];
+    }
+    throw Exception('Failed to create study project: ${response.statusCode}');
+  }
+
+  Future<List<Map<String, dynamic>>> getCodeProjects() async {
+    final response = await http.get(Uri.parse('$baseUrl/get-code-projects'));
+    if (response.statusCode == 200) {
+      return List<Map<String, dynamic>>.from(json.decode(response.body));
+    }
+    throw Exception('Failed to load code projects');
+  }
+
+  Future<String?> createCodeProjectAndGetId(String name) async {
+    final headers = await _getAuthHeaders();
+    final response = await http.post(
+      Uri.parse('$baseUrl/create-code-project'),
+      headers: headers,
+      body: json.encode({'name': name}),
+    );
+    if (response.statusCode == 200 || response.statusCode == 201) {
+      return json.decode(response.body)['id'];
+    }
+    throw Exception('Failed to create code project: ${response.statusCode}');
   }
 
   // --- NEW ---
@@ -39,34 +120,21 @@ class ApiService {
       headers: {'Content-Type': 'application/json'},
       body: json.encode({'new_name': newName}),
     );
-
-    if (response.statusCode != 200) {
-      throw Exception('Failed to rename project');
-    }
+    if (response.statusCode != 200) throw Exception('Failed to rename project');
   }
 
   Future<void> deleteProject(String projectId) async {
-    final response = await http.delete(
-      Uri.parse('$baseUrl/delete-project/$projectId'),
-    );
-
-    if (response.statusCode != 200) {
-      throw Exception('Failed to delete project');
-    }
+    final response = await http.delete(Uri.parse('$baseUrl/delete-project/$projectId'));
+    if (response.statusCode != 200) throw Exception('Failed to delete project');
   }
+
 
   Future<Map<String, String>> _getAuthHeaders() async {
     final user = FirebaseAuth.instance.currentUser;
-    if (user == null) {
-      // This case should be handled by the UI (don't call authenticated endpoints if not logged in)
-      throw Exception('User is not authenticated.');
-    }
+    if (user == null) throw Exception('User is not authenticated.');
     final idToken = await user.getIdToken();
-    return {
-      'Content-Type': 'application/json',
-      'Authorization': 'Bearer $idToken',
-    };
-  }  
+    return {'Content-Type': 'application/json', 'Authorization': 'Bearer $idToken'};
+  }
   
   Future<void> createProject(String name) async {
     final headers = await _getAuthHeaders(); // Get the headers
@@ -79,13 +147,8 @@ class ApiService {
   }
 
   Future<void> deleteSource(String projectId, String sourceId) async {
-    final response = await http.delete(
-      Uri.parse('$baseUrl/delete-source/$projectId/$sourceId'),
-    );
-
-    if (response.statusCode != 200) {
-      throw Exception('Failed to delete source');
-    }
+    final response = await http.delete(Uri.parse('$baseUrl/delete-source/$projectId/$sourceId'));
+    if (response.statusCode != 200) throw Exception('Failed to delete source');
   }
 
   // GET /api/get-sources/<project_id>
@@ -330,12 +393,13 @@ class ApiService {
     }
   }
 
-  Future<Map<String, dynamic>> runSync(String configId) async {
-    final response = await http.post(Uri.parse('$baseUrl/sync/run/$configId'));
-    if (response.statusCode == 200) {
-      return json.decode(response.body);
-    }
-    throw Exception('Failed to run sync');
+  Future<Map<String, dynamic>> runSync(String projectId) async {
+  final response = await http.post(Uri.parse('$baseUrl/sync/run/$projectId'));
+  if (response.statusCode == 200) {
+    return json.decode(response.body);
+  }
+  final error = json.decode(response.body)['error'] ?? 'Failed to run sync';
+  throw Exception(error);
   }
 
 
