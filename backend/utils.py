@@ -1,6 +1,5 @@
 import pytesseract
 import PyPDF2 
-from pdf2image import convert_from_bytes
 from PIL import Image # Add this import: pip install Pillow
 import git  # Ensure you have run 'pip install GitPython'
 from git.exc import InvalidGitRepositoryError
@@ -299,34 +298,30 @@ def get_file_hash(filepath) -> str:
             hasher.update(chunk)
     return hasher.hexdigest()
 
-def get_converted_file_ref(db, project_id, original_path_str: str):
+def get_converted_file_ref(db, project_id, original_path_str: str, sub_collection: str, top_level_collection: str = "projects"):
     """Creates a consistent and safe document ID from the original file path."""
-    # Use a hash of the path for a predictable, safe document ID
     path_hash = hashlib.sha1(original_path_str.encode('utf-8')).hexdigest()
-    return db.collection('projects').document(project_id).collection('converted_files').document(path_hash)
+    return db.collection(top_level_collection).document(project_id).collection(sub_collection).document(path_hash)
 
-def convert_and_upload_to_firestore(db, project_id, file_path, source_root):
+def convert_and_upload_to_firestore(db, project_id, file_path, source_root, sub_collection: str, top_level_collection: str):
     """
     Reads a local file → text → uploads to Firestore.
+    Accepts top-level and sub-collection names for flexibility.
     Returns (hash, doc_id) on success, otherwise None.
     """
     rel_path_str = str(file_path.relative_to(source_root)).replace('\\', '/')
     print(f"  Processing: {rel_path_str}")
 
     try:
-        # 1. Read content
         content = file_path.read_text(encoding='utf-8', errors='ignore')
-
-        # 2. Hash
         current_hash = hashlib.sha256(content.encode('utf-8')).hexdigest()
 
-        # 3. **Create a document with an auto-generated ID**
-        doc_ref = db.collection('projects') \
+        # --- MODIFIED: Use the provided top_level_collection ---
+        doc_ref = db.collection(top_level_collection) \
                     .document(project_id) \
-                    .collection('converted_files') \
-                    .document()               # <-- auto ID
+                    .collection(sub_collection) \
+                    .document()
 
-        # 4. Write
         doc_ref.set({
             'original_path': rel_path_str,
             'content': content,
@@ -334,8 +329,8 @@ def convert_and_upload_to_firestore(db, project_id, file_path, source_root):
             'timestamp': firestore.SERVER_TIMESTAMP,
         })
 
-        print(f"    -> Uploaded (doc_id={doc_ref.id})")
-        return current_hash, doc_ref.id          # <-- RETURN BOTH!
+        print(f"    -> Uploaded to '{top_level_collection}/{project_id}/{sub_collection}' (doc_id={doc_ref.id})")
+        return current_hash, doc_ref.id
 
     except Exception as e:
         print(f"    -> FAILED {rel_path_str}: {e}")

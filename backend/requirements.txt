@@ -1,36 +1,38 @@
+# ===================================================================
+# Python Dependencies for AI Study Assistant Backend
+#
+# To install all of these packages, run the following command
+# in your activated virtual environment:
+# pip install -r requirements.txt
+# ===================================================================
+
+# Python Web Framework
 Flask
-Flask-Cors
-google-cloud-firestore
-python-dotenv
-google-generativeai
-PyPDF2
-markdown
-pdf2image
-pytesseract
-GitPython
-redis
-Pillow
+Flask-CORS
+
+# Google Services & AI
 firebase-admin
+google-generativeai
+google-api-core
+
+# Caching
+redis
+
+# Configuration
+python-dotenv
+
+# Text Processing & Markdown
+markdown
 html2text
+langchain-text-splitters
+
+# File System, Hashing, and Git Integration
+GitPython
+
+# Image & PDF Processing (Required for OCR and complex PDF handling)
+pytesseract
+Pillow
+PyPDF2
+PyMuPDF
 opencv-python
-fitz
-
-Flask==3.0.3
-Flask-Cors==4.0.1
-firebase-admin==6.5.0
-google-generativeai==0.7.0
-pytesseract==0.3.10
-python-dotenv==1.0.1
-redis==5.0.4
-google-api-core==2.19.0
-PyMuPDF==1.24.5  # This is the library for 'fitz'
-Pillow==10.3.0
-GitPython==3.1.43
-langchain-text-splitters==0.2.1
-opencv-python==4.9.0.80
-numpy==1.26.4
-
-# Use langchain-google-genai directly and a core version of langchain
-langchain-google-genai==0.0.9
-langchain-core==0.1.30
-langchain-text-splitters==0.0.1
+numpy

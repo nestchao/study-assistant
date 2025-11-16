@@ -9,7 +9,7 @@ import 'package:study_assistance/models/project.dart';
 import 'package:flutter/services.dart';
 import 'package:study_assistance/widgets/auth_wrapper.dart';
 import 'package:study_assistance/screens/code_sync_screen.dart';
-import 'package:study_assistance/screens/local_converter_screen.dart'; 
+import 'package:study_assistance/screens/local_converter_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -105,7 +105,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       },
     );
   }
-  
+
   // --- NEW: Rename Project Dialog ---
   void _showRenameProjectDialog(Project project) {
     final provider = Provider.of<ProjectProvider>(context, listen: false);
@@ -241,8 +241,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
           return RefreshIndicator(
             onRefresh: () => provider.fetchProjects(forceRefresh: true),
             child: CustomScrollView(
-              // Add physics to ensure scrolling is always possible, which is
-              // needed for RefreshIndicator to work even when the list is short.
               physics: const AlwaysScrollableScrollPhysics(),
               slivers: [
                 SliverToBoxAdapter(
@@ -250,11 +248,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 ),
                 provider.projects.isEmpty
                     ? SliverFillRemaining(
-                        // Use hasScrollBody: false to allow centering
                         hasScrollBody: false,
                         child: _buildEmptyState(),
                       )
-                    : _buildProjectList(provider.projects),
+                    // --- MODIFIED: Use the new grid layout ---
+                    : _buildProjectGrid(provider.projects),
               ],
             ),
           );
@@ -379,136 +377,143 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  // --- REBUILT PROJECT LIST WIDGET ---
-  Widget _buildProjectList(List<Project> projects) {
-    return Consumer<ProjectProvider>(
-      builder: (context, provider, child) {
-        return SliverPadding(
-          padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
-          sliver: SliverList(
-            delegate: SliverChildBuilderDelegate(
-              (context, index) {
-                final project = projects[index];
-                final isDeleting = provider.deletingProjectId == project.id;
-                final isRenaming = provider.renamingProjectId == project.id;
-                final isLoading = isDeleting || isRenaming;
+  // --- NEW: Replaces _buildProjectList with a responsive grid ---
+  Widget _buildProjectGrid(List<Project> projects) {
+    return SliverPadding(
+      padding: const EdgeInsets.all(16.0),
+      sliver: SliverGrid(
+        gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+          maxCrossAxisExtent: 280.0, // Each card can be up to 280px wide
+          mainAxisSpacing: 16.0,
+          crossAxisSpacing: 16.0,
+          childAspectRatio: 1.0, // Makes the cards roughly square
+        ),
+        delegate: SliverChildBuilderDelegate(
+          (context, index) {
+            final project = projects[index];
+            return _ProjectCard(
+              project: project,
+              onTap: (project) {
+                final provider = context.read<ProjectProvider>();
+                HapticFeedback.lightImpact();
+                provider.setCurrentProject(project);
+                Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => WorkspaceScreen(project: project),
+                ));
+              },
+              onRename: _showRenameProjectDialog,
+              onDelete: _showDeleteConfirmDialog,
+            );
+          },
+          childCount: projects.length,
+        ),
+      ),
+    );
+  }
+}
 
-                return Card(
-                  margin: const EdgeInsets.symmetric(vertical: 8.0),
-                  elevation: 2.0,
-                  shadowColor: Colors.indigo.withOpacity(0.1),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12.0),
-                    side: BorderSide(color: Colors.grey[200]!),
-                  ),
-                  child: InkWell(
-                    borderRadius: BorderRadius.circular(12.0),
-                    onTap: isLoading
-                        ? null
-                        : () {
-                            HapticFeedback.lightImpact(); 
-                            provider.setCurrentProject(project);
-                            Navigator.of(context).push(MaterialPageRoute(
-                              builder: (_) => WorkspaceScreen(project: project),
-                            ));
-                          },
-                    child: Padding(
-                      padding: const EdgeInsets.all(16.0),
-                      child: Row(
-                        children: [
-                          // Leading Icon
-                          Container(
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                              color: Colors.indigo[50],
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                            child: Icon(
-                              Icons.topic_outlined,
-                              color: Colors.indigo[600],
-                              size: 28,
-                            ),
-                          ),
-                          const SizedBox(width: 16),
-                          // Title and Date
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  project.name,
-                                  style: const TextStyle(
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                                if (project.createdAt != null) ...[
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    'Created: ${DateFormat.yMMMd().format(project.createdAt!)}',
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      color: Colors.grey[600],
-                                    ),
-                                  ),
-                                ]
-                              ],
-                            ),
-                          ),
-                          // Action Buttons / Spinner
-                          SizedBox(
-                            width: 48, // We only need space for one button now
-                            height: 48,
-                            child: isLoading
-                                ? const Center(
-                                    child: SizedBox(
-                                      width: 24,
-                                      height: 24,
-                                      child: CircularProgressIndicator(strokeWidth: 2.5),
-                                    ),
-                                  )
-                                // --- THIS IS THE FIX ---
-                                : PopupMenuButton<String>(
-                                    tooltip: 'Project Options',
-                                    icon: Icon(Icons.more_vert, color: Colors.grey[600]),
-                                    onSelected: (value) {
-                                      if (value == 'rename') {
-                                        _showRenameProjectDialog(project);
-                                      } else if (value == 'delete') {
-                                        _showDeleteConfirmDialog(project);
-                                      }
-                                    },
-                                    itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
-                                      const PopupMenuItem<String>(
-                                        value: 'rename',
-                                        child: ListTile(
-                                          leading: Icon(Icons.edit_outlined),
-                                          title: Text('Rename'),
-                                        ),
-                                      ),
-                                      const PopupMenuItem<String>(
-                                        value: 'delete',
-                                        child: ListTile(
-                                          leading: Icon(Icons.delete_outline),
-                                          title: Text('Delete'),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                              // --- END OF FIX ---
-                          ),
+// --- NEW: A dedicated widget for the project card UI ---
+class _ProjectCard extends StatelessWidget {
+  final Project project;
+  final Function(Project) onTap;
+  final Function(Project) onRename;
+  final Function(Project) onDelete;
+
+  const _ProjectCard({
+    required this.project,
+    required this.onTap,
+    required this.onRename,
+    required this.onDelete,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final provider = context.watch<ProjectProvider>();
+    final isDeleting = provider.deletingProjectId == project.id;
+    final isRenaming = provider.renamingProjectId == project.id;
+    final isLoading = isDeleting || isRenaming;
+
+    return Card(
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16.0),
+        side: BorderSide(color: Colors.grey[200]!),
+      ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16.0),
+        onTap: isLoading ? null : () => onTap(project),
+        child: Stack(
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Top row: Icon and Menu Button
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: Colors.indigo.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Icon(Icons.topic_outlined, color: Colors.indigo[600]),
+                      ),
+                      const Spacer(),
+                      PopupMenuButton<String>(
+                        tooltip: 'Project Options',
+                        icon: Icon(Icons.more_vert, color: Colors.grey[600]),
+                        onSelected: (value) {
+                          if (value == 'rename') onRename(project);
+                          if (value == 'delete') onDelete(project);
+                        },
+                        itemBuilder: (BuildContext context) => [
+                          const PopupMenuItem(value: 'rename', child: Text('Rename')),
+                          const PopupMenuItem(value: 'delete', child: Text('Delete')),
                         ],
                       ),
-                    ),
+                    ],
                   ),
-                );
-              },
-              childCount: projects.length,
+                  const Spacer(),
+                  // Bottom section: Title and Date
+                  Text(
+                    project.name,
+                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 4),
+                  if (project.createdAt != null)
+                    Text(
+                      'Created: ${DateFormat.yMMMd().format(project.createdAt!)}',
+                      style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                    ),
+                ],
+              ),
             ),
-          ),
-        );
-      },
+            // Loading Overlay
+            if (isLoading)
+              Container(
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.7),
+                  borderRadius: BorderRadius.circular(16.0),
+                ),
+                child: Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const CircularProgressIndicator(),
+                      const SizedBox(height: 8),
+                      Text(isRenaming ? "Renaming..." : "Deleting..."),
+                    ],
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
     );
   }
 }
