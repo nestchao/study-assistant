@@ -444,9 +444,10 @@ def ask_chatbot(project_id):
     for turn in history:
         role = turn.get('role')
         content = turn.get('content')
-        if role and content:
+        if role and content: # The frontend sends 'bot', but Gemini expects 'model'
+            role = 'model' if role == 'bot' else role 
             messages.append({'role': role, 'parts': [content]})
-
+ 
     messages.append({'role': 'user', 'parts': [question]})
 
     try:
