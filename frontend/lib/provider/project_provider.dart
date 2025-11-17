@@ -59,13 +59,6 @@ class ProjectProvider with ChangeNotifier {
   bool _isGuestMode = false;
   bool get isGuestMode => _isGuestMode;
 
-  List<SyncConfig> _syncConfigs = [];
-  List<SyncConfig> get syncConfigs => _syncConfigs;
-  bool _isLoadingConfigs = false;
-  bool get isLoadingConfigs => _isLoadingConfigs;
-  String? _syncingConfigId;
-  String? get syncingConfigId => _syncingConfigId;
-
   List<CodeSuggestionMessage> _codeSuggestionHistory = [];
   List<CodeSuggestionMessage> get codeSuggestionHistory => _codeSuggestionHistory;
   bool _isGeneratingSuggestion = false;
@@ -659,59 +652,6 @@ class ProjectProvider with ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> fetchSyncConfigs() async {
-    _isLoadingConfigs = true;
-    notifyListeners();
-    try {
-      final data = await _api.getSyncConfigs();
-      _syncConfigs = data.map((map) => SyncConfig.fromMap(map)).toList();
-    } catch (e) {
-      print("Error fetching sync configs: $e");
-    } finally {
-      _isLoadingConfigs = false;
-      notifyListeners();
-    }
-  }
-
-  Future<void> registerSyncConfig(String projectId, String path, List<String> extensions, List<String> ignoredPaths) async {
-    try {
-      await _api.registerSyncConfig(projectId, path, extensions, ignoredPaths);
-      await fetchSyncConfigs(); // Refresh the list
-    } catch (e) {
-      print("Error registering sync config: $e");
-      rethrow;
-    }
-  }
-
-  Future<void> updateSyncConfigStatus(String configId, bool isActive) async {
-    try {
-      await _api.updateSyncConfig(configId, isActive: isActive);
-      // Update local state for immediate feedback
-      final index = _syncConfigs.indexWhere((c) => c.id == configId);
-      if (index != -1) {
-        _syncConfigs[index] = SyncConfig.fromMap({
-          ..._syncConfigs[index] as Map<String, dynamic>, // This is a bit verbose
-          'is_active': isActive,
-        });
-        notifyListeners();
-      }
-    } catch (e) {
-      print("Error updating sync config: $e");
-      rethrow;
-    }
-  }
-
-  Future<void> deleteSyncConfig(String configId) async {
-    try {
-      await _api.deleteSyncConfig(configId);
-      _syncConfigs.removeWhere((c) => c.id == configId);
-      notifyListeners();
-    } catch (e) {
-      print("Error deleting sync config: $e");
-      rethrow;
-    }
-  }
-
   // --- NEW METHODS FOR FILE VIEWER ---
   Future<void> fetchFileTree(String projectId) async {
     _isLoadingFileTree = true;
@@ -792,13 +732,12 @@ class ProjectProvider with ChangeNotifier {
     _isGeneratingSuggestion = true;
     notifyListeners();
 
-    try {
-      // Find the sync config that matches the project we are currently viewing.
-      final syncConfig = _syncConfigs.firstWhere(
-        (c) => c.projectId == _viewingProjectId,
-        orElse: () => SyncConfig(id: '', projectId: '', localPath: '', allowedExtensions: [], ignoredPaths: [], isActive: false, status: 'unknown'), // Default value
-      );
-      final extensions = syncConfig.allowedExtensions;
+     try {
+      final syncConfig = _syncProjects.firstWhere(
+         (c) => c.id == _viewingProjectId,
+        orElse: () => CodeProject(id: '', name: '', localPath: '', allowedExtensions: [], ignoredPaths: [], isActive: false, status: 'unknown'), // Default value
+       );
+       final extensions = syncConfig.allowedExtensions;
 
       // Call the API with the correct project ID.
       final suggestion = await _api.getCodeSuggestion(

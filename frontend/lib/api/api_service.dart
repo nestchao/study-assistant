@@ -345,54 +345,6 @@ Future<void> deleteSyncFromProject(String projectId) async {
     }
   }
 
-  Future<List<Map<String, dynamic>>> getSyncConfigs() async {
-  final response = await http.get(Uri.parse('$baseUrl/sync/configs'));
-  if (response.statusCode == 200) {
-    return List<Map<String, dynamic>>.from(json.decode(response.body));
-  }
-  throw Exception('Failed to load sync configs');
-}
-
-  Future<String> registerSyncConfig(String projectId, String path, List<String> extensions, List<String> ignoredPaths) async {
-    final response = await http.post(
-      Uri.parse('$baseUrl/sync/register'),
-      headers: {'Content-Type': 'application/json'},
-      body: json.encode({
-        'project_id': projectId,
-        'local_path': path,
-        'extensions': extensions,
-        'ignored_paths': ignoredPaths,
-      }),
-    );
-    if (response.statusCode == 201) {
-      return json.decode(response.body)['config_id'];
-    }
-    throw Exception('Failed to register sync config');
-  }
-
-  Future<void> updateSyncConfig(String configId, {bool? isActive, List<String>? extensions, List<String>? ignoredPaths}) async {
-    final Map<String, dynamic> body = {};
-    if (isActive != null) body['is_active'] = isActive;
-    if (extensions != null) body['allowed_extensions'] = extensions;
-    if (ignoredPaths != null) body['ignored_paths'] = ignoredPaths;
-
-    final response = await http.put(
-      Uri.parse('$baseUrl/sync/config/$configId'),
-      headers: {'Content-Type': 'application/json'},
-      body: json.encode(body),
-    );
-    if (response.statusCode != 200) {
-      throw Exception('Failed to update sync config');
-    }
-  }
-
-  Future<void> deleteSyncConfig(String configId) async {
-    final response = await http.delete(Uri.parse('$baseUrl/sync/config/$configId'));
-    if (response.statusCode != 200) {
-      throw Exception('Failed to delete sync config');
-    }
-  }
-
   Future<Map<String, dynamic>> runSync(String projectId) async {
   final response = await http.post(Uri.parse('$baseUrl/sync/run/$projectId'));
   if (response.statusCode == 200) {
