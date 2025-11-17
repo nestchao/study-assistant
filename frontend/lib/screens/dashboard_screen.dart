@@ -7,7 +7,6 @@ import 'package:study_assistance/provider/project_provider.dart';
 import 'package:study_assistance/screens/workspace_screen.dart';
 import 'package:study_assistance/models/project.dart';
 import 'package:flutter/services.dart';
-import 'package:study_assistance/widgets/auth_wrapper.dart';
 import 'package:study_assistance/screens/code_sync_screen.dart';
 import 'package:study_assistance/screens/local_converter_screen.dart';
 
@@ -24,45 +23,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final provider = Provider.of<ProjectProvider>(context, listen: false);
-      // Only force refresh if NOT in guest mode
-      if (!provider.isGuestMode) {
-        provider.fetchProjects(forceRefresh: true);
-      }
-
-      // --- NEW: Show Guest Banner ---
-      if (provider.isGuestMode) {
-        _showGuestModeBanner();
-      }
+      provider.fetchProjects(forceRefresh: true);
     });
-  }
-
-  void _showGuestModeBanner() {
-    ScaffoldMessenger.of(context).showMaterialBanner(
-      MaterialBanner(
-        padding: const EdgeInsets.all(12),
-        content: const Text(
-          'You are in Guest Mode. Sign in to save your projects to the cloud.',
-          style: TextStyle(color: Colors.white),
-        ),
-        backgroundColor: Colors.indigo,
-        leading: const Icon(Icons.info_outline, color: Colors.white),
-        actions: <Widget>[
-          TextButton(
-            onPressed: () {
-              // Hide the banner
-              ScaffoldMessenger.of(context).hideCurrentMaterialBanner();
-              // Sign out of guest mode and navigate to the auth wrapper
-              Provider.of<ProjectProvider>(context, listen: false).exitGuestMode();
-              Navigator.of(context).pushAndRemoveUntil(
-                MaterialPageRoute(builder: (context) => const AuthWrapper()),
-                    (Route<dynamic> route) => false,
-              );
-            },
-            child: const Text('SIGN IN', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-          ),
-        ],
-      ),
-    );
   }
 
   void _showCreateProjectDialog() {
@@ -159,37 +121,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   void _createProject(BuildContext context, String name) {
     final provider = Provider.of<ProjectProvider>(context, listen: false);
-
-    // --- THIS IS THE NEW GUEST MODE CHECK ---
-    if (provider.isGuestMode) {
-      // If user is a guest, show a dialog asking them to sign in.
-      showDialog(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text("Sign In Required"),
-          content: const Text("Creating and saving projects requires an account. Please sign in to continue."),
-          actions: [
-            TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text("Cancel")),
-            FilledButton(
-              onPressed: () {
-                // Navigate user back to the login screen
-                provider.exitGuestMode();
-                Navigator.of(context).pushAndRemoveUntil(
-                  MaterialPageRoute(builder: (context) => const AuthWrapper()),
-                  (Route<dynamic> route) => false,
-                );
-              },
-              child: const Text("Sign In"),
-            ),
-          ],
-        ),
-      );
-    } else {
-      // If user is logged in, proceed as normal.
-      if (name.trim().isNotEmpty) {
-        provider.createProject(name.trim());
-        Navigator.of(context).pop(); // Close the create dialog
-      }
+    if (name.trim().isNotEmpty) {
+      provider.createProject(name.trim());
+      Navigator.of(context).pop(); // Close the create dialog
     }
   }
 
