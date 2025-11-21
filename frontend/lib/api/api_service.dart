@@ -4,7 +4,6 @@ import 'package:http/http.dart' as http;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
-import 'package:firebase_auth/firebase_auth.dart';
 import 'dart:typed_data';
 
 class ApiService {
@@ -80,10 +79,9 @@ Future<void> deleteSyncFromProject(String projectId) async {
   }
 
   Future<String?> createStudyProjectAndGetId(String name) async {
-    final headers = await _getAuthHeaders();
     final response = await http.post(
       Uri.parse('$baseUrl/create-project'),
-      headers: headers,
+      headers: {'Content-Type': 'application/json'},
       body: json.encode({'name': name}),
     );
     if (response.statusCode == 200 || response.statusCode == 201) {
@@ -101,10 +99,9 @@ Future<void> deleteSyncFromProject(String projectId) async {
   }
 
   Future<String?> createCodeProjectAndGetId(String name) async {
-    final headers = await _getAuthHeaders();
     final response = await http.post(
       Uri.parse('$baseUrl/create-code-project'),
-      headers: headers,
+      headers: {'Content-Type': 'application/json'},
       body: json.encode({'name': name}),
     );
     if (response.statusCode == 200 || response.statusCode == 201) {
@@ -128,20 +125,11 @@ Future<void> deleteSyncFromProject(String projectId) async {
     if (response.statusCode != 200) throw Exception('Failed to delete project');
   }
 
-
-  Future<Map<String, String>> _getAuthHeaders() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) throw Exception('User is not authenticated.');
-    final idToken = await user.getIdToken();
-    return {'Content-Type': 'application/json', 'Authorization': 'Bearer $idToken'};
-  }
   
   Future<void> createProject(String name) async {
-    final headers = await _getAuthHeaders(); // Get the headers
-    
     await http.post(
       Uri.parse('$baseUrl/create-project'),
-      headers: headers, // Use the auth headers
+      headers: {'Content-Type': 'application/json'},
       body: json.encode({'name': name}),
     );
   }
@@ -399,11 +387,9 @@ Future<void> deleteSyncFromProject(String projectId) async {
     required List<String> extensions, // <-- ADD
     required String prompt,
   }) async {
-    final headers = await _getAuthHeaders();
-    
     final response = await http.post(
       Uri.parse('$baseUrl/generate-code-suggestion'), // This URL is now correct
-      headers: headers,
+      headers: {'Content-Type': 'application/json'},
       body: json.encode({
         'project_id': projectId, // <-- SEND
         'extensions': extensions, // <-- SEND
@@ -420,11 +406,9 @@ Future<void> deleteSyncFromProject(String projectId) async {
   }
 
   Future<String?> createProjectAndGetId(String name) async {
-    final headers = await _getAuthHeaders();
-    
     final response = await http.post(
       Uri.parse('$baseUrl/create-project'),
-      headers: headers,
+      headers: {'Content-Type': 'application/json'},
       body: json.encode({'name': name}),
     );
     
