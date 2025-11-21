@@ -11,7 +11,7 @@ from pathlib import Path
 import google.api_core.exceptions
 
 # Import shared utility functions
-from utils import extract_text, delete_collection, split_chunks, token_required
+from utils import extract_text, delete_collection, split_chunks
 import redis
 
 # --- BLUEPRINT SETUP ---
@@ -158,16 +158,13 @@ def get_projects():
     return jsonify(projects)
 
 @study_hub_bp.route('/create-project', methods=['POST'])
-@token_required 
 def create_project():
     name = request.json.get('name')
-    user_id = request.user_id 
     
     ref = db.collection(STUDY_PROJECTS_COLLECTION).document()
     ref.set({
         'name': name,
         'timestamp': firestore.SERVER_TIMESTAMP,
-        'userId': user_id 
     })
     return jsonify({"id": ref.id})
 
@@ -204,16 +201,13 @@ def get_code_projects():
     return jsonify(projects)
 
 @study_hub_bp.route('/create-code-project', methods=['POST'])
-@token_required
 def create_code_project():
     name = request.json.get('name')
-    user_id = request.user_id
 
     ref = db.collection(CODE_PROJECTS_COLLECTION).document()
     ref.set({
         'name': name,
         'timestamp': firestore.SERVER_TIMESTAMP,
-        'userId': user_id
     })
     return jsonify({"id": ref.id})
 
@@ -545,7 +539,6 @@ def regenerate_note(project_id, source_id):
         return jsonify({"error": str(e)}), 500
 
 @study_hub_bp.route('/generate-code-suggestion', methods=['POST'])
-@token_required
 def generate_code_suggestion():
     data = request.json
     project_id = data.get('project_id')
