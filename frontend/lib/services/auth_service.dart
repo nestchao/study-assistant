@@ -1,49 +1,15 @@
 // lib/services/auth_service.dart
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:flutter/foundation.dart' show kIsWeb; // To handle web platform
 
 class AuthService {
   final FirebaseAuth _auth = FirebaseAuth.instance;
 
-  // Stream to listen for authentication changes
+  // Stream will always report null (logged out), which is fine.
   Stream<User?> get user => _auth.authStateChanges();
 
-  // --- SIGN IN WITH GITHUB ---
-  Future<UserCredential?> signInWithGitHub() async {
-    // Create a new provider
-    GithubAuthProvider githubProvider = GithubAuthProvider();
-
-    // The process is different for web vs. mobile
-    if (kIsWeb) {
-      // For web, we use signInWithPopup. This is a better UX than redirecting.
-      try {
-        await _auth.setPersistence(Persistence.LOCAL);
-        return await _auth.signInWithPopup(githubProvider);
-
-      } on FirebaseAuthException catch (e) {
-        print("Firebase Auth Exception on web: ${e.message}");
-        return null;
-      } catch (e) {
-        print("An unknown error occurred: $e");
-        return null;
-      }
-    } else {
-      // For mobile (Android/iOS), signInWithProvider is standard.
-      // This will open a webview within the app.
-      try {
-        return await _auth.signInWithProvider(githubProvider);
-      } on FirebaseAuthException catch (e) {
-        print("Firebase Auth Exception on mobile: ${e.message}");
-        return null;
-      } catch (e) {
-        print("An unknown error occurred on mobile: $e");
-        return null;
-      }
-    }
-  }
-
-  // --- SIGN OUT ---
+  // Sign out does nothing but is kept to prevent breaking other parts of the app.
   Future<void> signOut() async {
-    await _auth.signOut();
+    // In a no-auth app, this does nothing.
+    return;
   }
 }
