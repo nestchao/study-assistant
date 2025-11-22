@@ -34,6 +34,8 @@ venv/
 # Remove the leading slash to make the pattern more robust
 backend/venv/
 
+backend/vector_stores/
+backend/converted_txt_projects/
 
 # ===================================================================
 # Node.js / Frontend
