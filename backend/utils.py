@@ -5,10 +5,9 @@ import git  # Ensure you have run 'pip install GitPython'
 from git.exc import InvalidGitRepositoryError
 from pathlib import Path
 import hashlib
-from firebase_admin import firestore, auth
+from firebase_admin import firestore
 from collections import OrderedDict
 import time
-from functools import wraps 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from flask import request, jsonify
 import fitz
@@ -367,26 +366,6 @@ def generate_tree_text_from_paths(root_name: str, file_paths: list) -> str:
     tree_lines = build_lines(tree)
     return f"{root_name}/\n" + "\n".join(tree_lines)
 
-def token_required(f):
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        # This check should only run on the actual POST/GET request, not the OPTIONS preflight.
-        # Flask and flask-cors handle this automatically.
-        auth_header = request.headers.get('Authorization')
-        if not auth_header or not auth_header.startswith('Bearer '):
-            return jsonify({'error': 'Authorization header is missing or invalid'}), 401
-        
-        id_token = auth_header.split('Bearer ')[1]
-        
-        try:
-            decoded_token = auth.verify_id_token(id_token)
-            request.user_id = decoded_token['uid']
-        except Exception as e:
-            return jsonify({'error': f'Token verification failed: {e}'}), 401
-
-        return f(*args, **kwargs)
-    return decorated_function
-
 # cache
 class SimpleL1Cache:
     def __init__(self, max_size=256, ttl=10):
@@ -423,6 +402,4 @@ class SimpleL1Cache:
         expiry = time.time() + self.ttl
         self.cache[key] = (value, expiry)
 
-L1_CACHE = SimpleL1Cache(max_size=512, ttl=20) # Store 512 items for 20 seconds
-
-        
+L1_CACHE = SimpleL1Cache(max_size=512, ttl=20)

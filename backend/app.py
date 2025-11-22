@@ -82,7 +82,7 @@ app = Flask(__name__)
 # Configure CORS to allow headers needed by your frontend
 CORS(app, 
      expose_headers=["Content-Disposition"], 
-     allow_headers=["X-User-ID", "Content-Type", "Authorization"] # <-- ADD "Authorization"
+     allow_headers=["X-User-ID", "Content-Type"] # <-- REMOVED "Authorization"
 )
 
 # --- 2. CORRECTED DEPENDENCY INJECTION & REGISTRATION ---
