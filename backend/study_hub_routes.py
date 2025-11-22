@@ -11,7 +11,7 @@ import time
 from pathlib import Path 
 import google.api_core.exceptions
 
-from utils import extract_text, delete_collection, split_chunks, token_required
+from utils import extract_text, delete_collection, split_chunks
 import redis
 
 # --- 从配置文件导入 ---
