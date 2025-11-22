@@ -36,3 +36,7 @@ PyPDF2
 PyMuPDF
 opencv-python
 numpy
+
+faiss-cpu
+sentence-transformers
+tiktoken
