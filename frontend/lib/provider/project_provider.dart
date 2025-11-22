@@ -55,9 +55,6 @@ class ProjectProvider with ChangeNotifier {
   String? _deletingPaperId;
   String? get deletingPaperId => _deletingPaperId;
 
-  bool _isGuestMode = false;
-  bool get isGuestMode => _isGuestMode;
-
   List<CodeSuggestionMessage> _codeSuggestionHistory = [];
   List<CodeSuggestionMessage> get codeSuggestionHistory => _codeSuggestionHistory;
   bool _isGeneratingSuggestion = false;
@@ -257,8 +254,6 @@ class ProjectProvider with ChangeNotifier {
   Future<void> createProject(String name) async {
     if (name.isEmpty) return;
     
-    // The UI will be responsible for checking guest mode.
-    // The provider's job is just to talk to the API.
     try {
       await _api.createProject(name);
       await fetchProjects(forceRefresh: true);
@@ -638,16 +633,8 @@ class ProjectProvider with ChangeNotifier {
   }
 
   void enterGuestMode() {
-    _isGuestMode = true;
-    // We can load projects from cache for the guest, but they can't save.
+    // This is now the default state, this function can be simplified or removed.
     _loadProjectsFromCache();
-    notifyListeners();
-  }
-
-  void exitGuestMode() {
-    _isGuestMode = false;
-    // Clear any cached guest data when they log out of guest mode
-    _projects = [];
     notifyListeners();
   }
 
