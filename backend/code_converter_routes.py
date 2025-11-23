@@ -5,18 +5,14 @@ from pathlib import Path
 from flask import Blueprint, request, jsonify
 from firebase_admin import firestore
 from utils import get_file_hash, DOT_REPLACEMENT
+from services import db
 
 # --- BLUEPRINT SETUP ---
 code_converter_bp = Blueprint('code_converter_bp', __name__)
-db = None
+
 # --- NEW: Define collection names as constants ---
 CODE_PROJECTS_COLLECTION = "code_projects"
 CODE_FILES_SUBCOLLECTION = "synced_code_files"
-
-def set_dependencies(db_instance):
-    """Injects the Firestore db instance from the main app."""
-    global db
-    db = db_instance
 
 # --- ROUTES (CRUD for Firestore-based file conversion) ---
 @code_converter_bp.route('/code-converter/structure/<project_id>', methods=['GET'])
