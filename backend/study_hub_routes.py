@@ -29,19 +29,16 @@ from code_graph_engine import (
     hybrid_retrieval_pipeline
 )
 
+from services import db, note_generation_model, chat_model, redis_client
+
 cross_encoder = None
 study_hub_bp = Blueprint('study_hub_bp', __name__)
 
-db = None
-note_gen_model = None
-chat_model = None
-redis_client = None
-
 def set_dependencies(db_instance, note_model_instance, chat_model_instance, redis_instance):
     """Injects database and AI model dependencies from the main app."""
-    global db, note_gen_model, chat_model, redis_client, cross_encoder
+    global db, note_generation_model, chat_model, redis_client, cross_encoder
     db = db_instance
-    note_gen_model = note_model_instance
+    note_generation_model = note_model_instance
     chat_model = chat_model_instance
     redis_client = redis_instance
     
@@ -94,9 +91,10 @@ def generate_note(text):
 
     ## 1. 💡 Simplify and Shorten Content (Aggressive Simplification)
     *   **Clarity Priority:** **REWRITE** dense, convoluted academic sentences into short, direct, simple statements. The resulting text must be immediately clear to a novice reader.
-    *   **Sentence Compression:** Aim for maximum brevity. Sentences should be **no more than 15 words** where grammatically possible. Keep the flow simple (Subject-Verb-Object).
+    *   **Sentence Compression:** Aim for maximum brevity. Sentences should be **as short as possible** where grammatically possible. Keep the flow simple (Subject-Verb-Object).
     *   **Word Replacement:** Replace complex or academic terminology (e.g., 'paradigm,' 'utilization,' 'delineate') with simpler, everyday equivalents (e.g., 'model,' 'use,' 'show').
     *   **Keep Key Points:** Retain all essential definitions, data, and core arguments accurately.
+    *   **Exam Purpose:** The note is generate for exam purpose, so the key word can't miss. 
 
     ## 3. 🎨 Formatting and Tone
     *   Use markdown headings (`#`, `##`) that match the original text's structure. Add a relevant **emoji** to each main heading.
@@ -114,8 +112,8 @@ def generate_note(text):
     ---
     """
     try:
-        # Use the injected note_gen_model
-        response = note_gen_model.generate_content(prompt)
+        # Use the injected note_generation_model
+        response = note_generation_model.generate_content(prompt)
         return markdown.markdown(response.text, extensions=['tables'])
     except Exception as e:
         print(f"  ❌ Note generation failed: {e}")
@@ -485,7 +483,7 @@ def topic_note(project_id):
     """
     
     try:
-        response_text = note_gen_model.generate_content(prompt).text
+        response_text = note_generation_model.generate_content(prompt).text
         html = markdown.markdown(response_text, extensions=['tables'])
         return jsonify({"note_html": html})
     except Exception as e:

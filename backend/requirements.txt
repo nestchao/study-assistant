@@ -37,6 +37,10 @@ PyMuPDF
 opencv-python
 numpy
 
+# Improve AI in Communication Way
 faiss-cpu
 sentence-transformers
 tiktoken
+
+# Rabbit MQ
+celery

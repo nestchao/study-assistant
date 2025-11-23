@@ -9,6 +9,7 @@ from sentence_transformers import CrossEncoder
 import google.generativeai as genai
 from collections import deque
 import tiktoken
+from services import HyDE_generation_model
 
 # --- 从配置文件导入 ---
 from config import (
@@ -350,9 +351,8 @@ def hybrid_retrieval_pipeline(project_id, user_query, db_instance, vector_store,
     search_query = user_query
     if use_hyde:
         try:
-            model = genai.GenerativeModel("gemini-2.5-flash-lite")
             # Shorten HyDE generation to save time
-            hyde = model.generate_content(f"Write python code for: {user_query}").text
+            hyde = HyDE_generation_model.generate_content(f"Write python code for: {user_query}").text
             search_query += "\n" + hyde
             print("  ✅ HyDE generated.")
         except: pass

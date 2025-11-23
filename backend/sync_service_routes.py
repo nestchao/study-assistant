@@ -3,6 +3,7 @@ from flask import Blueprint, request, jsonify
 from firebase_admin import firestore
 import hashlib 
 import shutil 
+from services import db
 
 from utils import (
     get_file_hash, 
@@ -22,12 +23,11 @@ from config import (
 from code_graph_engine import FaissVectorStore
 from code_graph_utils import extract_functions_and_classes, generate_embeddings, calculate_static_weights
 
-sync_service_bp = Blueprint('sync_service_bp', __name__)
-db = None
+# --- Rabbit MQ ---
+from tasks import background_perform_sync 
+from sync_logic import force_reindex_project 
 
-def set_dependencies(db_instance):
-    global db
-    db = db_instance
+sync_service_bp = Blueprint('sync_service_bp', __name__)
 
 def perform_sync(project_id: str, config_data: dict):
     source_dir = config_data.get('local_path')
@@ -186,12 +186,10 @@ def delete_sync_project(project_id):
 @sync_service_bp.route('/sync/run/<project_id>', methods=['POST'])
 def run_sync_route(project_id):
     """
-    Standard Sync triggered by Frontend button.
-    It now does BOTH:
-    1. Syncs files (checks for changes)
-    2. Forces a Graph Re-index (to ensure 1900+ nodes logic is applied)
+    Triggers background sync via RabbitMQ.
     """
     try:
+        # Check if project exists first
         project_doc = db.collection(CODE_PROJECTS_COLLECTION).document(project_id).get()
         if not project_doc.exists:
             return jsonify({"error": "Code project not found"}), 404
@@ -200,19 +198,14 @@ def run_sync_route(project_id):
         if not config_data.get('is_active'):
             return jsonify({"message": "Sync is disabled."}), 200
 
-        # 1. Sync Files
-        file_result = perform_sync(project_id, config_data)
-        
-        # 2. Force Graph Re-index (Unconditional, to fix your graph structure)
-        # In production, you might only do this if file_result['updated'] > 0
-        # But for now, we force it to ensure you get your 1900 nodes.
-        graph_result = force_reindex_project(project_id)
+        # --- SEND TO RABBITMQ ---
+        task = background_perform_sync.delay(project_id)
 
         return jsonify({
             "success": True,
-            "file_sync": file_result,
-            "graph_sync": graph_result
-        })
+            "message": "Background sync started.",
+            "task_id": task.id
+        }), 202
 
     except Exception as e:
         import traceback
@@ -286,9 +279,15 @@ def force_reindex_project(project_id):
 
 @sync_service_bp.route('/sync/reindex/<project_id>', methods=['POST'])
 def reindex_route(project_id):
-    """Manual endpoint if you just want to rebuild the graph without scanning files."""
+    """
+    Manual endpoint - runs SYNCHRONOUSLY (Blocking) using the logic directly.
+    Useful for debugging without waiting for the queue.
+    """
     try:
-        result = force_reindex_project(project_id)
+        # We can call the logic function directly here for manual triggers
+        result = force_reindex_project(db, project_id)
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
