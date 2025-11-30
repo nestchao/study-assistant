@@ -5,4 +5,6 @@ python app.py
 cd frontend
 flutter run -d edge
 
+cd backend
+venv\Scripts\activate
 celery -A tasks worker --loglevel=info --pool=solo

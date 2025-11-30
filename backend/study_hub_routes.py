@@ -26,26 +26,23 @@ from config import (
 from code_graph_engine import (
     FaissVectorStore, 
     CrossEncoderReranker,
-    hybrid_retrieval_pipeline
+    hybrid_retrieval_pipeline,
+    build_hierarchical_context
 )
 
 from services import db, note_generation_model, chat_model, redis_client
 
-cross_encoder = None
+cross_encoder = CrossEncoderReranker()
 study_hub_bp = Blueprint('study_hub_bp', __name__)
 
-def set_dependencies(db_instance, note_model_instance, chat_model_instance, redis_instance):
-    """Injects database and AI model dependencies from the main app."""
-    global db, note_generation_model, chat_model, redis_client, cross_encoder
-    db = db_instance
-    note_generation_model = note_model_instance
-    chat_model = chat_model_instance
-    redis_client = redis_instance
+# def set_dependencies(db_instance, note_model_instance, chat_model_instance, redis_instance):
+#     """Injects database and AI model dependencies from the main app."""
+#     global cross_encoder
     
-    # --- 新增：初始化 Cross-Encoder（只加载一次） ---
-    print("✅ Loading Cross-Encoder model...")
-    cross_encoder = CrossEncoderReranker()
-    print("✅ Study Hub dependencies injected.")
+#     # --- 新增：初始化 Cross-Encoder（只加载一次） ---
+#     print("✅ Loading Cross-Encoder model...")
+#     cross_encoder = CrossEncoderReranker()
+#     print("✅ Study Hub dependencies injected.")
 
 # --- HELPER FUNCTIONS for Study Hub ---
 def get_original_text(project_id, source_id):
@@ -578,14 +575,30 @@ def generate_code_suggestion():
         )
         
         # --- 3. 生成最终答案 ---
-        final_prompt = f"""You are an expert developer assistant.
+        final_prompt = f"""
+        ### ROLE
+        You are a Senior Software Architect and Codebase Expert. You are assisting a developer by analyzing the provided code context to answer their questions accurately.
 
-        CONTEXT:
+        ### CONTEXT (Retrieved Code)
+        The following text contains the most relevant files and code snippets from the project. The format is: `# FILE: <path>` followed by the code.
+        --------------------------------------------------
         {context}
+        --------------------------------------------------
 
-        USER QUESTION: {prompt_text}
+        ### USER QUESTION
+        {prompt_text}
 
-        Provide a clear, actionable answer. Include code examples if relevant."""
+        ### INSTRUCTIONS
+        1. **Source-Based Truth:** Answer ONLY based on the code provided in the CONTEXT. If the answer is not in the context, admit it. Do not make up functions or files that do not exist.
+        2. **Citation:** When explaining logic, explicitly mention the filename (e.g., "In `backend/app.py`...") so the user knows where to look.
+        3. **Actionable Output:**
+        - If explaining concepts: Use clear, high-level summaries followed by technical details.
+        - If fixing bugs: Explain the root cause, then provide the corrected code block.
+        - If writing new code: Ensure it matches the style and patterns found in the CONTEXT.
+        4. **Formatting:** Use Markdown. Use code blocks (```language) for code. Use bold text for variable names or file paths.
+
+        ### ANSWER
+        """
 
         print("  🤖 Generating final response with Gemini...")
         response = chat_model.generate_content(final_prompt)
@@ -609,4 +622,83 @@ def generate_code_suggestion():
         import traceback
         print(f"  ❌ CRITICAL ERROR: {e}")
         print(traceback.format_exc())
+        return jsonify({"error": str(e)}), 500
+
+@study_hub_bp.route('/retrieve-context-candidates', methods=['POST'])
+def retrieve_candidates():
+    data = request.json
+    project_id = data.get('project_id')
+    prompt_text = data.get('prompt')
+    
+    try:
+        store_path = VECTOR_STORE_ROOT / project_id
+        if not store_path.exists():
+             return jsonify({"error": "Project index not found"}), 404
+
+        vector_store = FaissVectorStore.load(store_path)
+        
+        # Get candidates with return_nodes_only=True
+        candidates = hybrid_retrieval_pipeline(
+            project_id=project_id,
+            user_query=prompt_text,
+            db_instance=db,
+            vector_store=vector_store,
+            cross_encoder=cross_encoder,
+            use_hyde=True,
+            return_nodes_only=True 
+        )
+        
+        return jsonify({"candidates": candidates})
+    except Exception as e:
+        print(f"Error retrieving candidates: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@study_hub_bp.route('/generate-answer-from-context', methods=['POST'])
+def generate_answer_from_context():
+    data = request.json
+    project_id = data.get('project_id')
+    prompt_text = data.get('prompt')
+    selected_ids = data.get('selected_ids', [])
+
+    if not selected_ids:
+        return jsonify({"suggestion": "❌ No context selected. Please select at least one file for me to analyze."})
+
+    print(f"📥 Received {len(selected_ids)} IDs for generation: {selected_ids}")
+    
+    try:
+        store_path = VECTOR_STORE_ROOT / project_id
+        vector_store = FaissVectorStore.load(store_path)
+        
+        # Re-fetch full node content
+        selected_nodes = []
+        all_keys = list(vector_store.name_to_id.keys())
+        print(f"🔎 DEBUG: First 5 keys in Vector Store: {all_keys[:5]}")
+
+        for uid in selected_ids:
+            node_data = vector_store.get_node_by_name(uid)
+            if node_data:
+                selected_nodes.append({'node': node_data})
+            else:
+                print(f"⚠️ Node not found for ID: {uid}")
+        
+        # Build Context
+        context = build_hierarchical_context(selected_nodes)
+        
+        final_prompt = f"""
+        ### ROLE
+        You are a Senior Software Architect.
+
+        ### CONTEXT
+        {context}
+
+        ### QUESTION
+        {prompt_text}
+
+        ### INSTRUCTION
+        Answer based on the code above.
+        """
+        response = chat_model.generate_content(final_prompt)
+        return jsonify({"suggestion": response.text})
+        
+    except Exception as e:
         return jsonify({"error": str(e)}), 500

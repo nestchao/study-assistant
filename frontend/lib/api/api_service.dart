@@ -383,25 +383,25 @@ Future<void> deleteSyncFromProject(String projectId) async {
   }
 
   Future<String> getCodeSuggestion({
-    required String projectId, // <-- ADD
-    required List<String> extensions, // <-- ADD
+    required String projectId,
+    required List<String> extensions,
     required String prompt,
   }) async {
     final response = await http.post(
-      Uri.parse('$baseUrl/generate-code-suggestion'), // This URL is now correct
+      Uri.parse('$baseUrl/generate-code-suggestion'),
       headers: {'Content-Type': 'application/json'},
       body: json.encode({
-        'project_id': projectId, // <-- SEND
-        'extensions': extensions, // <-- SEND
+        'project_id': projectId,
+        'extensions': extensions,
         'prompt': prompt,
       }),
     );
     
     if (response.statusCode == 200) {
-      return json.decode(response.body)['suggestion'] ?? 'Sorry, I could not generate a suggestion.';
+      return json.decode(response.body)['suggestion'] ?? 'No suggestion';
     } else {
       final error = json.decode(response.body)['error'] ?? 'Unknown error';
-      throw Exception('Failed to get code suggestion: $error');
+      throw Exception('Failed: $error');
     }
   }
 
@@ -418,5 +418,40 @@ Future<void> deleteSyncFromProject(String projectId) async {
     }
     
     throw Exception('Failed to create project: ${response.statusCode}');
+  }
+
+  Future<List<Map<String, dynamic>>> getRetrievalCandidates(String projectId, String prompt) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/retrieve-context-candidates'),
+      headers: {'Content-Type': 'application/json'},
+      body: json.encode({
+        'project_id': projectId,
+        'prompt': prompt,
+      }),
+    );
+
+    if (response.statusCode == 200) {
+      final data = json.decode(response.body);
+      // Backend returns { "candidates": [...] }
+      return List<Map<String, dynamic>>.from(data['candidates']);
+    }
+    throw Exception('Failed to retrieve candidates: ${response.body}');
+  }
+
+  Future<String> generateAnswerFromContext(String projectId, String prompt, List<String> selectedIds) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/generate-answer-from-context'),
+      headers: {'Content-Type': 'application/json'},
+      body: json.encode({
+        'project_id': projectId,
+        'prompt': prompt,
+        'selected_ids': selectedIds,
+      }),
+    );
+
+    if (response.statusCode == 200) {
+      return json.decode(response.body)['suggestion'] ?? 'No response';
+    }
+    throw Exception('Failed to generate answer: ${response.body}');
   }
 }

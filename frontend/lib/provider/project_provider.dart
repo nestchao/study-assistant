@@ -29,6 +29,25 @@ class CodeSuggestionMessage {
   CodeSuggestionMessage({required this.content, required this.isUser});
 }
 
+class CandidateNode {
+  final String id;
+  final String name;
+  final String filePath;
+  final String summary;
+  bool isSelected;
+
+  CandidateNode({required this.id, required this.name, required this.filePath, required this.summary, this.isSelected = true});
+  
+  factory CandidateNode.fromJson(Map<String, dynamic> json) {
+    return CandidateNode(
+      id: json['id'],
+      name: json['name'],
+      filePath: json['file_path'],
+      summary: json['ai_summary'] ?? '',
+    );
+  }
+}
+
 class ProjectProvider with ChangeNotifier {
   final ApiService _api = ApiService();
 
@@ -824,6 +843,67 @@ class ProjectProvider with ChangeNotifier {
       rethrow;
     } finally {
       _syncingProjectId = null;
+      notifyListeners();
+    }
+  }
+
+  List<CandidateNode> _contextCandidates = [];
+  List<CandidateNode> get contextCandidates => _contextCandidates;
+  bool _isReviewingContext = false; // UI State Flag
+  bool get isReviewingContext => _isReviewingContext;
+  String _pendingPrompt = "";
+
+  Future<void> getRetrievalCandidates(String prompt) async {
+    _isGeneratingSuggestion = true;
+    _pendingPrompt = prompt;
+    notifyListeners();
+    
+    try {
+      // Call the NEW API route
+      final result = await _api.getRetrievalCandidates(_viewingProjectId!, prompt);
+      _contextCandidates = result.map((c) => CandidateNode.fromJson(c)).toList();
+      _isReviewingContext = true; // Switch UI to Checklist Mode
+    } catch (e) {
+      // Handle error
+    } finally {
+      _isGeneratingSuggestion = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> confirmContextAndGenerate() async { // Removed 'String prompt'
+    _isReviewingContext = false;
+    _isGeneratingSuggestion = true;
+    
+    final selectedIds = _contextCandidates
+        .where((n) => n.isSelected)
+        .map((n) => n.id)
+        .toList();
+        
+    // Use the stored prompt here
+    _codeSuggestionHistory.add(CodeSuggestionMessage(content: _pendingPrompt, isUser: true));
+    notifyListeners();
+
+    try {
+      final answer = await _api.generateAnswerFromContext(
+          _viewingProjectId!, 
+          _pendingPrompt, // Use stored prompt
+          selectedIds
+      );
+      _codeSuggestionHistory.add(CodeSuggestionMessage(content: answer, isUser: false));
+    } catch (e) {
+       _codeSuggestionHistory.add(CodeSuggestionMessage(content: "Error: $e", isUser: false));
+    } finally {
+      _isGeneratingSuggestion = false;
+      _pendingPrompt = ""; // Clear it
+      notifyListeners();
+    }
+  }
+  
+  void toggleCandidate(String id) {
+    final index = _contextCandidates.indexWhere((c) => c.id == id);
+    if (index != -1) {
+      _contextCandidates[index].isSelected = !_contextCandidates[index].isSelected;
       notifyListeners();
     }
   }
