@@ -4,3 +4,5 @@ python app.py
 
 cd frontend
 flutter run -d edge
+
+celery -A tasks worker --loglevel=info --pool=solo

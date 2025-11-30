@@ -1,45 +1,51 @@
 # backend/study_hub_routes.py
+
 import re
 import markdown
 import html2text
 from flask import Blueprint, request, jsonify
 from firebase_admin import firestore
 from utils import L1_CACHE
-import random  # For the random TTL in get_note
+import random
 import time 
 from pathlib import Path 
 import google.api_core.exceptions
 
-# Import shared utility functions
 from utils import extract_text, delete_collection, split_chunks
 import redis
 
-# --- BLUEPRINT SETUP ---
-# Create a blueprint for study hub features
+# --- 从配置文件导入 ---
+from config import (
+    STUDY_PROJECTS_COLLECTION,
+    CODE_PROJECTS_COLLECTION,
+    CODE_FILES_SUBCOLLECTION,
+    VECTOR_STORE_ROOT,
+    NULL_CACHE_VALUE
+)
+
+from code_graph_engine import (
+    FaissVectorStore, 
+    CrossEncoderReranker,
+    hybrid_retrieval_pipeline
+)
+
+from services import db, note_generation_model, chat_model, redis_client
+
+cross_encoder = None
 study_hub_bp = Blueprint('study_hub_bp', __name__)
-
-# Global variables to hold dependencies injected from app.py
-db = None
-note_gen_model = None
-chat_model = None
-redis_client = None 
-
-NULL_CACHE_VALUE = "##NULL##"
-
-# --- NEW: Define collection names as constants ---
-STUDY_PROJECTS_COLLECTION = "projects"
-CODE_PROJECTS_COLLECTION = "code_projects"
-CODE_FILES_SUBCOLLECTION = "synced_code_files"
-
 
 def set_dependencies(db_instance, note_model_instance, chat_model_instance, redis_instance):
     """Injects database and AI model dependencies from the main app."""
-    global db, note_gen_model, chat_model, redis_client
+    global db, note_generation_model, chat_model, redis_client, cross_encoder
     db = db_instance
-    note_gen_model = note_model_instance
+    note_generation_model = note_model_instance
     chat_model = chat_model_instance
-    print("✅ Study Hub dependencies injected.")
     redis_client = redis_instance
+    
+    # --- 新增：初始化 Cross-Encoder（只加载一次） ---
+    print("✅ Loading Cross-Encoder model...")
+    cross_encoder = CrossEncoderReranker()
+    print("✅ Study Hub dependencies injected.")
 
 # --- HELPER FUNCTIONS for Study Hub ---
 def get_original_text(project_id, source_id):
@@ -113,8 +119,8 @@ def generate_note(text):
     {text}
     """
     try:
-        # Use the injected note_gen_model
-        response = note_gen_model.generate_content(prompt)
+        # Use the injected note_generation_model
+        response = note_generation_model.generate_content(prompt)
         return markdown.markdown(response.text, extensions=['tables'])
     except Exception as e:
         print(f"  ❌ Note generation failed: {e}")
@@ -484,7 +490,7 @@ def topic_note(project_id):
     """
     
     try:
-        response_text = note_gen_model.generate_content(prompt).text
+        response_text = note_generation_model.generate_content(prompt).text
         html = markdown.markdown(response_text, extensions=['tables'])
         return jsonify({"note_html": html})
     except Exception as e:
@@ -545,113 +551,69 @@ def regenerate_note(project_id, source_id):
 def generate_code_suggestion():
     data = request.json
     project_id = data.get('project_id')
-    extensions = data.get('extensions', [])
     prompt_text = data.get('prompt')
     
-    print("\n" + "="*50)
-    print(f"🤖 Generating PROJECT-WIDE code suggestion for project: {project_id}")
-    print(f"   Prompt: '{prompt_text[:100]}...'")
-    print(f"   Filtering for extensions: {extensions or 'All'}")
+    print("\n" + "="*80)
+    print(f"🚀 Generating Code Suggestion (Hybrid e-based + Industry Standard)")
+    print(f"Project: {project_id}")
+    print(f"Query: {prompt_text}")
+    print("="*80)
     
     if not all([project_id, prompt_text]):
         return jsonify({"error": "Missing 'project_id' or 'prompt'"}), 400
-    
-    ext_key_part = "_".join(sorted([ext.lower().lstrip('.') for ext in extensions])) if extensions else "all"
-    context_cache_key = f"project_context:{project_id}:{ext_key_part}"
-    
-    print(f"   Cache key: {context_cache_key}")
-
-    full_project_context = None 
-
-    if redis_client:
-        try:
-            cached_context_bytes = redis_client.get(context_cache_key)
-            if cached_context_bytes:
-                print("  ✅ CACHE HIT. Using cached project context.")
-                full_project_context = cached_context_bytes.decode('utf-8')
-        except Exception as e:
-            print(f"  ⚠️ Redis cache check failed: {e}") 
-
-    if full_project_context is None:
-        print("  CACHE MISS. Building project context from Firestore...")
-        try:
-            temp_context = ""
-            file_count = 0
-            # --- MODIFIED: Query the correct top-level collection ---
-            docs = db.collection(CODE_PROJECTS_COLLECTION).document(project_id).collection(CODE_FILES_SUBCOLLECTION).stream()
-            dot_extensions = [f".{ext.lstrip('.').lower()}" for ext in extensions] if extensions else None
-            special_files_to_ignore = {'_full_context.txt'}
-
-            if 'tree' in prompt_text.lower() or 'structure' in prompt_text.lower():
-                print("  - Prompt suggests a structure query. Including tree.txt.")
-                # --- MODIFIED: Query the correct top-level collection ---
-                tree_doc = db.collection(CODE_PROJECTS_COLLECTION).document(project_id).collection(CODE_FILES_SUBCOLLECTION).document('project_tree_txt').get()
-                if tree_doc.exists:
-                    temp_context += "--- FILE: tree.txt (Project File Structure) ---\n"
-                    temp_context += tree_doc.to_dict().get('content', '')
-                    temp_context += "\n\n"
-                    special_files_to_ignore.add('tree.txt')
-            
-            for doc in docs:
-                file_data = doc.to_dict()
-                original_path = file_data.get('original_path', '')
-                
-                if original_path in special_files_to_ignore:
-                    continue
-                
-                if not dot_extensions or Path(original_path).suffix.lower() in dot_extensions:
-                    temp_context += f"--- FILE: {original_path} ---\n"
-                    temp_context += file_data.get('content', '')
-                    temp_context += "\n\n"
-                    file_count += 1
-            
-            full_project_context = temp_context
-            print(f"  - Assembled context from {file_count} files ({len(full_project_context)} chars).")
-
-            if redis_client and full_project_context:
-                try:
-                    redis_client.setex(context_cache_key, 3600, full_project_context)
-                    print(f"  - ✅ Context stored in Redis cache with 1hr TTL.")
-                except Exception as e:
-                    print(f"  ⚠️ Failed to store context in Redis cache: {e}")
-
-        except Exception as e:
-            print(f"  - ❌ ERROR building project context from Firestore: {e}")
-            return jsonify({"error": f"Failed to build project context: {e}"}), 500
-    
-    if not full_project_context:
-        print("  - ⚠️ No matching files found to build context.")
-        return jsonify({"suggestion": "Could not find any code to analyze. Please sync your project with the correct file extensions first."})
-
-    system_prompt = """You are an expert AI software developer. You will be given the entire codebase for a project as context. Your task is to analyze this context and then answer the user's question or fulfill their request. Provide complete, runnable code blocks where appropriate. Be clear, concise, and accurate."""
-    
-    final_prompt = f"{system_prompt}\n\nPROJECT CONTEXT:\n---\n{full_project_context}\n---\n\nUSER QUESTION: {prompt_text}"
 
     try:
-        print("  - Sending request to Gemini model...")
+        # --- 1. 加载向量存储 ---
+        store_path = Path("vector_stores") / project_id
+        
+        if not store_path.exists():
+            return jsonify({
+                "suggestion": "⚠️ This project hasn't been synced yet. Please run 'Check Synchronize' first."
+            })
+        
+        print(f"  📂 Loading vector store from {store_path}...")
+        vector_store = FaissVectorStore.load(store_path)
+        
+        # --- 2. 运行混合检索流程 ---
+        context = hybrid_retrieval_pipeline(
+            project_id=project_id,
+            user_query=prompt_text,
+            db_instance=db,
+            vector_store=vector_store,
+            cross_encoder=cross_encoder,
+            use_hyde=True  # 使用 HyDE
+        )
+        
+        # --- 3. 生成最终答案 ---
+        final_prompt = f"""You are an expert developer assistant.
+
+        CONTEXT:
+        {context}
+
+        USER QUESTION: {prompt_text}
+
+        Provide a clear, actionable answer. Include code examples if relevant."""
+
+        print("  🤖 Generating final response with Gemini...")
         response = chat_model.generate_content(final_prompt)
-        print("  - ✅ Received response from Gemini.")
+        
         if not response.candidates:
-            block_reason = response.prompt_feedback.block_reason.name if response.prompt_feedback else "Unknown"
-            error_message = f"AI response was blocked. Reason: {block_reason}. The project context might be too large or contain sensitive information."
-            print(f"  - ❌ ERROR: Prompt was blocked. Reason: {block_reason}")
-            return jsonify({"error": error_message}), 400
-
-        try:
-            suggestion_text = response.candidates[0].content.parts[0].text
-        except (IndexError, AttributeError):
-            finish_reason = response.candidates[0].finish_reason.name if response.candidates[0].finish_reason else "Unknown"
-            error_message = f"AI generated an empty or invalid response. Finish Reason: {finish_reason}."
-            print(f"  - ❌ ERROR: AI response was empty or invalid. Finish Reason: {finish_reason}")
-            return jsonify({"error": error_message}), 500
-
-        print("="*50 + "\n")
+            return jsonify({"error": "AI response blocked or empty."}), 400
+        
+        suggestion_text = response.candidates[0].content.parts[0].text
+        
+        print("="*80)
+        print("✅ Response generated successfully")
+        print("="*80 + "\n")
+        
         return jsonify({"suggestion": suggestion_text})
     
+    except FileNotFoundError as e:
+        return jsonify({
+            "suggestion": f"⚠️ Vector store not found: {e}. Please sync your project first."
+        })
     except Exception as e:
         import traceback
-        error_details = traceback.format_exc()
-        print(f"  - ❌ CRITICAL ERROR calling Gemini model: {e}")
-        print(error_details)
-        print("="*50 + "\n")
-        return jsonify({"error": str(e), "traceback": error_details}), 500
+        print(f"  ❌ CRITICAL ERROR: {e}")
+        print(traceback.format_exc())
+        return jsonify({"error": str(e)}), 500
