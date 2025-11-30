@@ -161,20 +161,31 @@ class _CodeChatPanelState extends State<CodeChatPanel> {
     final prompt = _chatController.text.trim();
     if (prompt.isEmpty) return;
 
-    _chatController.clear();
     FocusScope.of(context).unfocus();
-    provider.generateCodeSuggestion(prompt);
+    
+    _chatController.clear();
 
-    // Auto-scroll to bottom
-    Future.delayed(const Duration(milliseconds: 100), () {
-      if (_scrollController.hasClients) {
-        _scrollController.animateTo(
-          _scrollController.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeOut,
-        );
-      }
-    });
+    provider.getRetrievalCandidates(prompt);
+  }
+
+  void _copyMessageToClipboard(String content) {
+    Clipboard.setData(ClipboardData(text: content));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: const Row(
+          children: [
+            Icon(Icons.check_circle, color: Colors.white, size: 20),
+            SizedBox(width: 8),
+            Text('Response copied to clipboard!'),
+          ],
+        ),
+        backgroundColor: Colors.purple.shade700,
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 2),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        margin: const EdgeInsets.all(16),
+      ),
+    );
   }
 
   @override
@@ -215,46 +226,6 @@ class _CodeChatPanelState extends State<CodeChatPanel> {
             ),
           ),
           // Chat Messages
-          Expanded(
-            child: provider.codeSuggestionHistory.isEmpty
-                ? Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(Icons.chat_bubble_outline, size: 60, color: Colors.grey.shade400),
-                        const SizedBox(height: 12),
-                        Text(
-                          'Ask AI about your code',
-                          style: TextStyle(
-                            color: Colors.grey.shade600,
-                            fontSize: 16,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 32),
-                          child: Text(
-                            'Select a file and start chatting to get explanations, suggestions, or improvements',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              color: Colors.grey.shade500,
-                              fontSize: 12,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  )
-                : ListView.builder(
-                    controller: _scrollController,
-                    padding: const EdgeInsets.all(16),
-                    itemCount: provider.codeSuggestionHistory.length,
-                    itemBuilder: (context, index) {
-                      final message = provider.codeSuggestionHistory[index];
-                      return _buildChatMessage(message, context);
-                    },
-                  ),
-          ),
           // Loading indicator
           if (provider.isGeneratingSuggestion)
             Container(
@@ -278,10 +249,134 @@ class _CodeChatPanelState extends State<CodeChatPanel> {
                 ],
               ),
             ),
-          // Chat Input
-          _buildChatInput(),
+
+          // Content Area (Switch between Chat and Checklist)
+          Expanded(
+            child: provider.isReviewingContext 
+              ? _buildContextChecklist(provider) 
+              : _buildChatList(provider), // This method is now defined below
+          ),
+          
+          // Chat Input (Only show if not reviewing context)
+          if (!provider.isReviewingContext)
+            _buildChatInput(),
         ],
       ),
+    );
+  }
+
+  Widget _buildChatList(ProjectProvider provider) {
+    if (provider.codeSuggestionHistory.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.chat_bubble_outline, size: 60, color: Colors.grey.shade400),
+            const SizedBox(height: 12),
+            Text(
+              'Ask AI about your code',
+              style: TextStyle(color: Colors.grey.shade600, fontSize: 16),
+            ),
+            const SizedBox(height: 8),
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 32),
+              child: Text(
+                'Type a question to find relevant files and generate answers.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.grey, fontSize: 12),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return ListView.builder(
+      controller: _scrollController,
+      padding: const EdgeInsets.all(16),
+      itemCount: provider.codeSuggestionHistory.length,
+      itemBuilder: (context, index) {
+        final message = provider.codeSuggestionHistory[index];
+        return _buildChatMessage(message, context);
+      },
+    );
+  }
+
+  Widget _buildContextChecklist(ProjectProvider provider) {
+    // ... (Reuse the code you provided in your prompt for checklist) ...
+    return Column(
+      children: [
+        Container(
+          padding: const EdgeInsets.all(12),
+          color: Colors.amber.shade50,
+          child: Row(
+            children: [
+              const Icon(Icons.lightbulb_outline, color: Colors.amber),
+              const SizedBox(width: 8),
+              Expanded(child: Text("I found ${provider.contextCandidates.length} relevant files. Verify context:", style: const TextStyle(fontWeight: FontWeight.bold))),
+            ],
+          ),
+        ),
+        Expanded(
+          child: ListView.builder(
+            itemCount: provider.contextCandidates.length,
+            itemBuilder: (context, index) {
+              final node = provider.contextCandidates[index];
+              return CheckboxListTile(
+                value: node.isSelected,
+                activeColor: Colors.purple,
+                onChanged: (_) => provider.toggleCandidate(node.id),
+                title: Text(node.name, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+                subtitle: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(node.filePath, style: const TextStyle(fontSize: 12, color: Colors.grey)),
+                    if(node.summary.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4.0),
+                        child: Text("💡 ${node.summary}", style: TextStyle(fontSize: 12, color: Colors.purple.shade700, fontStyle: FontStyle.italic)),
+                      ),
+                  ],
+                ),
+              );
+            },
+          ),
+        ),
+        Container(
+          padding: const EdgeInsets.all(16.0),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 4, offset: const Offset(0, -2))],
+          ),
+          child: Row(
+            children: [
+              TextButton(
+                onPressed: () { 
+                  // Cancel logic: just toggle flag back
+                  // You might need a method in provider to cancel reviewing
+                  // For now, assuming confirmContextAndGenerate with empty list or a specific cancel method
+                  // Hack: re-fetch empty to clear or add a 'cancel' bool in provider
+                }, 
+                child: const Text("Cancel")
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: ElevatedButton.icon(
+                  icon: const Icon(Icons.auto_awesome),
+                  label: const Text("Generate Answer"),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.purple, 
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
+                  // FIX: No arguments needed now
+                  onPressed: () => provider.confirmContextAndGenerate(), 
+                ),
+              ),
+            ],
+          ),
+        )
+      ],
     );
   }
 
@@ -291,7 +386,7 @@ class _CodeChatPanelState extends State<CodeChatPanel> {
       child: Container(
         margin: const EdgeInsets.only(bottom: 12),
         constraints: BoxConstraints(
-          maxWidth: MediaQuery.of(context).size.width * 0.75,
+          maxWidth: MediaQuery.of(context).size.width * 0.85, // Slightly wider to accommodate code
         ),
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
@@ -305,27 +400,61 @@ class _CodeChatPanelState extends State<CodeChatPanel> {
             ),
           ],
         ),
-        child: message.isUser
-            ? Text(
-                message.content,
-                style: const TextStyle(color: Colors.white, fontSize: 14),
-              )
-            : MarkdownBody(
-                data: message.content,
-                selectable: true,
-                styleSheet: MarkdownStyleSheet(
-                  p: const TextStyle(fontSize: 14, height: 1.5),
-                  code: TextStyle(
-                    backgroundColor: Colors.grey.shade200,
-                    fontFamily: 'monospace',
-                    fontSize: 13,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // 1. The Message Content
+            message.isUser
+                ? Text(
+                    message.content,
+                    style: const TextStyle(color: Colors.white, fontSize: 14),
+                  )
+                : MarkdownBody(
+                    data: message.content,
+                    selectable: true,
+                    styleSheet: MarkdownStyleSheet(
+                      p: const TextStyle(fontSize: 14, height: 1.5),
+                      code: TextStyle(
+                        backgroundColor: Colors.grey.shade200,
+                        fontFamily: 'monospace',
+                        fontSize: 13,
+                      ),
+                      codeblockDecoration: BoxDecoration(
+                        color: Colors.grey.shade200,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                    ),
                   ),
-                  codeblockDecoration: BoxDecoration(
-                    color: Colors.grey.shade200,
-                    borderRadius: BorderRadius.circular(8),
+
+            // 2. Copy Button (Only for AI messages)
+            if (!message.isUser) ...[
+              const SizedBox(height: 8),
+              Divider(color: Colors.grey.shade300, height: 1),
+              const SizedBox(height: 4),
+              Align(
+                alignment: Alignment.centerRight,
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(8),
+                  onTap: () => _copyMessageToClipboard(message.content),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.copy_rounded, size: 14, color: Colors.grey.shade600),
+                        const SizedBox(width: 4),
+                        Text(
+                          "Copy",
+                          style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
+            ],
+          ],
+        ),
       ),
     );
   }

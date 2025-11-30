@@ -16,7 +16,8 @@ from config import (
     VECTOR_STORE_ROOT
 )
 from code_graph_engine import FaissVectorStore
-from code_graph_utils import extract_functions_and_classes, generate_embeddings, calculate_static_weights
+from code_graph_utils import extract_functions_and_classes, generate_embeddings, calculate_static_weights, enrich_nodes_with_critic
+from services import HyDE_generation_model
 
 # --- MOVED LOGIC FUNCTIONS ---
 # Note: We now pass 'db' as an argument so this file doesn't need its own connection
@@ -137,6 +138,15 @@ def force_reindex_project(db, project_id):
     
     if not all_project_nodes:
         return {"success": False, "message": "No nodes found to index."}
+
+    print("  2.5 Running AI Critic...")
+    important_nodes = [
+        node for node in all_project_nodes
+        if any(keyword in node.name.lower() for keyword in ['route', 'handler', 'service', 'controller', 'manager', 'process', 'generate', 'solve'])
+    ][:8]
+
+    if important_nodes:
+        enrich_nodes_with_critic(important_nodes, HyDE_generation_model, max_nodes_to_process=8)
 
     # C. Generate Embeddings
     print("  3. Generating embeddings...")
