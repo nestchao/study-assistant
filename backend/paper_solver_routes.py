@@ -4,19 +4,10 @@ from flask import Blueprint, request, jsonify
 from firebase_admin import firestore
 from utils import extract_text_from_image, extract_text
 import google.generativeai as genai
+from services import db, paper_solver_model, redis_client
 
 # --- BLUEPRINT SETUP ---
 paper_solver_bp = Blueprint('paper_solver_bp', __name__)
-db = None
-genai_model = None
-redis_client = None 
-
-def set_dependencies(db_instance, genai_instance, redis_instance):
-    """Injects dependencies from the main app."""
-    global db, genai_model, redis_client
-    db = db_instance
-    genai_model = genai_instance
-    redis_client = redis_instance
 
 # ... (solve_paper_with_file and solve_paper_with_text functions are fine) ...
 def get_project_context(project_id):
@@ -65,7 +56,7 @@ def solve_paper_with_file(file_stream, filename, context):
     JSON OUTPUT:
     """
     print("    - Generating content from file and context...")
-    response = genai_model.generate_content([prompt, uploaded_file])
+    response = paper_solver_model.generate_content([prompt, uploaded_file])
     print(f"    - Deleting temporary file: {uploaded_file.name}")
     genai.delete_file(uploaded_file.name)
     cleaned_json_string = response.text.strip().replace('```json', '').replace('```', '')
@@ -97,7 +88,7 @@ def solve_paper_with_text(file_stream, filename, context):
     ---
     JSON OUTPUT:
     """
-    response = genai_model.generate_content(prompt)
+    response = paper_solver_model.generate_content(prompt)
     cleaned_json_string = response.text.strip().replace('```json', '').replace('```', '')
     return json.loads(cleaned_json_string)
 

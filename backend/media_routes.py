@@ -6,6 +6,7 @@ from firebase_admin import firestore
 import redis
 import random
 from utils import L1_CACHE
+from services import db, redis_client 
 
 redis_client = None 
 
@@ -15,16 +16,6 @@ media_bp = Blueprint('media_bp', __name__)
 # Constants
 MEDIA_COLLECTION = "media_metadata"
 MAX_CHUNK_SIZE_BYTES = 900_000
-
-# We'll get the db instance from the main app when this blueprint is registered.
-# For now, we'll use a placeholder.
-db = None
-
-def set_dependencies(db_instance, redis_instance):
-    """Allows the main app to pass its db instance to this blueprint."""
-    global db, redis_client
-    db = db_instance
-    redis_client = redis_instance
 
 # --- HELPER / AUTH MOCK ---
 def get_current_user_id():

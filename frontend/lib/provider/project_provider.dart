@@ -9,7 +9,6 @@ import 'dart:typed_data'; // Import
 import 'dart:convert';
 import 'package:image_picker/image_picker.dart';
 import 'package:study_assistance/models/past_paper.dart';
-import 'package:study_assistance/models/sync_config.dart';
 import 'package:study_assistance/models/code_project.dart';
 
 class Source {
