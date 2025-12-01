@@ -30,7 +30,7 @@ from code_graph_engine import (
     build_hierarchical_context
 )
 
-from services import db, note_generation_model, chat_model, redis_client
+from services import db, note_generation_model, chat_model, cache_manager 
 
 cross_encoder = CrossEncoderReranker()
 study_hub_bp = Blueprint('study_hub_bp', __name__)
@@ -319,57 +319,35 @@ def delete_source(project_id, source_id):
 
 @study_hub_bp.route('/get-note/<project_id>/<path:source_id>')
 def get_note(project_id, source_id):
-    note_key = f"note:{project_id}:{source_id}"
+    # 1. Define the cache key
+    cache_key = f"note:{project_id}:{source_id}"
 
-    # 1. Check L1 Cache
-    cached_value = L1_CACHE.get(note_key)
-    if cached_value:
-        print(f"✅ L1 CACHE HIT for note: {note_key}")
-        # If the cached value is our special null marker, return empty
-        return jsonify({"note_html": "" if cached_value == NULL_CACHE_VALUE else cached_value})
+    # 2. Define the factory function (what to do if cache misses)
+    def fetch_note_from_db():
+        print(f"  🔍 Fetching note from Firestore for {cache_key}...")
+        pages_query = db.collection(STUDY_PROJECTS_COLLECTION)\
+            .document(project_id).collection('sources').document(source_id)\
+            .collection('note_pages').order_by('order').stream()
+        
+        html = "".join(p.to_dict().get('html', '') for p in pages_query)
+        
+        # Return empty string if nothing found (CacheManager handles None vs Empty logic internally usually, 
+        # but returning empty string is safe)
+        return html if html else ""
 
-    # 2. Check L2 Cache (Redis)
-    if redis_client:
-        try:
-            cached_bytes = redis_client.get(note_key)
-            if cached_bytes:
-                print(f"✅ L2 CACHE HIT (Redis) for note: {note_key}")
-                content = cached_bytes.decode('utf-8')
-                L1_CACHE.set(note_key, content) # Backfill L1
-                return jsonify({"note_html": "" if content == NULL_CACHE_VALUE else content})
-        except Exception as e:
-            print(f"⚠️ Redis cache check failed for note: {e}")
-
-    print(f"CACHE MISS for note: {note_key}. Fetching from Firestore...")
-
-    # 3. If miss, get from Firestore
-    lock_key = f"lock:{note_key}"
-    lock_acquired = redis_client.set(lock_key, "1", ex=10, nx=True) if redis_client else False
-
-    if lock_acquired:
-        print(f"  ✅ Lock acquired for {note_key}. Rebuilding cache...")
-        try:
-            pages_query = db.collection(STUDY_PROJECTS_COLLECTION).document(project_id).collection('sources').document(source_id).collection('note_pages').order_by('order').stream()
-            html = "".join(p.to_dict().get('html', '') for p in pages_query)
-            
-            value_to_cache = html if html else NULL_CACHE_VALUE
-            ttl = 300 + random.randint(0, 60) if html else 30
-
-            if redis_client:
-                redis_client.setex(note_key, ttl, value_to_cache)
-            L1_CACHE.set(note_key, value_to_cache)
-            
-            return jsonify({"note_html": "" if value_to_cache == NULL_CACHE_VALUE else value_to_cache})
-
-        finally:
-            if redis_client:
-                redis_client.delete(lock_key)
-            print(f"  🔑 Lock released for {note_key}.")
-            
-    else:
-        print(f"  ...Could not acquire lock. Waiting briefly for cache to be rebuilt...")
-        time.sleep(0.1) 
-        return get_note(project_id, source_id)
+    # 3. Use CacheManager to handle L1, L2, Locking, and Backfilling
+    try:
+        note_html = cache_manager.get_or_set(
+            key=cache_key,
+            factory=fetch_note_from_db,
+            ttl_l1=300,   # 5 mins in memory
+            ttl_l2=3600   # 1 hour in Redis
+        )
+        return jsonify({"note_html": note_html})
+    except Exception as e:
+        print(f"Cache Error: {e}")
+        # Fallback if cache fails completely
+        return jsonify({"note_html": fetch_note_from_db()})
 
 @study_hub_bp.route('/update-note/<project_id>/<path:source_id>', methods=['POST'])
 def update_note(project_id, source_id):
@@ -405,6 +383,11 @@ def update_note(project_id, source_id):
                 print(f"⚠️ Failed to invalidate note cache: {e}")
         
         print(f"✅ Note updated successfully. {note_pages_saved} pages saved.")
+
+        cache_key = f"note:{project_id}:{source_id}"
+        cache_manager.delete(cache_key)
+        print(f"✅ Invalidated cache for {cache_key}")
+
         return jsonify({"success": True, "message": "Note updated successfully"}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
