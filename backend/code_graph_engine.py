@@ -102,6 +102,16 @@ class FaissVectorStore:
             d = pickle.load(f)
             store.node_map = d.get('node_map', {})
             store.nodes_list = d.get('nodes_list', [])
+            
+            # --- FIX: Rebuild lookup maps ---
+            print(f"  🔄 Rebuilding lookup maps for {len(store.node_map)} nodes...")
+            for idx, node_data in store.node_map.items():
+                unique_key = node_data['id']
+                store.id_to_name[idx] = unique_key
+                store.name_to_id[unique_key] = idx
+            print("  ✅ Lookup maps rebuilt.")
+            # -------------------------------
+            
         return store
 
 # ============================================================================
@@ -344,14 +354,13 @@ def extract_function_signature(code):
 # ============================================================================
 
 # Pipeline Wrapper
-def hybrid_retrieval_pipeline(project_id, user_query, db_instance, vector_store, cross_encoder, use_hyde=True):
+def hybrid_retrieval_pipeline(project_id, user_query, db_instance, vector_store, cross_encoder, use_hyde=True, return_nodes_only=False):
     print(f"🚀 Starting Hybrid Retrieval for: {user_query}")
     
     # 1. HyDE
     search_query = user_query
     if use_hyde:
         try:
-            # Shorten HyDE generation to save time
             hyde = HyDE_generation_model.generate_content(f"Write python code for: {user_query}").text
             search_query += "\n" + hyde
             print("  ✅ HyDE generated.")
@@ -370,6 +379,24 @@ def hybrid_retrieval_pipeline(project_id, user_query, db_instance, vector_store,
     # 5. Filter (Keep lots)
     final_nodes = entropy_diversity_filter(scored, max_nodes=80)
     
+    # --- NEW LOGIC START ---
+    if return_nodes_only:
+        print(f"  🔙 Returning {len(final_nodes)} candidate nodes for user review.")
+        sanitized_nodes = []
+        for item in final_nodes:
+            node = item['node']
+            sanitized_nodes.append({
+                'id': node['id'],
+                'name': node['name'],
+                'file_path': node['file_path'],
+                'type': node['type'],
+                'score': item.get('final_score', 0.0),
+                # Safely get ai_summary using .get() in case it doesn't exist on older nodes
+                'ai_summary': node.get('ai_summary', '') 
+            })
+        return sanitized_nodes
+    # --- NEW LOGIC END ---
+
     # 6. Context
     context = build_hierarchical_context(final_nodes)
     
