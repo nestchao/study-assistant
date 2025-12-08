@@ -18,11 +18,6 @@ class ApiService {
       // Provide a fallback for the emulator just in case.
       baseUrl = dotenv.env['API_URL'] ?? 'http://10.0.2.2:5000';
     }
-
-    print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
-    print("Platform: ${kIsWeb ? 'Web' : 'Mobile'}");
-    print("ApiService initialized with baseUrl: $baseUrl");
-    print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
   }
 
   // --- MODIFIED: SYNC SERVICE METHODS ---
@@ -34,36 +29,54 @@ class ApiService {
   throw Exception('Failed to load sync projects');
 }
 
-Future<void> registerFolderToProject(String projectId, String path, List<String> extensions, List<String> ignoredPaths) async {
-  final response = await http.post(
-    Uri.parse('$baseUrl/sync/register/$projectId'), // <-- Note the ID in the URL
-    headers: {'Content-Type': 'application/json'},
-    body: json.encode({
-      'local_path': path,
-      'extensions': extensions,
-      'ignored_paths': ignoredPaths,
-    }),
-  );
-  if (response.statusCode != 200) {
-    throw Exception('Failed to register folder to project');
+Future<void> registerFolderToProject(
+    String projectId,
+    String path,
+    List<String> extensions,
+    List<String> ignoredPaths,
+    List<String> includedPaths, // New
+    String syncMode, // New
+  ) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/sync/register/$projectId'),
+      headers: {'Content-Type': 'application/json'},
+      body: json.encode({
+        'local_path': path,
+        'extensions': extensions,
+        'ignored_paths': ignoredPaths,
+        'included_paths': includedPaths, // New
+        'sync_mode': syncMode, // New
+      }),
+    );
+    if (response.statusCode != 200) {
+      throw Exception('Failed to register folder to project');
+    }
   }
-}
 
-Future<void> updateSyncProject(String projectId, {bool? isActive, List<String>? extensions, List<String>? ignoredPaths}) async {
-  final Map<String, dynamic> body = {};
-  if (isActive != null) body['is_active'] = isActive;
-  if (extensions != null) body['allowed_extensions'] = extensions;
-  if (ignoredPaths != null) body['ignored_paths'] = ignoredPaths;
+Future<void> updateSyncProject(
+    String projectId, {
+    bool? isActive,
+    List<String>? extensions,
+    List<String>? ignoredPaths,
+    List<String>? includedPaths, // New
+    String? syncMode, // New
+  }) async {
+    final Map<String, dynamic> body = {};
+    if (isActive != null) body['is_active'] = isActive;
+    if (extensions != null) body['allowed_extensions'] = extensions;
+    if (ignoredPaths != null) body['ignored_paths'] = ignoredPaths;
+    if (includedPaths != null) body['included_paths'] = includedPaths; // New
+    if (syncMode != null) body['sync_mode'] = syncMode; // New
 
-  final response = await http.put(
-    Uri.parse('$baseUrl/sync/project/$projectId'),
-    headers: {'Content-Type': 'application/json'},
-    body: json.encode(body),
-  );
-  if (response.statusCode != 200) {
-    throw Exception('Failed to update sync project');
+    final response = await http.put(
+      Uri.parse('$baseUrl/sync/project/$projectId'),
+      headers: {'Content-Type': 'application/json'},
+      body: json.encode(body),
+    );
+    if (response.statusCode != 200) {
+      throw Exception('Failed to update sync project');
+    }
   }
-}
 
 Future<void> deleteSyncFromProject(String projectId) async {
   final response = await http.delete(Uri.parse('$baseUrl/sync/project/$projectId'));
@@ -110,7 +123,6 @@ Future<void> deleteSyncFromProject(String projectId) async {
     throw Exception('Failed to create code project: ${response.statusCode}');
   }
 
-  // --- NEW ---
   Future<void> renameProject(String projectId, String newName) async {
     final response = await http.put(
       Uri.parse('$baseUrl/rename-project/$projectId'),
@@ -383,25 +395,25 @@ Future<void> deleteSyncFromProject(String projectId) async {
   }
 
   Future<String> getCodeSuggestion({
-    required String projectId, // <-- ADD
-    required List<String> extensions, // <-- ADD
+    required String projectId,
+    required List<String> extensions,
     required String prompt,
   }) async {
     final response = await http.post(
-      Uri.parse('$baseUrl/generate-code-suggestion'), // This URL is now correct
+      Uri.parse('$baseUrl/generate-code-suggestion'),
       headers: {'Content-Type': 'application/json'},
       body: json.encode({
-        'project_id': projectId, // <-- SEND
-        'extensions': extensions, // <-- SEND
+        'project_id': projectId,
+        'extensions': extensions,
         'prompt': prompt,
       }),
     );
     
     if (response.statusCode == 200) {
-      return json.decode(response.body)['suggestion'] ?? 'Sorry, I could not generate a suggestion.';
+      return json.decode(response.body)['suggestion'] ?? 'No suggestion';
     } else {
       final error = json.decode(response.body)['error'] ?? 'Unknown error';
-      throw Exception('Failed to get code suggestion: $error');
+      throw Exception('Failed: $error');
     }
   }
 
@@ -418,5 +430,40 @@ Future<void> deleteSyncFromProject(String projectId) async {
     }
     
     throw Exception('Failed to create project: ${response.statusCode}');
+  }
+
+  Future<List<Map<String, dynamic>>> getRetrievalCandidates(String projectId, String prompt) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/retrieve-context-candidates'),
+      headers: {'Content-Type': 'application/json'},
+      body: json.encode({
+        'project_id': projectId,
+        'prompt': prompt,
+      }),
+    );
+
+    if (response.statusCode == 200) {
+      final data = json.decode(response.body);
+      // Backend returns { "candidates": [...] }
+      return List<Map<String, dynamic>>.from(data['candidates']);
+    }
+    throw Exception('Failed to retrieve candidates: ${response.body}');
+  }
+
+  Future<String> generateAnswerFromContext(String projectId, String prompt, List<String> selectedIds) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/generate-answer-from-context'),
+      headers: {'Content-Type': 'application/json'},
+      body: json.encode({
+        'project_id': projectId,
+        'prompt': prompt,
+        'selected_ids': selectedIds,
+      }),
+    );
+
+    if (response.statusCode == 200) {
+      return json.decode(response.body)['suggestion'] ?? 'No response';
+    }
+    throw Exception('Failed to generate answer: ${response.body}');
   }
 }

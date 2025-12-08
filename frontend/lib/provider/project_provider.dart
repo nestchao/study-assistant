@@ -10,6 +10,8 @@ import 'dart:convert';
 import 'package:image_picker/image_picker.dart';
 import 'package:study_assistance/models/past_paper.dart';
 import 'package:study_assistance/models/code_project.dart';
+import 'dart:async';
+import 'package:study_assistance/widgets/tracking_mind_map.dart';
 
 class Source {
   final String id;
@@ -27,6 +29,25 @@ class CodeSuggestionMessage {
   final String content;
   final bool isUser;
   CodeSuggestionMessage({required this.content, required this.isUser});
+}
+
+class CandidateNode {
+  final String id;
+  final String name;
+  final String filePath;
+  final String summary;
+  bool isSelected;
+
+  CandidateNode({required this.id, required this.name, required this.filePath, required this.summary, this.isSelected = true});
+  
+  factory CandidateNode.fromJson(Map<String, dynamic> json) {
+    return CandidateNode(
+      id: json['id'],
+      name: json['name'],
+      filePath: json['file_path'],
+      summary: json['ai_summary'] ?? '',
+    );
+  }
 }
 
 class ProjectProvider with ChangeNotifier {
@@ -75,6 +96,36 @@ class ProjectProvider with ChangeNotifier {
   String? get selectedFileContent => _selectedFileContent;
   bool _isLoadingFileContent = false;
   bool get isLoadingFileContent => _isLoadingFileContent;
+
+  int _renderedCharCount = 0;
+  static const int _renderChunkSize = 30000; 
+
+  String? get displayFileContent {
+    if (_selectedFileContent == null) return null;
+    if (_renderedCharCount >= _selectedFileContent!.length) {
+      return _selectedFileContent;
+    }
+    // Return the visible chunk
+    return _selectedFileContent!.substring(0, _renderedCharCount);
+  }
+
+  bool get hasMoreContent => 
+      _selectedFileContent != null && _renderedCharCount < _selectedFileContent!.length;
+
+  void loadMoreFileContent() {
+    if (!hasMoreContent) return;
+
+    // Increase the limit
+    _renderedCharCount += _renderChunkSize;
+    
+    // Cap at actual length
+    if (_renderedCharCount > _selectedFileContent!.length) {
+      _renderedCharCount = _selectedFileContent!.length;
+    }
+    
+    // Notify UI to redraw with more text
+    notifyListeners();
+  }
 
   Future<Uint8List?> getCachedMediaBytes(String mediaId) async {
     // 1. Check if the image is already in the cache.
@@ -655,7 +706,7 @@ class ProjectProvider with ChangeNotifier {
     }
   }
 
-  Future<void> fetchFileContent(String docId) async { // <-- REMOVE projectId from parameters
+  Future<void> fetchFileContent(String docId) async {
     if (_viewingProjectId == null) {
       _selectedFileContent = "Error: No project selected for viewing.";
       notifyListeners();
@@ -665,9 +716,18 @@ class ProjectProvider with ChangeNotifier {
     _isLoadingFileContent = true;
     _selectedFileContent = "Loading file content...";
     notifyListeners();
+    
     try {
-      // Use the stored _viewingProjectId
-      _selectedFileContent = await _api.getFileContent(_viewingProjectId!, docId);
+      // 1. Fetch FULL content
+      String content = await _api.getFileContent(_viewingProjectId!, docId);
+      _selectedFileContent = content;
+
+      // 2. Initialize the render counter to the first chunk
+      _renderedCharCount = _renderChunkSize;
+      if (_renderedCharCount > _selectedFileContent!.length) {
+        _renderedCharCount = _selectedFileContent!.length;
+      }
+
     } catch (e) { 
       print("Error fetching file content: $e");
       _selectedFileContent = "Error: Could not load file."; 
@@ -704,41 +764,54 @@ class ProjectProvider with ChangeNotifier {
   Future<void> generateCodeSuggestion(String prompt) async {
     if (prompt.trim().isEmpty) return;
 
-    // --- THIS IS THE FIX ---
-    // Use the same '_viewingProjectId' that the file tree is using.
-    // Do NOT use '_currentProject'.
     if (_viewingProjectId == null) {
-      _codeSuggestionHistory.add(CodeSuggestionMessage(content: "Error: No project context is loaded. Please view a synced project's files first.", isUser: false));
+      _codeSuggestionHistory.add(CodeSuggestionMessage(
+          content:
+              "Error: No project context is loaded. Please view a synced project's files first.",
+          isUser: false));
       notifyListeners();
       return;
     }
-    // --- END OF FIX ---
 
-    _codeSuggestionHistory.add(CodeSuggestionMessage(content: prompt, isUser: true));
+    _codeSuggestionHistory
+        .add(CodeSuggestionMessage(content: prompt, isUser: true));
     _isGeneratingSuggestion = true;
     notifyListeners();
 
-     try {
+    try {
+      // FIX: Added missing required parameters (includedPaths, syncMode) to default CodeProject
       final syncConfig = _syncProjects.firstWhere(
-         (c) => c.id == _viewingProjectId,
-        orElse: () => CodeProject(id: '', name: '', localPath: '', allowedExtensions: [], ignoredPaths: [], isActive: false, status: 'unknown'), // Default value
-       );
-       final extensions = syncConfig.allowedExtensions;
+        (c) => c.id == _viewingProjectId,
+        orElse: () => CodeProject(
+          id: '',
+          name: '',
+          localPath: '',
+          allowedExtensions: [],
+          ignoredPaths: [],
+          includedPaths: [], // Fixed: Added required argument
+          syncMode: 'ignore', // Fixed: Added required argument
+          isActive: false,
+          status: 'unknown',
+        ),
+      );
 
-      // Call the API with the correct project ID.
+      // FIX: Passed 'extensions' which is required by your ApiService
       final suggestion = await _api.getCodeSuggestion(
         projectId: _viewingProjectId!,
-        extensions: extensions,
+        extensions: syncConfig.allowedExtensions, // Fixed: Added required argument
         prompt: prompt,
       );
-      _codeSuggestionHistory.add(CodeSuggestionMessage(content: suggestion, isUser: false));
+      
+      _codeSuggestionHistory
+          .add(CodeSuggestionMessage(content: suggestion, isUser: false));
     } catch (e) {
-      _codeSuggestionHistory.add(CodeSuggestionMessage(content: "Error: $e", isUser: false));
+      _codeSuggestionHistory
+          .add(CodeSuggestionMessage(content: "Error: $e", isUser: false));
     } finally {
       _isGeneratingSuggestion = false;
       notifyListeners();
     }
-  }  
+  }
 
   Future<void> fetchSyncProjects() async {
     _isLoadingSyncProjects = true;
@@ -754,24 +827,52 @@ class ProjectProvider with ChangeNotifier {
     }
   }
 
-   Future<void> createCodeProjectAndRegisterFolder(
-    String projectName,
-    String folderPath,
-    List<String> extensions,
-    List<String> ignoredPaths,
-  ) async {
+   Future<void> createCodeProjectAndRegisterFolder({
+    required String projectName,
+    required String folderPath,
+    required List<String> extensions,
+    required List<String> ignoredPaths,
+    required List<String> includedPaths,
+    required String syncMode,
+  }) async {
     try {
-      // Step 1: Create the code project document
       final projectId = await _api.createCodeProjectAndGetId(projectName);
       if (projectId == null) throw Exception("Failed to create code project");
       
-      // Step 2: Register the folder by updating the new project document
-      await _api.registerFolderToProject(projectId, folderPath, extensions, ignoredPaths);
+      await _api.registerFolderToProject(
+        projectId,
+        folderPath,
+        extensions,
+        ignoredPaths,
+        includedPaths,
+        syncMode,
+      );
       
-      // Step 3: Refresh the list
       await fetchSyncProjects();
     } catch (e) {
       print('Error in createCodeProjectAndRegisterFolder: $e');
+      rethrow;
+    }
+  }
+
+  Future<void> updateSyncConfig(
+    String projectId, {
+    List<String>? extensions,
+    List<String>? ignoredPaths,
+    List<String>? includedPaths,
+    String? syncMode,
+  }) async {
+    try {
+      await _api.updateSyncProject(
+        projectId,
+        extensions: extensions,
+        ignoredPaths: ignoredPaths,
+        includedPaths: includedPaths,
+        syncMode: syncMode,
+      );
+      await fetchSyncProjects(); // Refresh the list to show changes
+    } catch (e) {
+      print("Error updating sync config: $e");
       rethrow;
     }
   }
@@ -812,19 +913,169 @@ class ProjectProvider with ChangeNotifier {
   }
 
   Future<Map<String, dynamic>> runSync(String projectId) async {
-    _syncingProjectId = projectId;
-    notifyListeners();
+    _syncingProjectId = projectId; notifyListeners();
     try {
       final result = await _api.runSync(projectId);
-      await fetchSyncProjects(); // Refresh status and last synced time
+      await fetchSyncProjects(); 
+      Timer.periodic(const Duration(seconds: 2), (timer) async {
+        await fetchSyncProjects();
+        final project = _syncProjects.firstWhere((p) => p.id == projectId, orElse: () => CodeProject(id: 'x', name: '', allowedExtensions: [], ignoredPaths: [], includedPaths: [], syncMode: 'ignore', isActive: false, status: 'idle'));
+        if (project.status == 'idle' || project.status == 'error' || project.id == 'x') {
+          timer.cancel();
+          _syncingProjectId = null;
+          notifyListeners();
+        }
+      });
       return result;
     } catch (e) {
       print("Error running sync: $e");
-      await fetchSyncProjects(); // Also refresh on error to update status
-      rethrow;
-    } finally {
       _syncingProjectId = null;
+      await fetchSyncProjects(); 
+      rethrow;
+    } 
+  }
+
+  List<CandidateNode> _contextCandidates = [];
+  List<CandidateNode> get contextCandidates => _contextCandidates;
+  bool _isReviewingContext = false; // UI State Flag
+  bool get isReviewingContext => _isReviewingContext;
+  String _pendingPrompt = "";
+
+  Future<void> getRetrievalCandidates(String prompt) async {
+    _isGeneratingSuggestion = true;
+    _pendingPrompt = prompt;
+    notifyListeners();
+    
+    try {
+      // Call the NEW API route
+      final result = await _api.getRetrievalCandidates(_viewingProjectId!, prompt);
+      _contextCandidates = result.map((c) => CandidateNode.fromJson(c)).toList();
+      _isReviewingContext = true; // Switch UI to Checklist Mode
+    } catch (e) {
+      // Handle error
+    } finally {
+      _isGeneratingSuggestion = false;
       notifyListeners();
     }
   }
+
+  Future<void> confirmContextAndGenerate() async { // Removed 'String prompt'
+    _isReviewingContext = false;
+    _isGeneratingSuggestion = true;
+    
+    final selectedIds = _contextCandidates
+        .where((n) => n.isSelected)
+        .map((n) => n.id)
+        .toList();
+        
+    // Use the stored prompt here
+    _codeSuggestionHistory.add(CodeSuggestionMessage(content: _pendingPrompt, isUser: true));
+    notifyListeners();
+
+    try {
+      final answer = await _api.generateAnswerFromContext(
+          _viewingProjectId!, 
+          _pendingPrompt, // Use stored prompt
+          selectedIds
+      );
+      _codeSuggestionHistory.add(CodeSuggestionMessage(content: answer, isUser: false));
+    } catch (e) {
+       _codeSuggestionHistory.add(CodeSuggestionMessage(content: "Error: $e", isUser: false));
+    } finally {
+      _isGeneratingSuggestion = false;
+      _pendingPrompt = ""; // Clear it
+      notifyListeners();
+    }
+  }
+  
+  void toggleCandidate(String id) {
+    final index = _contextCandidates.indexWhere((c) => c.id == id);
+    if (index != -1) {
+      _contextCandidates[index].isSelected = !_contextCandidates[index].isSelected;
+      notifyListeners();
+    }
+  }
+
+  MindMapNode getFileTreeAsMindMap() {
+    if (_fileTree == null) {
+      return MindMapNode(id: 'root', name: 'Root', children: []);
+    }
+
+    // Recursive converter
+    MindMapNode convert(String key, dynamic value, String parentPath) {
+      String currentPath = "$parentPath/$key";
+      
+      if (value is String) {
+        // It's a file (Leaf node)
+        return MindMapNode(id: currentPath, name: key, children: []);
+      } else if (value is Map) {
+        // It's a folder
+        List<MindMapNode> children = [];
+        value.forEach((k, v) {
+          children.add(convert(k, v, currentPath));
+        });
+        return MindMapNode(id: currentPath, name: key, children: children);
+      }
+      return MindMapNode(id: currentPath, name: key);
+    }
+
+    // Root of file tree
+    List<MindMapNode> rootChildren = [];
+    _fileTree!.forEach((key, value) {
+      rootChildren.add(convert(key, value, "root"));
+    });
+
+    return MindMapNode(id: 'root', name: 'Project Root', children: rootChildren);
+  }
+
+  // To store which nodes the user wants to track
+  Set<String> _trackedNodeIds = {};
+  Set<String> get trackedNodeIds => _trackedNodeIds;
+
+  void updateTrackedNodes(Set<String> nodes) {
+    _trackedNodeIds = nodes;
+    notifyListeners();
+    print("AI Tracking Paths Updated: ${_trackedNodeIds.length} nodes active.");
+  }
+
+  MindMapNode getCandidatesAsMindMap() {
+    // 1. Create a root
+    MindMapNode root = MindMapNode(id: 'root', name: 'Context', children: []);
+
+    // 2. Helper to find or create a child node in a list
+    MindMapNode getOrCreateChild(MindMapNode parent, String name, {String? id}) {
+      try {
+        return parent.children.firstWhere((n) => n.name == name);
+      } catch (e) {
+        // ID is only assigned if it's the final candidate node, otherwise it's a folder path
+        final newNode = MindMapNode(
+          id: id ?? "${parent.id}/$name", 
+          name: name, 
+          children: []
+        );
+        parent.children.add(newNode);
+        return newNode;
+      }
+    }
+
+    // 3. Iterate through candidates and build the tree
+    for (var candidate in _contextCandidates) {
+      // Split path (e.g., "backend/routes/api.py")
+      List<String> parts = candidate.filePath.split('/');
+      
+      MindMapNode currentNode = root;
+      
+      // Traverse folders
+      for (var part in parts) {
+        currentNode = getOrCreateChild(currentNode, part);
+      }
+
+      // Add the actual Candidate (Function/Class) as a leaf
+      // We explicitly use the candidate.id so toggling works
+      getOrCreateChild(currentNode, candidate.name, id: candidate.id);
+    }
+
+    return root;
+  }
+
 }
