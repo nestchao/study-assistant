@@ -8,6 +8,8 @@ class CodeProject {
   final String? localPath;
   final List<String> allowedExtensions;
   final List<String> ignoredPaths; 
+  final List<String> includedPaths;
+  final String syncMode; 
   final bool isActive;
   final String status;
   final dynamic lastSynced;
@@ -18,6 +20,8 @@ class CodeProject {
     this.localPath,
     required this.allowedExtensions,
     required this.ignoredPaths, 
+    required this.includedPaths,
+    required this.syncMode,
     required this.isActive,
     required this.status,
     this.lastSynced,
@@ -30,6 +34,8 @@ class CodeProject {
       localPath: map['local_path'],
       allowedExtensions: List<String>.from(map['allowed_extensions'] ?? []),
       ignoredPaths: List<String>.from(map['ignored_paths'] ?? []),
+      includedPaths: List<String>.from(map['included_paths'] ?? []), // New
+      syncMode: map['sync_mode'] ?? 'ignore', // New
       isActive: map['is_active'] ?? false,
       status: map['status'] ?? 'idle',
       lastSynced: map['last_synced'],

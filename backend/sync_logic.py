@@ -29,15 +29,18 @@ MAX_CHUNK_SIZE = 900_000  # ~900KB per chunk
 
 
 def perform_sync(db, project_id: str, config_data: dict):
-    """Enhanced sync with prioritized tree.txt and chunked _full_context.txt generation"""
+    """Enhanced sync with Hybrid Path Filtering (Include Overrides Ignore)"""
     source_dir = config_data.get('local_path')
     extensions = config_data.get('allowed_extensions', [])
+    
+    # We now use BOTH lists simultaneously
+    included_paths = config_data.get('included_paths', [])
     ignored_paths = config_data.get('ignored_paths', [])
 
     project_ref = db.collection(CODE_PROJECTS_COLLECTION).document(project_id)
 
     print("\n" + "="*60)
-    print(f"SYNC-LOGIC: Starting file scan for: {project_id}")
+    print(f"SYNC-LOGIC: Starting hybrid file scan for: {project_id}")
 
     source_path = Path(source_dir)
     if not source_path.is_dir():
@@ -53,21 +56,45 @@ def perform_sync(db, project_id: str, config_data: dict):
     manifest_doc = manifest_ref.get()
     files_in_db = manifest_doc.to_dict().get('files', {}) if manifest_doc.exists else {}
 
-    # === PHASE 2: Scan Local Files ===
-    normalized_ignored_paths = [Path(p.replace('\\', '/')) for p in ignored_paths]
-    all_local_files = [
-        f for f in source_path.rglob("*") 
-        if f.is_file() 
-        and '.git' not in f.parts 
-        and not any(f.relative_to(source_path).is_relative_to(ignored) 
-                   for ignored in normalized_ignored_paths)
-    ]
+    # === PHASE 2: Scan Local Files & Apply Hybrid Filtering ===
     
+    # 1. Normalize paths for comparison
+    normalized_included = [Path(p.replace('\\', '/')) for p in included_paths if p.strip()]
+    normalized_ignored = [Path(p.replace('\\', '/')) for p in ignored_paths if p.strip()]
+    
+    # 2. Scan everything except .git (hard exclude)
+    all_local_files = [f for f in source_path.rglob("*") if f.is_file() and '.git' not in f.parts]
+
+    filtered_files = []
+    
+    for f in all_local_files:
+        rel_path = f.relative_to(source_path)
+        
+        # LOGIC: 
+        # 1. Is it explicitly INCLUDED? (Overrides everything) -> Keep
+        # 2. Is it IGNORED? -> Drop
+        # 3. Default -> Keep
+        
+        is_explicitly_included = any(rel_path.is_relative_to(inc) for inc in normalized_included)
+        is_ignored = any(rel_path.is_relative_to(ign) for ign in normalized_ignored)
+        
+        if is_explicitly_included:
+            # It's whitelisted, so we keep it even if it's inside an ignored folder
+            filtered_files.append(f)
+        elif not is_ignored:
+            # It's not ignored, so we keep it (standard file)
+            filtered_files.append(f)
+        # else: It is ignored AND not explicitly included -> Skip it.
+
+    # 3. Filter by Extension
     dot_ext = [f".{e.lstrip('.').lower()}" for e in extensions] if extensions else None
+    
     files_to_process = [
-        f for f in all_local_files 
+        f for f in filtered_files 
         if not dot_ext or f.suffix.lower() in dot_ext
     ]
+    
+    # ... (PHASE 3, 4, 5, 6, 7, 8 remain exactly the same) ...
     
     # === PHASE 3: Compare Hashes & Upload Changed Files ===
     processed_paths = set()
@@ -106,7 +133,7 @@ def perform_sync(db, project_id: str, config_data: dict):
     manifest_ref.set({'files': files_in_db})
     final_file_paths = sorted(list(files_in_db.keys()))
     
-    # === PHASE 6: Generate tree.txt (PRIORITY - Always generated first) ===
+    # === PHASE 6: Generate tree.txt ===
     print("\n📂 PRIORITY: Generating tree.txt...")
     tree_content = generate_tree_text_from_paths(source_path.name, final_file_paths)
     project_ref.collection(CODE_FILES_SUBCOLLECTION).document('project_tree_txt').set({
@@ -114,15 +141,13 @@ def perform_sync(db, project_id: str, config_data: dict):
         'content': tree_content,
         'timestamp': firestore.SERVER_TIMESTAMP
     })
-    print(f"✅ tree.txt generated ({len(tree_content)} chars)")
     
-    # === PHASE 7: Generate _full_context.txt (With Chunking) ===
+    # === PHASE 7: Generate _full_context.txt ===
     print("\n📝 Generating _full_context.txt with chunking...")
     try:
         generate_chunked_full_context(db, project_ref, files_in_db, final_file_paths)
     except Exception as e:
         print(f"⚠️ Failed to generate _full_context.txt: {e}")
-        # Don't fail the entire sync if context generation fails
         logs.append(f"WARNING: _full_context.txt generation failed: {str(e)}")
 
     # === PHASE 8: Mark Sync Complete ===
@@ -136,7 +161,6 @@ def perform_sync(db, project_id: str, config_data: dict):
         "updated": updated_count, 
         "deleted": deleted_count
     }
-
 
 def generate_chunked_full_context(db, project_ref, files_in_db, final_file_paths):
     """
@@ -183,7 +207,6 @@ def generate_chunked_full_context(db, project_ref, files_in_db, final_file_paths
         # Too large - need to chunk
         print(f"  🔪 Context exceeds limit. Chunking into {MAX_CHUNK_SIZE:,} byte segments...")
         store_chunked_context(db, project_ref, full_context, total_chars)
-
 
 def store_chunked_context(db, project_ref, full_context, total_chars):
     """
@@ -233,7 +256,6 @@ def store_chunked_context(db, project_ref, full_context, total_chars):
     
     print(f"  ✅ Chunked context stored successfully")
 
-
 def retrieve_full_context(db, project_id):
     """
     Retrieves the full context, automatically reassembling chunks if needed.
@@ -263,7 +285,6 @@ def retrieve_full_context(db, project_id):
     full_context = "".join(chunks_data)
     print(f"  ✅ Reassembled {len(full_context):,} characters")
     return full_context
-
 
 def force_reindex_project(db, project_id):
     """Enhanced reindexing with critic analysis"""
