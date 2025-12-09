@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <faiss/utils/distances.h>
 
 // Forward declare FAISS Index to avoid including faiss headers here
 namespace faiss { struct Index; }

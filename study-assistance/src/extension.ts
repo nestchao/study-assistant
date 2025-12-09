@@ -79,32 +79,56 @@ export async function activate(context: vscode.ExtensionContext) {
 
             const workspacePath = workspaceFolders[0].uri.fsPath;
 
-            // Ask for extensions to include
+            // 1. Extensions
             const extensionsInput = await vscode.window.showInputBox({
-                prompt: 'File extensions to include (comma-separated)',
-                value: 'py,ts,js,cpp,h,java'
+                prompt: 'Allowed File Extensions',
+                value: 'py,ts,js,cpp,h,java,dart,md,txt',
+                placeHolder: 'e.g. py,ts,js'
             });
-
             if (!extensionsInput) return;
 
+            // 2. Ignore Paths (Folders to skip)
+            const ignoreInput = await vscode.window.showInputBox({
+                prompt: 'Ignored Paths (comma-separated)',
+                value: 'node_modules, .git, dist, build, __pycache__, .vscode, .dart_tool',
+                placeHolder: 'Folders to exclude'
+            });
+            if (ignoreInput === undefined) return; // Allow empty string, check for undefined
+
+            // 3. Exception/Include Paths (Force include even if ignored)
+            const includeInput = await vscode.window.showInputBox({
+                prompt: 'Exception Paths (Force Include)',
+                value: '',
+                placeHolder: 'Specific files/folders to include inside ignored folders'
+            });
+            if (includeInput === undefined) return;
+
             const extensions = extensionsInput.split(',').map(e => e.trim());
-            const ignoredPaths = ['node_modules', '.git', 'dist', 'build', '__pycache__', '.vscode'];
+            const ignoredPaths = ignoreInput.split(',').map(e => e.trim()).filter(e => e.length > 0);
+            const includedPaths = includeInput.split(',').map(e => e.trim()).filter(e => e.length > 0);
 
             await vscode.window.withProgress({
                 location: vscode.ProgressLocation.Notification,
-                title: 'Registering project with C++ backend...',
+                title: 'Registering & Syncing project...',
                 cancellable: false
             }, async () => {
                 try {
+                    // We use the Workspace Folder Name as the Project Name ID
+                    // To "Rename" a project, essentially re-register it with new settings.
                     await backendClient.registerCodeProject(
-                        currentProjectId!,
+                        currentProjectId!, 
                         workspacePath,
                         extensions,
-                        ignoredPaths
+                        ignoredPaths,
+                        includedPaths // You need to update BackendClient to accept this
                     );
-                    vscode.window.showInformationMessage('✅ Project registered successfully');
+                    
+                    // Trigger a sync immediately after update
+                    await backendClient.syncCodeProject(currentProjectId!);
+                    
+                    vscode.window.showInformationMessage(`✅ Project Configured & Synced!`);
                 } catch (error: any) {
-                    vscode.window.showErrorMessage(`Failed to register project: ${error.message}`);
+                    vscode.window.showErrorMessage(`Failed: ${error.message}`);
                 }
             });
         })

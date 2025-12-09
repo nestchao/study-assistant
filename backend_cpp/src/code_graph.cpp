@@ -1,10 +1,14 @@
 #include "code_graph.hpp"
 #include <regex>
 #include <numeric>
+#include <filesystem> 
 
 namespace code_assistance {
 
+namespace fs = std::filesystem; 
+
 using json = nlohmann::json;
+
 
 json CodeNode::to_json() const {
     return json{

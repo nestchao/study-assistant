@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cctype>
 #include <spdlog/spdlog.h>
+#include <nlohmann/json.hpp>
 
 #include "code_graph.hpp"
 #include "embedding_service.hpp"
@@ -17,6 +18,8 @@
 namespace code_assistance {
 
 namespace fs = std::filesystem;
+
+using json = nlohmann::json;
 
 struct SyncResult {
     std::vector<std::shared_ptr<CodeNode>> nodes;

@@ -1,6 +1,6 @@
-import axios from 'axios';
+import axios, { AxiosInstance } from 'axios';
 import * as fs from 'fs';
-import * as FormData from 'form-data';
+import FormData from 'form-data'; // FIXED: Changed from 'import * as' to default import
 
 // Define the ports for your local servers
 const CPP_BACKEND_URL = 'http://localhost:5002';
@@ -14,7 +14,8 @@ export class BackendClient {
 
     // --- System Health ---
     async checkAllBackends(): Promise<{ cpp: boolean, python: boolean }> {
-        const check = async (client: typeof axios, name: string) => {
+        // FIXED: Changed type from 'typeof axios' to 'AxiosInstance'
+        const check = async (client: AxiosInstance, name: string) => {
             try {
                 const response = await client.get('/api/hello', { timeout: 1000 });
                 return response.status === 200;
@@ -31,11 +32,19 @@ export class BackendClient {
     }
 
     // --- C++ Backend Methods (Code Intelligence) ---
-    async registerCodeProject(projectId: string, path: string, extensions: string[], ignoredPaths: string[]): Promise<void> {
+    async registerCodeProject(
+        projectId: string, 
+        path: string, 
+        extensions: string[], 
+        ignoredPaths: string[],
+        includedPaths: string[] = [] 
+    ): Promise<void> {
         await cppClient.post(`/sync/register/${projectId}`, {
             local_path: path,
             extensions,
             ignored_paths: ignoredPaths,
+            included_paths: includedPaths,
+            sync_mode: 'hybrid' 
         });
     }
 
