@@ -29,18 +29,19 @@ MAX_CHUNK_SIZE = 900_000  # ~900KB per chunk
 
 
 def perform_sync(db, project_id: str, config_data: dict):
-    """Enhanced sync with Hybrid Path Filtering (Include Overrides Ignore)"""
+    """
+    Enhanced sync with Hybrid Path Filtering based on Specificity.
+    Rule: The most specific (longest) matching path determines fate.
+    """
     source_dir = config_data.get('local_path')
     extensions = config_data.get('allowed_extensions', [])
-    
-    # We now use BOTH lists simultaneously
     included_paths = config_data.get('included_paths', [])
     ignored_paths = config_data.get('ignored_paths', [])
 
     project_ref = db.collection(CODE_PROJECTS_COLLECTION).document(project_id)
 
     print("\n" + "="*60)
-    print(f"SYNC-LOGIC: Starting hybrid file scan for: {project_id}")
+    print(f"SYNC-LOGIC: Starting file scan for: {project_id}")
 
     source_path = Path(source_dir)
     if not source_path.is_dir():
@@ -56,13 +57,13 @@ def perform_sync(db, project_id: str, config_data: dict):
     manifest_doc = manifest_ref.get()
     files_in_db = manifest_doc.to_dict().get('files', {}) if manifest_doc.exists else {}
 
-    # === PHASE 2: Scan Local Files & Apply Hybrid Filtering ===
+    # === PHASE 2: Scan & Apply Deepest Match Filtering ===
     
-    # 1. Normalize paths for comparison
+    # Normalize filters
     normalized_included = [Path(p.replace('\\', '/')) for p in included_paths if p.strip()]
     normalized_ignored = [Path(p.replace('\\', '/')) for p in ignored_paths if p.strip()]
     
-    # 2. Scan everything except .git (hard exclude)
+    # Scan everything except .git
     all_local_files = [f for f in source_path.rglob("*") if f.is_file() and '.git' not in f.parts]
 
     filtered_files = []
@@ -70,31 +71,45 @@ def perform_sync(db, project_id: str, config_data: dict):
     for f in all_local_files:
         rel_path = f.relative_to(source_path)
         
-        # LOGIC: 
-        # 1. Is it explicitly INCLUDED? (Overrides everything) -> Keep
-        # 2. Is it IGNORED? -> Drop
-        # 3. Default -> Keep
+        # 1. Calculate Ignore Specificity (Depth)
+        # If file is in 'A/B/C', specificity is 3. If in 'A', specificity is 1.
+        ignore_depth = 0
+        for ign in normalized_ignored:
+            if rel_path == ign or rel_path.is_relative_to(ign):
+                # Count parts to determine specificity (e.g., 'src/utils' = 2)
+                d = len(ign.parts)
+                if d > ignore_depth:
+                    ignore_depth = d
         
-        is_explicitly_included = any(rel_path.is_relative_to(inc) for inc in normalized_included)
-        is_ignored = any(rel_path.is_relative_to(ign) for ign in normalized_ignored)
+        # 2. Calculate Include Specificity (Depth)
+        include_depth = 0
+        for inc in normalized_included:
+            if rel_path == inc or rel_path.is_relative_to(inc):
+                d = len(inc.parts)
+                if d > include_depth:
+                    include_depth = d
         
-        if is_explicitly_included:
-            # It's whitelisted, so we keep it even if it's inside an ignored folder
+        # 3. Decision Logic (Deepest Wins)
+        if include_depth > ignore_depth:
+            # Explicitly included at a deeper level than any ignore
+            # Example: Ignore 'A' (1), Include 'A/B' (2). 2 > 1 -> Keep.
             filtered_files.append(f)
-        elif not is_ignored:
-            # It's not ignored, so we keep it (standard file)
+        elif ignore_depth > 0 and ignore_depth >= include_depth:
+            # Ignored at a deeper or equal level
+            # Example: Include 'A/B' (2), Ignore 'A/B/C' (3). 3 > 2 -> Drop.
+            # Example: Ignore 'A' (1), Include None (0). 1 > 0 -> Drop.
+            continue 
+        else:
+            # Neither ignored nor included (Default behavior: Keep)
             filtered_files.append(f)
-        # else: It is ignored AND not explicitly included -> Skip it.
 
-    # 3. Filter by Extension
+    # Filter by Extension
     dot_ext = [f".{e.lstrip('.').lower()}" for e in extensions] if extensions else None
     
     files_to_process = [
         f for f in filtered_files 
         if not dot_ext or f.suffix.lower() in dot_ext
     ]
-    
-    # ... (PHASE 3, 4, 5, 6, 7, 8 remain exactly the same) ...
     
     # === PHASE 3: Compare Hashes & Upload Changed Files ===
     processed_paths = set()
@@ -116,6 +131,7 @@ def perform_sync(db, project_id: str, config_data: dict):
                 updated_count += 1
 
     # === PHASE 4: Handle Deletions ===
+    # Only delete files that match our extensions (don't touch other existing DB data)
     db_paths = {
         p for p in files_in_db 
         if not dot_ext or Path(p).suffix.lower() in dot_ext
@@ -129,11 +145,10 @@ def perform_sync(db, project_id: str, config_data: dict):
         del files_in_db[p]
         deleted_count += 1
 
-    # === PHASE 5: Update Manifest ===
+    # === PHASE 5: Update Manifest & Special Files ===
     manifest_ref.set({'files': files_in_db})
     final_file_paths = sorted(list(files_in_db.keys()))
     
-    # === PHASE 6: Generate tree.txt ===
     print("\n📂 PRIORITY: Generating tree.txt...")
     tree_content = generate_tree_text_from_paths(source_path.name, final_file_paths)
     project_ref.collection(CODE_FILES_SUBCOLLECTION).document('project_tree_txt').set({
@@ -142,15 +157,18 @@ def perform_sync(db, project_id: str, config_data: dict):
         'timestamp': firestore.SERVER_TIMESTAMP
     })
     
-    # === PHASE 7: Generate _full_context.txt ===
-    print("\n📝 Generating _full_context.txt with chunking...")
+    print("\n📝 Generating _full_context.txt...")
     try:
+        # Import moved inside to avoid circular dependency issues if any
+        from sync_logic import generate_chunked_full_context 
         generate_chunked_full_context(db, project_ref, files_in_db, final_file_paths)
     except Exception as e:
-        print(f"⚠️ Failed to generate _full_context.txt: {e}")
-        logs.append(f"WARNING: _full_context.txt generation failed: {str(e)}")
+        # Fallback if function is defined in this file (which it is below)
+        try:
+            generate_chunked_full_context_local(db, project_ref, files_in_db, final_file_paths)
+        except:
+            print(f"⚠️ Failed to generate context: {e}")
 
-    # === PHASE 8: Mark Sync Complete ===
     project_ref.update({
         'status': 'idle', 
         'last_synced': firestore.SERVER_TIMESTAMP
@@ -172,12 +190,9 @@ def generate_chunked_full_context(db, project_ref, files_in_db, final_file_paths
     # Build the complete context string
     chunks_content = []
     total_chars = 0
-    
     for rel_path in final_file_paths:
         doc_id = files_in_db[rel_path].get('doc_id')
-        if not doc_id:
-            continue
-            
+        if not doc_id: continue
         try:
             doc = project_ref.collection(CODE_FILES_SUBCOLLECTION).document(doc_id).get()
             if doc.exists:
@@ -185,27 +200,16 @@ def generate_chunked_full_context(db, project_ref, files_in_db, final_file_paths
                 chunk_text = f"--- FILE: {rel_path} ---\n{file_content}\n"
                 chunks_content.append(chunk_text)
                 total_chars += len(chunk_text)
-        except Exception as e:
-            print(f"  ⚠️ Skipped {rel_path}: {e}")
-            continue
+        except: pass
     
     full_context = "\n".join(chunks_content)
-    print(f"  📊 Total context size: {total_chars:,} characters ({total_chars / 1024:.2f} KB)")
-    
-    # Determine if chunking is needed
     if total_chars <= MAX_CHUNK_SIZE:
-        # Small enough - store as single document
-        print("  ✅ Context fits in single document")
         project_ref.collection(CODE_FILES_SUBCOLLECTION).document('project_full_context_txt').set({
-            'original_path': '_full_context.txt',
-            'content': full_context,
-            'timestamp': firestore.SERVER_TIMESTAMP,
-            'is_chunked': False,
-            'total_size': total_chars
+            'original_path': '_full_context.txt', 'content': full_context,
+            'timestamp': firestore.SERVER_TIMESTAMP, 'is_chunked': False, 'total_size': total_chars
         })
     else:
-        # Too large - need to chunk
-        print(f"  🔪 Context exceeds limit. Chunking into {MAX_CHUNK_SIZE:,} byte segments...")
+        from sync_logic import store_chunked_context # Import helper
         store_chunked_context(db, project_ref, full_context, total_chars)
 
 def store_chunked_context(db, project_ref, full_context, total_chars):
@@ -214,47 +218,26 @@ def store_chunked_context(db, project_ref, full_context, total_chars):
     """
     # Delete existing full_context document and its chunks
     full_context_ref = project_ref.collection(CODE_FILES_SUBCOLLECTION).document('project_full_context_txt')
-    
-    # Delete old chunks subcollection if it exists
     chunks_subcollection = full_context_ref.collection('chunks')
     delete_collection(chunks_subcollection, batch_size=50)
     
-    # Split content into chunks
     chunks = []
     current_pos = 0
     chunk_num = 0
-    
     while current_pos < len(full_context):
         chunk_end = min(current_pos + MAX_CHUNK_SIZE, len(full_context))
         chunk_data = full_context[current_pos:chunk_end]
-        chunks.append({
-            'order': chunk_num,
-            'content': chunk_data,
-            'size': len(chunk_data),
-            'start_pos': current_pos,
-            'end_pos': chunk_end
-        })
+        chunks.append({'order': chunk_num, 'content': chunk_data, 'size': len(chunk_data)})
         current_pos = chunk_end
         chunk_num += 1
-    
-    print(f"  📦 Storing {len(chunks)} chunks...")
-    
-    # Store metadata document
+        
     full_context_ref.set({
-        'original_path': '_full_context.txt',
-        'timestamp': firestore.SERVER_TIMESTAMP,
-        'is_chunked': True,
-        'total_size': total_chars,
-        'total_chunks': len(chunks),
-        'chunk_size': MAX_CHUNK_SIZE
+        'original_path': '_full_context.txt', 'timestamp': firestore.SERVER_TIMESTAMP,
+        'is_chunked': True, 'total_size': total_chars, 'total_chunks': len(chunks), 'chunk_size': MAX_CHUNK_SIZE
     })
     
-    # Store each chunk
     for i, chunk_info in enumerate(chunks):
         chunks_subcollection.document(f'chunk_{i}').set(chunk_info)
-        print(f"    + Chunk {i+1}/{len(chunks)}: {chunk_info['size']:,} chars")
-    
-    print(f"  ✅ Chunked context stored successfully")
 
 def retrieve_full_context(db, project_id):
     """

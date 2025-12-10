@@ -117,9 +117,11 @@ private:
                 {"status", "idle"}
             };
             
-            fs::path config_path = fs::path("data") / project_id / "config.json";
-            fs::create_directories(config_path.parent_path());
-            
+            std::string storage_path = body["storage_path"]; // <--- NEW: Read this from request
+            fs::path config_dir = fs::path(storage_path);    // <--- Use it as base
+            fs::create_directories(config_dir);
+
+            fs::path config_path = config_dir / "config.json"; // Save config inside user project
             std::ofstream file(config_path);
             file << config.dump(2);
             
@@ -139,15 +141,20 @@ private:
         try {
             auto project_id = req.path_params.at("project_id");
             spdlog::info("🔄 Starting sync for project: {}", project_id);
+
+            auto body = json::parse(req.body); // You might need to parse body here if not already
+            std::string storage_path = body["storage_path"];
             
             json config = load_project_config(project_id);
-            
-            // This can be slow, run in a detached thread to respond immediately
-            std::thread([this, project_id, config]() {
+
+            // 2. Add it to the capture list [ ... , storage_path]
+            std::thread([this, project_id, config, storage_path]() { 
                 code_assistance::SyncService sync_service(embedding_service_);
+
                 auto result = sync_service.perform_sync(
                     project_id,
                     config["local_path"],
+                    storage_path,  
                     config.value("allowed_extensions", std::vector<std::string>{}),
                     config.value("ignored_paths", std::vector<std::string>{})
                 );
@@ -155,14 +162,15 @@ private:
                 auto vector_store = std::make_shared<code_assistance::FaissVectorStore>(768);
                 vector_store->add_nodes(result.nodes);
                 
-                fs::path store_path = fs::path("vector_stores") / project_id;
+                // Use the captured variable
+                fs::path store_path = fs::path(storage_path) / "vector_store"; // <--- NOW VALID
                 fs::create_directories(store_path);
                 vector_store->save(store_path.string());
                 
                 project_stores_[project_id] = vector_store;
                 
                 spdlog::info("✅ Sync complete: {} files updated, {} nodes indexed", 
-                             result.updated_count, result.nodes.size());
+                                result.updated_count, result.nodes.size());
             }).detach();
 
             res.set_content(json{

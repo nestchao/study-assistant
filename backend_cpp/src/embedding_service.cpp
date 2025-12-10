@@ -79,7 +79,7 @@ std::string EmbeddingService::generate_text(const std::string& prompt) {
         }}}
     };
     
-    std::string url = base_url_ + "gemini-1.5-flash-latest:generateContent?key=" + api_key_;
+    std::string url = base_url_ + "gemini-2.5-flash-lite:generateContent?key=" + api_key_;
     
     cpr::Response r = cpr::Post(cpr::Url{url},
                                 cpr::Body{payload.dump()},
