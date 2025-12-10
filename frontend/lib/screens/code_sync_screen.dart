@@ -252,8 +252,11 @@ class _RegisterProjectDialogState extends State<_RegisterProjectDialog> {
                   FilledButton(
                     onPressed: () async {
                       // 1. Capture final edits from the active text box
-                      if (_activeView == 'ignore') _tempIgnored = _pathsController.text;
-                      else _tempIncluded = _pathsController.text;
+                      if (_activeView == 'ignore') {
+                        _tempIgnored = _pathsController.text;
+                      } else {
+                        _tempIncluded = _pathsController.text;
+                      }
 
                       final projectName = _projectNameController.text.trim();
                       final path = _pathController.text.trim();
@@ -572,8 +575,11 @@ class _EditConfigDialogState extends State<_EditConfigDialog> {
         ElevatedButton(
           onPressed: () async {
             // Capture final edits
-            if (_activeView == 'ignore') _tempIgnored = _pathsController.text;
-            else _tempIncluded = _pathsController.text;
+            if (_activeView == 'ignore') {
+              _tempIgnored = _pathsController.text;
+            } else {
+              _tempIncluded = _pathsController.text;
+            }
 
             final newExt = _extensionsController.text.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
             final newIgnored = _tempIgnored.split('\n').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();

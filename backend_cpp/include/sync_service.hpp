@@ -36,6 +36,7 @@ public:
     SyncResult perform_sync(
         const std::string& project_id,
         const std::string& source_dir,
+        const std::string& storage_path, // <--- NEW ARGUMENT
         const std::vector<std::string>& allowed_extensions,
         const std::vector<std::string>& ignored_paths
     );
@@ -55,39 +56,65 @@ private:
     void save_manifest(const std::string& project_id, const std::unordered_map<std::string, std::string>& manifest);
     
     void generate_embeddings_batch(std::vector<std::shared_ptr<CodeNode>>& nodes, int batch_size = 50);
+    void generate_tree_file(const fs::path& base_dir, const std::vector<fs::path>& files, const fs::path& output_file);
 };
 
 
 inline SyncResult SyncService::perform_sync(
     const std::string& project_id,
     const std::string& source_dir_str,
+    const std::string& storage_path_str, // <--- NEW
     const std::vector<std::string>& allowed_extensions,
     const std::vector<std::string>& ignored_paths)
 {
     fs::path source_dir(source_dir_str);
-    SyncResult result;
+    fs::path storage_dir(storage_path_str);
+    fs::path converted_files_dir = storage_dir / "converted_files";
     
+    // Ensure directories exist
+    fs::create_directories(converted_files_dir);
+
+    SyncResult result;
     auto manifest = load_manifest(project_id);
     auto files = scan_directory(source_dir, allowed_extensions, ignored_paths);
     
     std::unordered_map<std::string, std::string> new_manifest;
     std::unordered_set<std::string> processed_paths;
     
+    // Open _full_context.txt for writing
+    std::ofstream full_context_file(storage_dir / "_full_context.txt");
+
     for (const auto& file_path : files) {
+        // Normalize path
         std::string rel_path_str = fs::relative(file_path, source_dir).lexically_normal().string();
         std::replace(rel_path_str.begin(), rel_path_str.end(), '\\', '/');
-
         processed_paths.insert(rel_path_str);
         
+        // Read Content
+        std::ifstream file(file_path);
+        std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+
+        // 1. Write to _full_context.txt
+        full_context_file << "\n\n--- FILE: " << rel_path_str << " ---\n";
+        full_context_file << content << "\n";
+
+        // 2. Write to mirrored local folder (file.txt)
+        try {
+            fs::path target_file = converted_files_dir / rel_path_str;
+            target_file += ".txt"; // Add .txt extension
+            fs::create_directories(target_file.parent_path());
+            std::ofstream out_file(target_file);
+            out_file << content;
+        } catch (...) {
+            spdlog::warn("Failed to write mirrored file: {}", rel_path_str);
+        }
+
+        // 3. Logic for Embedding (Existing)
         std::string current_hash = calculate_file_hash(file_path);
         std::string old_hash = manifest.count(rel_path_str) ? manifest.at(rel_path_str) : "";
         
         if (current_hash != old_hash) {
             result.logs.push_back("UPDATE: " + rel_path_str);
-            
-            std::ifstream file(file_path);
-            std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-            
             auto nodes = CodeParser::extract_nodes_from_file(rel_path_str, content);
             for (auto& node : nodes) {
                 result.nodes.push_back(std::make_shared<CodeNode>(node));
@@ -97,6 +124,10 @@ inline SyncResult SyncService::perform_sync(
         new_manifest[rel_path_str] = current_hash;
     }
     
+    // 4. Generate tree.txt
+    generate_tree_file(source_dir, files, storage_dir / "tree.txt");
+
+    // Handle deletions
     for (const auto& [path, hash] : manifest) {
         if (processed_paths.find(path) == processed_paths.end()) {
             result.logs.push_back("DELETE: " + path);
@@ -106,7 +137,6 @@ inline SyncResult SyncService::perform_sync(
     
     if (!result.nodes.empty()){
         generate_embeddings_batch(result.nodes, 50);
-    
         CodeGraph graph;
         for (const auto& node : result.nodes) {
             graph.add_node(node);
@@ -116,6 +146,26 @@ inline SyncResult SyncService::perform_sync(
     
     save_manifest(project_id, new_manifest);
     return result;
+}
+
+inline void SyncService::generate_tree_file(const fs::path& base_dir, const std::vector<fs::path>& files, const fs::path& output_file) {
+    std::ofstream out(output_file);
+    out << base_dir.filename().string() << "/\n";
+    
+    for (const auto& f : files) {
+        std::string rel = fs::relative(f, base_dir).string();
+        std::replace(rel.begin(), rel.end(), '\\', '/');
+        
+        // Simple tree indentation based on slashes
+        int depth = 0;
+        for(char c : rel) if(c == '/') depth++;
+        
+        std::string indent = "";
+        for(int i=0; i<depth; i++) indent += "    ";
+        
+        // Only show filename for simplicity in this version
+        out << indent << "|-- " << fs::path(rel).filename().string() << "\n";
+    }
 }
 
 inline std::vector<fs::path> SyncService::scan_directory(

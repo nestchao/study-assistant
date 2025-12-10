@@ -9,19 +9,32 @@ namespace fs = std::filesystem;
 
 using json = nlohmann::json;
 
+std::string sanitize_utf8(const std::string& str) {
+    std::string safe_str;
+    for (unsigned char c : str) {
+        if (c < 128) {
+            safe_str += c;
+        } else {
+            // Simple replacement for non-ASCII/invalid chars to prevent JSON crash
+            // You can implement full UTF-8 validation here if needed
+            safe_str += "?"; 
+        }
+    }
+    return safe_str;
+}
 
 json CodeNode::to_json() const {
     return json{
-        {"id", id},
-        {"name", name},
-        {"content", content},
-        {"docstring", docstring},
-        {"file_path", file_path},
+        {"id", sanitize_utf8(id)},
+        {"name", sanitize_utf8(name)},
+        {"content", sanitize_utf8(content)}, // <--- CRITICAL FIX
+        {"docstring", sanitize_utf8(docstring)},
+        {"file_path", sanitize_utf8(file_path)},
         {"type", type},
         {"dependencies", dependencies},
         {"embedding", embedding},
         {"weights", weights},
-        {"ai_summary", ai_summary},
+        {"ai_summary", sanitize_utf8(ai_summary)},
         {"ai_quality_score", ai_quality_score}
     };
 }
