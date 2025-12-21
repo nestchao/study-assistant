@@ -5,6 +5,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'dart:typed_data';
+import 'package:study_assistance/models/dependency_graph.dart';
 
 class ApiService {
   late final String baseUrl;
@@ -465,5 +466,16 @@ Future<void> deleteSyncFromProject(String projectId) async {
       return json.decode(response.body)['suggestion'] ?? 'No response';
     }
     throw Exception('Failed to generate answer: ${response.body}');
+  }
+
+  Future<DependencyGraph> getDependencyGraph(String projectId, String nodeId) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/get-dependency-subgraph'),
+      body: json.encode({'project_id': projectId, 'node_id': nodeId}),
+    );
+    if (response.statusCode == 200) {
+      return DependencyGraph.fromJson(json.decode(response.body));
+    }
+    throw Exception("Failed to load graph");
   }
 }
