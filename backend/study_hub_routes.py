@@ -220,10 +220,23 @@ def get_sources(project_id):
 @study_hub_bp.route('/upload-source/<project_id>', methods=['POST'])
 def upload_source(project_id):
     print(f"\n📁 UPLOAD REQUEST for project: {project_id}")
-    if 'pdfs' not in request.files:
-        return jsonify({"error": "No files provided", "success": False}), 400
     
+    # --- DEBUGGING PRINT ---
+    print(f"  > Request Files Keys: {list(request.files.keys())}")
+    # -----------------------
+
+    # Check if 'pdfs' exists OR if 'pdfs[]' exists (sometimes frameworks add brackets)
+    if 'pdfs' not in request.files and not request.files:
+         print("  ❌ Error: No files found in request.files")
+         return jsonify({"error": "No files provided", "success": False}), 400
+    
+    # Get files using getlist. If 'pdfs' is missing, try getting values from the first key found
     files = request.files.getlist('pdfs')
+    if not files and request.files:
+        # Fallback: grab files from whatever key was sent
+        first_key = list(request.files.keys())[0]
+        files = request.files.getlist(first_key)
+
     if not files or files[0].filename == '':
         return jsonify({"error": "No files selected", "success": False}), 400
     

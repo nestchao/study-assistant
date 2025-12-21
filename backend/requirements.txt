@@ -1,11 +1,3 @@
-# ===================================================================
-# Python Dependencies for AI Study Assistant Backend
-#
-# To install all of these packages, run the following command
-# in your activated virtual environment:
-# pip install -r requirements.txt
-# ===================================================================
-
 # Python Web Framework
 Flask
 Flask-CORS
@@ -15,8 +7,10 @@ firebase-admin
 google-generativeai
 google-api-core
 
-# Caching
+# Caching & Background Tasks
 redis
+celery
+eventlet
 
 # Configuration
 python-dotenv
@@ -29,7 +23,7 @@ langchain-text-splitters
 # File System, Hashing, and Git Integration
 GitPython
 
-# Image & PDF Processing (Required for OCR and complex PDF handling)
+# Image & PDF Processing
 pytesseract
 Pillow
 PyPDF2
@@ -37,10 +31,8 @@ PyMuPDF
 opencv-python
 numpy
 
-# Improve AI in Communication Way
+# AI Vector/Embedding logic
 faiss-cpu
 sentence-transformers
 tiktoken
-
-# Rabbit MQ
-celery
+requests
