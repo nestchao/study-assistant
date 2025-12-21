@@ -6,6 +6,7 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'dart:typed_data';
 import 'package:study_assistance/models/dependency_graph.dart';
+import 'package:http_parser/http_parser.dart';
 
 class ApiService {
   late final String baseUrl;
@@ -159,6 +160,7 @@ Future<void> deleteSyncFromProject(String projectId) async {
   }
 
   // POST /api/upload-source/<project_id>
+  // POST /api/upload-source/<project_id>
   Future<void> uploadSources(String projectId, List<PlatformFile> files) async {
     print("📤 Uploading ${files.length} files to project $projectId");
     
@@ -168,23 +170,53 @@ Future<void> deleteSyncFromProject(String projectId) async {
     );
 
     for (var file in files) {
-      print("  Adding file: ${file.name} (${file.size} bytes)");
+      print("  Processing file: ${file.name} (Size: ${file.size})");
       
-      if (file.bytes != null) {
-        request.files.add(http.MultipartFile.fromBytes(
-          'pdfs',  // ⚠️  MUST match Flask route's request.files.getlist('pdfs')
-          file.bytes!,
-          filename: file.name,
-        ));
+      // FIX: Handle both Path (Desktop/Mobile) and Bytes (Web)
+      if (kIsWeb) {
+        // Web always provides bytes
+        if (file.bytes != null) {
+          request.files.add(http.MultipartFile.fromBytes(
+            'pdfs', 
+            file.bytes!,
+            filename: file.name,
+          ));
+          print("    -> Added from bytes (Web)");
+        }
+      } else {
+        // Mobile/Desktop usually provides path
+        if (file.path != null) {
+          request.files.add(await http.MultipartFile.fromPath(
+            'pdfs', 
+            file.path!,
+            filename: file.name,
+          ));
+          print("    -> Added from path: ${file.path}");
+        } else if (file.bytes != null) {
+          // Fallback if path is null but bytes exist
+          request.files.add(http.MultipartFile.fromBytes(
+            'pdfs',
+            file.bytes!,
+            filename: file.name,
+          ));
+          print("    -> Added from bytes (Fallback)");
+        } else {
+          print("    ⚠️ SKIPPED: File has no path and no bytes.");
+        }
       }
     }
 
-    print("  Sending request...");
+    // Check if files were actually added
+    if (request.files.isEmpty) {
+      throw Exception('No files could be read. Please try again.');
+    }
+
+    print("  Sending request with ${request.files.length} parts...");
     var response = await request.send();
     var responseBody = await response.stream.bytesToString();
     
     print("  Response status: ${response.statusCode}");
-    print("  Response body: $responseBody");
+    // print("  Response body: $responseBody"); // Uncomment for detailed debug
 
     if (response.statusCode != 200) {
       throw Exception('Upload failed: $responseBody');

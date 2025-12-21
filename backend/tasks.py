@@ -17,7 +17,7 @@ services.init_all_services()
 
 celery = Celery(
     'tasks',
-    broker='amqp://guest:guest@localhost:5672//',
+    broker='redis://localhost:6379/0',
     backend='redis://localhost:6379/0'
 )
 
