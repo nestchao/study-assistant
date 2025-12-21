@@ -1,4 +1,3 @@
-// --- FILE: study-assistance/src/providers/StudyHubProvider.ts ---
 import * as vscode from 'vscode';
 import { BackendClient } from '../services/BackendClient';
 
@@ -10,6 +9,7 @@ export class StudyHubProvider implements vscode.WebviewViewProvider {
         private readonly _backendClient: BackendClient
     ) {}
 
+    // --- FIX: This method is required by extension.ts ---
     public refresh() {
         if (this._view) {
             this._view.webview.postMessage({ type: 'refresh' });
@@ -28,7 +28,8 @@ export class StudyHubProvider implements vscode.WebviewViewProvider {
                         const projects = await this._backendClient.getStudyProjects();
                         webviewView.webview.postMessage({ type: 'setProjects', value: projects });
                     } catch (e: any) {
-                        vscode.window.showErrorMessage(`Failed to load projects: ${e.message}`);
+                        // console.error(e); 
+                        // Fail silently or show generic error to avoid spam
                     }
                     break;
                 }
@@ -67,10 +68,12 @@ export class StudyHubProvider implements vscode.WebviewViewProvider {
         </head>
         <body>
             <h3>📚 Study Hub</h3>
-            <button onclick="createProject()">+ New Project</button>
-            <button onclick="uploadPDF()">⬆️ Upload PDF</button>
+            <div style="display:flex; gap:5px">
+                <button onclick="createProject()">+ New</button>
+                <button onclick="uploadPDF()">⬆️ PDF</button>
+            </div>
             
-            <div id="projects-list">Loading...</div>
+            <div id="projects-list" style="margin-top:10px">Loading...</div>
 
             <script>
                 const vscode = acquireVsCodeApi();
@@ -84,7 +87,7 @@ export class StudyHubProvider implements vscode.WebviewViewProvider {
                         const list = document.getElementById('projects-list');
                         list.innerHTML = '';
                         if(message.value.length === 0) {
-                            list.innerHTML = '<p>No projects found.</p>';
+                            list.innerHTML = '<p style="font-size:12px; opacity:0.7">No projects found.</p>';
                             return;
                         }
                         message.value.forEach(p => {

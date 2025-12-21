@@ -303,13 +303,11 @@ def delete_source(project_id, source_id):
             delete_collection(collection_ref, batch_size=50)
         source_ref.delete()
 
-        if redis_client:
-            try:
-                note_redis_key = f"note:{project_id}:{source_id}"
-                redis_client.delete(note_redis_key)
-                print(f"✅ Invalidated Redis cache for deleted source: {note_redis_key}")
-            except Exception as e:
-                print(f"⚠️ Failed to invalidate note cache for deleted source: {e}")
+        # Invalidate Cache using unified CacheManager
+        if cache_manager:
+            note_key = f"note:{project_id}:{source_id}"
+            cache_manager.delete(note_key)
+            print(f"✅ Invalidated cache for deleted source: {note_key}")
 
         print(f"✅ Successfully deleted source document: {source_id}")
         return jsonify({"success": True, "message": f"Source {source_id} deleted."}), 200
@@ -331,22 +329,25 @@ def get_note(project_id, source_id):
         
         html = "".join(p.to_dict().get('html', '') for p in pages_query)
         
-        # Return empty string if nothing found (CacheManager handles None vs Empty logic internally usually, 
-        # but returning empty string is safe)
+        # Return empty string if nothing found
         return html if html else ""
 
-    # 3. Use CacheManager to handle L1, L2, Locking, and Backfilling
-    try:
-        note_html = cache_manager.get_or_set(
-            key=cache_key,
-            factory=fetch_note_from_db,
-            ttl_l1=300,   # 5 mins in memory
-            ttl_l2=3600   # 1 hour in Redis
-        )
-        return jsonify({"note_html": note_html})
-    except Exception as e:
-        print(f"Cache Error: {e}")
-        # Fallback if cache fails completely
+    # 3. Use CacheManager
+    if cache_manager:
+        try:
+            note_html = cache_manager.get_or_set(
+                key=cache_key,
+                factory=fetch_note_from_db,
+                ttl_l1=300,   # 5 mins in memory
+                ttl_l2=3600   # 1 hour in Redis
+            )
+            return jsonify({"note_html": note_html})
+        except Exception as e:
+            print(f"Cache Error: {e}")
+            # Fallback if cache fails
+            return jsonify({"note_html": fetch_note_from_db()})
+    else:
+        # Fallback if no cache manager
         return jsonify({"note_html": fetch_note_from_db()})
 
 @study_hub_bp.route('/update-note/<project_id>/<path:source_id>', methods=['POST'])
@@ -374,20 +375,13 @@ def update_note(project_id, source_id):
             note_pages_saved += 1
             print(f"  + Saving new note page {page_num}")
 
-        if redis_client:
-            try:
-                note_redis_key = f"note:{project_id}:{source_id}"
-                redis_client.delete(note_redis_key)
-                print(f"✅ Invalidated Redis cache for note: {note_redis_key}")
-            except Exception as e:
-                print(f"⚠️ Failed to invalidate note cache: {e}")
+        # Invalidate Cache
+        if cache_manager:
+            cache_key = f"note:{project_id}:{source_id}"
+            cache_manager.delete(cache_key)
+            print(f"✅ Invalidated cache for {cache_key}")
         
         print(f"✅ Note updated successfully. {note_pages_saved} pages saved.")
-
-        cache_key = f"note:{project_id}:{source_id}"
-        cache_manager.delete(cache_key)
-        print(f"✅ Invalidated cache for {cache_key}")
-
         return jsonify({"success": True, "message": "Note updated successfully"}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -495,21 +489,11 @@ def regenerate_note(project_id, source_id):
             })
             print(f"  + Saved note page {page_num}")
 
-        if redis_client:
-            note_redis_key = f"note:{project_id}:{source_id}"
-            redis_client.delete(note_redis_key)
-            print(f"  ✅ Invalidated Redis cache for regenerated note: {note_redis_key}")
-
-        note_key = f"note:{project_id}:{source_id}"
-        if hasattr(L1_CACHE, 'pop'):
-            L1_CACHE.pop(note_key, None)
-            print(f"  ✅ Invalidated L1 cache (using .pop) for regenerated note")
-        elif hasattr(L1_CACHE, 'delete'):
-            L1_CACHE.delete(note_key)
-            print(f"  ✅ Invalidated L1 cache (using .delete) for regenerated note")
-        else:
-            print("  ⚠️ Warning: Could not invalidate L1 cache. Missing delete/pop method.")
-
+        # Invalidate Cache
+        if cache_manager:
+            note_key = f"note:{project_id}:{source_id}"
+            cache_manager.delete(note_key)
+            print(f"  ✅ Invalidated cache for regenerated note: {note_key}")
 
         print(f"  ✅ SUCCESS: Note for '{source_id}' regenerated.")
         return jsonify({"success": True, "note_html": new_note_html})

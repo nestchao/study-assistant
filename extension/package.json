@@ -16,113 +16,56 @@
     "configuration": {
       "title": "Study Assistant",
       "properties": {
-        "studyAssistant.apiKey": {
+        "studyAssistant.allowedExtensions": {
+          "type": "string",
+          "default": "py,ts,js,cpp,h,java,dart,md,txt",
+          "description": "Comma-separated list of file extensions to index."
+        },
+        "studyAssistant.ignoredPaths": {
+          "type": "string",
+          "default": "node_modules, .git, dist, build, __pycache__, .vscode",
+          "description": "Comma-separated list of folders to ignore."
+        },
+        "studyAssistant.includedPaths": {
           "type": "string",
           "default": "",
-          "description": "Your Google Gemini API Key"
-        },
-        "studyAssistant.cppBackendUrl": {
-          "type": "string",
-          "default": "http://127.0.0.1:5000",
-          "description": "C++ Backend URL (Code Intelligence)"
-        },
-        "studyAssistant.pythonBackendUrl": {
-          "type": "string",
-          "default": "http://127.0.0.1:5001",
-          "description": "Python Backend URL (Study Features)"
-        },
-        "studyAssistant.enableAutoCompletion": {
-          "type": "boolean",
-          "default": true,
-          "description": "Enable AI code completion"
-        },
-        "studyAssistant.enableStudyHub": {
-          "type": "boolean",
-          "default": true,
-          "description": "Enable Study Hub features"
+          "description": "Specific paths to force include even if ignored."
         }
       }
     },
-    
     "viewsContainers": {
       "activitybar": [
         {
-          "id": "study-assistant-container",
+          "id": "study-assistant-sidebar",
           "title": "Study Assistant",
-          "icon": "resources/brain-icon.svg"
+          "icon": "media/icon.svg"
         }
       ]
     },
-    
     "views": {
-      "study-assistant-container": [
+      "study-assistant-sidebar": [
         {
-          "type": "webview",
-          "id": "study-assistant-chat",
-          "name": "Code Assistant",
-          "icon": "resources/chat-icon.svg"
+          "id": "study-assistant-config",
+          "name": "Configuration",
+          "type": "webview"
         },
         {
-          "type": "webview",
+          "id": "study-assistant-chat",
+          "name": "AI Code Assistant",
+          "type": "webview"
+        },
+        {
           "id": "study-assistant-hub",
           "name": "Study Hub",
-          "icon": "resources/book-icon.svg"
+          "type": "webview"
         },
         {
-          "type": "webview",
           "id": "study-assistant-papers",
-          "name": "Past Papers",
-          "icon": "resources/paper-icon.svg"
+          "name": "Paper Solver",
+          "type": "webview"
         }
       ]
-    },
-    
-    "commands": [
-      {
-        "command": "studyAssistant.registerProject",
-        "title": "Register Project for Code Analysis",
-        "category": "Study Assistant"
-      },
-      {
-        "command": "studyAssistant.syncProject",
-        "title": "Sync Project with Backend",
-        "category": "Study Assistant"
-      },
-      {
-        "command": "studyAssistant.createStudyProject",
-        "title": "Create New Study Project",
-        "category": "Study Assistant"
-      },
-      {
-        "command": "studyAssistant.uploadPDF",
-        "title": "Upload Study Material (PDF)",
-        "category": "Study Assistant"
-      },
-      {
-        "command": "studyAssistant.solvePaper",
-        "title": "Analyze Past Paper",
-        "category": "Study Assistant"
-      },
-      {
-        "command": "studyAssistant.showMindmap",
-        "title": "Show Project Mindmap",
-        "category": "Study Assistant"
-      },
-      {
-        "command": "studyAssistant.checkBackendStatus",
-        "title": "Check Backend Status",
-        "category": "Study Assistant"
-      }
-    ],
-    
-    "keybindings": [
-      {
-        "command": "studyAssistant.syncProject",
-        "key": "ctrl+shift+s",
-        "mac": "cmd+shift+s",
-        "when": "editorTextFocus"
-      }
-    ]
+    }
   },
   
   "scripts": {
