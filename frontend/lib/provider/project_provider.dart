@@ -12,6 +12,7 @@ import 'package:study_assistance/models/past_paper.dart';
 import 'package:study_assistance/models/code_project.dart';
 import 'dart:async';
 import 'package:study_assistance/widgets/tracking_mind_map.dart';
+import 'package:study_assistance/models/dependency_graph.dart';
 
 class Source {
   final String id;
@@ -776,6 +777,7 @@ class ProjectProvider with ChangeNotifier {
     _codeSuggestionHistory
         .add(CodeSuggestionMessage(content: prompt, isUser: true));
     _isGeneratingSuggestion = true;
+    _fetchAutoCassette(prompt);
     notifyListeners();
 
     try {
@@ -801,6 +803,20 @@ class ProjectProvider with ChangeNotifier {
         extensions: syncConfig.allowedExtensions, // Fixed: Added required argument
         prompt: prompt,
       );
+
+      final candidates = await _api.getRetrievalCandidates(_viewingProjectId!, prompt);
+
+      if (candidates.isNotEmpty) {
+        final bestMatch = candidates.first; // Rank 1
+        try {
+          // Auto-load the Cassette for the best match
+          _activeCassetteGraph = await _api.getDependencyGraph(_viewingProjectId!, bestMatch['id']);
+          _isCassetteVisible = true;
+          notifyListeners();
+        } catch (e) {
+          print("Could not load cassette: $e");
+        }
+      }
       
       _codeSuggestionHistory
           .add(CodeSuggestionMessage(content: suggestion, isUser: false));
@@ -1032,6 +1048,12 @@ class ProjectProvider with ChangeNotifier {
   Set<String> _trackedNodeIds = {};
   Set<String> get trackedNodeIds => _trackedNodeIds;
 
+  DependencyGraph? _activeCassetteGraph;
+  DependencyGraph? get activeCassetteGraph => _activeCassetteGraph;
+  
+  bool _isCassetteVisible = false;
+  bool get isCassetteVisible => _isCassetteVisible;
+
   void updateTrackedNodes(Set<String> nodes) {
     _trackedNodeIds = nodes;
     notifyListeners();
@@ -1076,6 +1098,34 @@ class ProjectProvider with ChangeNotifier {
     }
 
     return root;
+  }
+
+  void hideCassette() {
+    _isCassetteVisible = false;
+    notifyListeners();
+  }
+
+  // UPDATE: Add this logic inside your existing generateCodeSuggestion
+  // OR create this helper method and call it
+  Future<void> _fetchAutoCassette(String prompt) async {
+    if (_viewingProjectId == null) return;
+    
+    try {
+      // 1. Get candidates to find the "Center of Gravity"
+      final candidates = await _api.getRetrievalCandidates(_viewingProjectId!, prompt);
+      
+      if (candidates.isNotEmpty) {
+        // The first candidate is the most relevant node
+        final bestNodeId = candidates.first['name'] ?? candidates.first['id']; // Use name for lookup in C++ logic usually
+        
+        // 2. Fetch the graph for this node
+        _activeCassetteGraph = await _api.getDependencyGraph(_viewingProjectId!, bestNodeId);
+        _isCassetteVisible = true;
+        notifyListeners();
+      }
+    } catch (e) {
+      print("Cassette load failed: $e");
+    }
   }
 
 }

@@ -24,6 +24,8 @@ exception
 backend\venv\Include\
 frontend\lib\
 
+$env:
+
 cd ..\..\..\
 cd backend_cpp/build; cmake --build . --config Release
 cd Release; ./code_assistance_server.exe

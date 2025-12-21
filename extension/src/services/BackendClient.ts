@@ -1,6 +1,6 @@
 import axios, { AxiosInstance } from 'axios';
 import * as fs from 'fs';
-import FormData from 'form-data'; // FIXED: Changed from 'import * as' to default import
+import FormData from 'form-data'; 
 import * as path from 'path';
 
 // Define the ports for your local servers
@@ -15,13 +15,12 @@ export class BackendClient {
 
     // --- System Health ---
     async checkAllBackends(): Promise<{ cpp: boolean, python: boolean }> {
-        // FIXED: Changed type from 'typeof axios' to 'AxiosInstance'
         const check = async (client: AxiosInstance, name: string) => {
             try {
                 const response = await client.get('/api/hello', { timeout: 1000 });
                 return response.status === 200;
             } catch (error) {
-                console.warn(`[BackendClient] ${name} backend is offline.`);
+                // console.warn(`[BackendClient] ${name} backend is offline.`);
                 return false;
             }
         };
@@ -34,25 +33,28 @@ export class BackendClient {
 
     async registerCodeProject(
         projectId: string, 
-        workspacePath: string, // Change 'path' to 'workspacePath' for clarity
+        workspacePath: string, 
         extensions: string[], 
         ignoredPaths: string[],
         includedPaths: string[] = [] 
     ): Promise<void> {
         
-        // 1. Define the hidden folder path
         const storagePath = path.join(workspacePath, '.study_assistant');
-        
-        // 2. Create it if it doesn't exist
         if (!fs.existsSync(storagePath)) {
             fs.mkdirSync(storagePath, { recursive: true });
         }
 
+        console.log("Sending Register Config to C++:", { 
+            extensions, 
+            ignored_paths: ignoredPaths // This log helps debugging
+        });
+
+        // --- CRITICAL FIX: Map 'ignoredPaths' to 'ignored_paths' ---
         await cppClient.post(`/sync/register/${projectId}`, {
             local_path: workspacePath,
-            storage_path: storagePath, // <--- SENDING THE PATH
-            extensions,
-            ignored_paths: ignoredPaths,
+            storage_path: storagePath,
+            allowed_extensions: extensions,
+            ignored_paths: ignoredPaths,    // <--- THIS KEY NAME MUST MATCH C++
             included_paths: includedPaths,
             sync_mode: 'hybrid'
         });
@@ -62,7 +64,7 @@ export class BackendClient {
         const storagePath = path.join(workspacePath, '.study_assistant');
         
         const response = await cppClient.post(`/sync/run/${projectId}`, {
-            storage_path: storagePath // <--- SENDING THE PATH
+            storage_path: storagePath 
         });
         return response.data;
     }
@@ -71,7 +73,7 @@ export class BackendClient {
         const response = await cppClient.post('/generate-code-suggestion', {
             project_id: projectId,
             prompt,
-            use_hyde: true,
+            use_hyde: false, // Set to false to save quota
         });
         return response.data.suggestion;
     }
@@ -85,7 +87,7 @@ export class BackendClient {
     }
 
 
-    // --- Python Backend Methods (Study Hub & Paper Solver) ---
+    // --- Python Backend Methods ---
     async getStudyProjects(): Promise<{ id: string, name: string }[]> {
         const response = await pythonClient.get('/get-projects');
         return response.data;

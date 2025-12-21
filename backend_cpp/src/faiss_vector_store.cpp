@@ -8,20 +8,27 @@
 #include <fstream>
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
+#include <unordered_map>
 
 namespace fs = std::filesystem;
 using json = nlohmann::json;
 
 namespace code_assistance {
 
+struct IndexDeleter {
+    void operator()(faiss::Index* idx) {
+        delete idx;
+    }
+};
+
 FaissVectorStore::FaissVectorStore(int dimension) : dimension_(dimension) {
-    index_ = new faiss::IndexHNSWFlat(dimension, 32);
-    dynamic_cast<faiss::IndexHNSW*>(index_)->hnsw.efConstruction = 40;
-    dynamic_cast<faiss::IndexHNSW*>(index_)->hnsw.efSearch = 16;
+    auto idx = new faiss::IndexHNSWFlat(dimension, 32);
+    idx->hnsw.efConstruction = 40;
+    idx->hnsw.efSearch = 16;
+    index_.reset(idx); 
 }
 
 FaissVectorStore::~FaissVectorStore() {
-    delete index_;
 }
 
 void FaissVectorStore::add_nodes(const std::vector<std::shared_ptr<CodeNode>>& nodes) {
@@ -42,7 +49,6 @@ void FaissVectorStore::add_nodes(const std::vector<std::shared_ptr<CodeNode>>& n
     long start_idx = index_->ntotal;
     long num_to_add = node_pointers.size();
     
-    // Normalize vectors
     faiss::fvec_renorm_L2(dimension_, num_to_add, vectors_flat.data());
     
     index_->add(num_to_add, vectors_flat.data());
@@ -86,7 +92,8 @@ void FaissVectorStore::save(const std::string& path) const {
     fs::path dir(path);
     fs::create_directories(dir);
 
-    faiss::write_index(index_, (dir / "faiss.index").string().c_str());
+    // Use .get() to pass raw pointer to FAISS function
+    faiss::write_index(index_.get(), (dir / "faiss.index").string().c_str());
 
     json metadata = json::array();
     for(const auto& node : nodes_list_){
@@ -100,8 +107,9 @@ void FaissVectorStore::save(const std::string& path) const {
 void FaissVectorStore::load(const std::string& path) {
     fs::path dir(path);
     
-    delete index_;
-    index_ = faiss::read_index((dir / "faiss.index").string().c_str());
+    // reset() deletes the old index and takes ownership of the new one
+    faiss::Index* raw_index = faiss::read_index((dir / "faiss.index").string().c_str());
+    index_.reset(raw_index);
     
     std::ifstream meta_file(dir / "metadata.json");
     json metadata = json::parse(meta_file);

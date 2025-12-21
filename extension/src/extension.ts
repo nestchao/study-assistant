@@ -4,6 +4,7 @@ import { PaperSolverProvider } from './providers/PaperSolverProvider';
 import { GhostTextProvider } from './providers/CompletionProvider';
 import { getBackendClient } from './services/BackendClient';
 import { CodeChatProvider } from './providers/CodeChatProvider'; // Assuming you move providers to a /providers folder
+import { CodeConfigProvider } from './providers/CodeConfigProvider'; 
 
 let currentProjectId: string | null = null;
 
@@ -13,7 +14,7 @@ export async function activate(context: vscode.ExtensionContext) {
     const backendClient = getBackendClient();
 
     // Check backend status
-    const status = await backendClient.checkAllBackends();
+    const status = await backendClient.checkAllBackends();  
     
     if (!status.cpp && !status.python) {
         vscode.window.showWarningMessage(
@@ -39,6 +40,12 @@ export async function activate(context: vscode.ExtensionContext) {
 
     // ==================== Register Providers ====================
 
+     // 1. Code Config Provider 
+    const codeConfigProvider = new CodeConfigProvider(context.extensionUri);
+    context.subscriptions.push(
+        vscode.window.registerWebviewViewProvider('study-assistant-config', codeConfigProvider)
+    );
+    
     // 1. Code Chat Provider (C++ Backend)
     const codeChatProvider = new CodeChatProvider(context.extensionUri, backendClient, currentProjectId);
     context.subscriptions.push(
@@ -71,90 +78,96 @@ export async function activate(context: vscode.ExtensionContext) {
 
     // Register Code Project
     context.subscriptions.push(
-        vscode.commands.registerCommand('studyAssistant.registerProject', async () => {
-            if (!workspaceFolders) return;
+        vscode.commands.registerCommand('studyAssistant.registerProject', async (options?: { silent: boolean }) => {
+            if (!workspaceFolders) {
+                vscode.window.showErrorMessage("No workspace open");
+                return;
+            }
             const workspacePath = workspaceFolders[0].uri.fsPath;
+            const workspaceUri = workspaceFolders[0].uri;
 
-            // 1. Extensions
-            const extensionsInput = await vscode.window.showInputBox({
-                prompt: 'Allowed File Extensions',
-                value: 'py,ts,js,cpp,h,java,dart,md,txt',
-                placeHolder: 'e.g. py,ts,js'
+            // --- Read from Settings ---
+            const config = vscode.workspace.getConfiguration('studyAssistant', workspaceUri);
+            
+            // Debug: Print to "Extension Host" console
+            console.log('Raw Config:', {
+                ext: config.get('allowedExtensions'),
+                ign: config.get('ignoredPaths'),
+                inc: config.get('includedPaths')
             });
-            if (!extensionsInput) return;
 
-            // 2. Ignore Paths (Folders to skip)
-            const ignoreInput = await vscode.window.showInputBox({
-                prompt: 'Ignored Paths (comma-separated)',
-                value: 'node_modules, .git, dist, build, __pycache__, .vscode, .dart_tool',
-                placeHolder: 'Folders to exclude'
-            });
-            if (ignoreInput === undefined) return; // Allow empty string, check for undefined
+            const extensionsStr = config.get<string>('allowedExtensions', 'ts');
+            const ignoredStr = config.get<string>('ignoredPaths', 'node_modules');
+            const includedStr = config.get<string>('includedPaths', '');
 
-            // 3. Exception/Include Paths (Force include even if ignored)
-            const includeInput = await vscode.window.showInputBox({
-                prompt: 'Exception Paths (Force Include)',
-                value: '',
-                placeHolder: 'Specific files/folders to include inside ignored folders'
-            });
-            if (includeInput === undefined) return;
+            // 2. Robust Parsing & Normalization
+            const parseList = (str: string) => 
+                (str || '').split(/[,\n]+/) // Handle null/undefined safely
+                .map(e => e.trim().replace(/\\/g, '/')) 
+                .filter(e => e.length > 0);
 
-            const extensions = extensionsInput.split(',').map(e => e.trim());
-            const ignoredPaths = ignoreInput.split(',').map(e => e.trim()).filter(e => e.length > 0);
-            const includedPaths = includeInput.split(',').map(e => e.trim()).filter(e => e.length > 0);
+            const extensions = parseList(extensionsStr);
+            const ignoredPaths = parseList(ignoredStr);
+            const includedPaths = parseList(includedStr);
+            
+            // Manually force defaults if empty (Fallback)
+            if (ignoredPaths.length === 0) {
+                ignoredPaths.push('node_modules', '.git', 'dist', 'build');
+            }
 
-            await vscode.window.withProgress({
-                location: vscode.ProgressLocation.Notification,
-                title: 'Registering & Syncing project...',
-                cancellable: false
-            }, async () => {
+            console.log('Sending Registration Config:', { extensions, ignoredPaths, includedPaths });
+
+            // --- MISSING PART RESTORED BELOW ---
+            const showNotification = !options?.silent;
+
+            const task = async () => {
                 try {
-                    // We use the Workspace Folder Name as the Project Name ID
-                    // To "Rename" a project, essentially re-register it with new settings.
                     await backendClient.registerCodeProject(
                         currentProjectId!, 
                         workspacePath,
                         extensions,
                         ignoredPaths,
-                        includedPaths // You need to update BackendClient to accept this
+                        includedPaths
                     );
                     
-                    // Trigger a sync immediately after update
+                    // Auto-trigger sync after registration
                     await backendClient.syncCodeProject(currentProjectId!, workspacePath);
-                    
-                    vscode.window.showInformationMessage(`✅ Project Configured & Synced!`);
+
+                    if (showNotification) {
+                        vscode.window.showInformationMessage(`✅ Project Configured & Synced!`);
+                    }
                 } catch (error: any) {
                     vscode.window.showErrorMessage(`Failed: ${error.message}`);
                 }
-            });
+            };
+
+            if (showNotification) {
+                await vscode.window.withProgress({
+                    location: vscode.ProgressLocation.Notification,
+                    title: 'Registering & Syncing...',
+                    cancellable: false
+                }, task);
+            } else {
+                await task();
+            }
         })
     );
-
+    
     // Sync Project
     context.subscriptions.push(
         vscode.commands.registerCommand('studyAssistant.syncProject', async () => {
-            if (!currentProjectId) {
-                vscode.window.showErrorMessage('No project registered');
-                return;
-            }
-
-            if (!vscode.workspace.workspaceFolders) {
-                vscode.window.showErrorMessage('No workspace open');
-                return;
-            }
-            const workspacePath = vscode.workspace.workspaceFolders[0].uri.fsPath;
+            if (!currentProjectId || !workspaceFolders) return;
+            const workspacePath = workspaceFolders[0].uri.fsPath;
 
             await vscode.window.withProgress({
                 location: vscode.ProgressLocation.Notification,
-                title: 'Syncing project...',
+                title: 'Syncing...',
                 cancellable: false
             }, async () => {
                 try {
                     const result = await backendClient.syncCodeProject(currentProjectId!, workspacePath);
-                    
-                    vscode.window.showInformationMessage(
-                        `✅ Sync complete: ${result.nodes || 0} nodes indexed`
-                    );
+                    const count = result.nodes || (result.files ? result.files.length : 0); 
+                    vscode.window.showInformationMessage(`✅ Sync complete. Indexed ${count} items.`);
                 } catch (error: any) {
                     vscode.window.showErrorMessage(`Sync failed: ${error.message}`);
                 }
@@ -165,22 +178,12 @@ export async function activate(context: vscode.ExtensionContext) {
     // Create Study Project
     context.subscriptions.push(
         vscode.commands.registerCommand('studyAssistant.createStudyProject', async () => {
-            const name = await vscode.window.showInputBox({
-                prompt: 'Enter study project name',
-                placeHolder: 'e.g., Computer Science 101'
-            });
-
+            const name = await vscode.window.showInputBox({ prompt: 'Enter study project name' });
             if (!name) return;
-
             try {
-                const projectId = await backendClient.createStudyProject(name);
-                vscode.window.showInformationMessage(`✅ Study project created: ${name}`);
-                
-                // Refresh Study Hub view
-                studyHubProvider.refresh();
-            } catch (error: any) {
-                vscode.window.showErrorMessage(`Failed: ${error.message}`);
-            }
+                await backendClient.createStudyProject(name);
+                studyHubProvider.refresh(); // Refresh the list
+            } catch (e: any) { vscode.window.showErrorMessage(e.message); }
         })
     );
 

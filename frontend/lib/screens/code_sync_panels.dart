@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import 'package:study_assistance/provider/project_provider.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:study_assistance/widgets/tracking_mind_map.dart';
+import 'package:study_assistance/widgets/dependency_cassette.dart';
 
 // ========================================
 // 1. FILE TREE PANEL
@@ -295,6 +296,7 @@ class _CodeChatPanelState extends State<CodeChatPanel> {
               ],
             ),
           ),
+
           // Chat Messages
           // Loading indicator
           if (provider.isGeneratingSuggestion)
@@ -318,6 +320,12 @@ class _CodeChatPanelState extends State<CodeChatPanel> {
                   ),
                 ],
               ),
+            ),
+
+            if (provider.isCassetteVisible && provider.activeCassetteGraph != null)
+            DependencyCassette(
+              graph: provider.activeCassetteGraph!,
+              onClose: () => provider.hideCassette(),
             ),
 
           // Content Area (Switch between Chat and Checklist)
