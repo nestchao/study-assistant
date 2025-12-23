@@ -156,7 +156,7 @@ class _RegisterProjectDialogState extends State<_RegisterProjectDialog> {
   String _activeView = 'ignore'; // 'ignore' or 'include'
   
   // Storage for both lists
-  String _tempIgnored = 'build/\n.dart_tool/\nnode_modules/\n.git/';
+  String _tempIgnored = 'build\\\n.dart_tool\\\nnode_modules\\\n.git\\';
   String _tempIncluded = ''; // Empty by default
 
   @override
@@ -237,7 +237,7 @@ class _RegisterProjectDialogState extends State<_RegisterProjectDialog> {
                 controller: _pathsController,
                 decoration: InputDecoration(
                   labelText: _activeView == 'ignore' ? 'Paths to Ignore (one per line)' : 'Paths to Force Include (one per line)',
-                  hintText: _activeView == 'ignore' ? 'build/\nnode_modules/' : 'backend/src/\nutils/helpers.py',
+                  hintText: _activeView == 'ignore' ? 'build\\\nnode_modules\\' : 'backend\\src\\\nutils\\helpers.py',
                   border: const OutlineInputBorder(),
                 ),
                 maxLines: 4,

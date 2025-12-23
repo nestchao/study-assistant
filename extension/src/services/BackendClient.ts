@@ -69,11 +69,13 @@ export class BackendClient {
         return response.data;
     }
 
-    async getCodeSuggestion(projectId: string, prompt: string): Promise<string> {
+    async getCodeSuggestion(projectId: string, prompt: string, activeContext?: any): Promise<string> {
         const response = await cppClient.post('/generate-code-suggestion', {
             project_id: projectId,
-            prompt,
-            use_hyde: false, // Set to false to save quota
+            prompt: prompt,
+            active_file_path: activeContext?.filePath || "",
+            active_file_content: activeContext?.content || "",
+            active_selection: activeContext?.selection || ""
         });
         return response.data.suggestion;
     }
@@ -129,6 +131,12 @@ export class BackendClient {
 
         await pythonClient.post(`/upload-paper/${projectId}`, form, {
             headers: form.getHeaders(),
+        });
+    }
+
+    async syncSingleFile(projectId: string, relativePath: string): Promise<void> {
+        await cppClient.post(`/sync/file/${projectId}`, {
+            file_path: relativePath
         });
     }
 }

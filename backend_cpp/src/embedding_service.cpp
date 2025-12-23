@@ -36,22 +36,27 @@ std::string EmbeddingService::get_endpoint_url(const std::string& action) {
 
 template<typename Func>
 cpr::Response perform_request_with_retry(Func request_factory, std::shared_ptr<KeyManager> km) {
-    int max_retries = 3; 
+    int max_retries = 4; 
+    cpr::Response r; 
     
-    for (int i = 0; i <= max_retries; ++i) {
-        cpr::Response r = request_factory(); 
+    for (int i = 0; i < max_retries; ++i) {
+        r = request_factory(); 
         
         if (r.status_code == 200) return r;
         
-        if (r.status_code == 429 || r.status_code == 503) {
-            spdlog::warn("⚠️ API Limit ({}) hit. Rotating key...", r.status_code);
+        if (r.status_code == 429) {
+            spdlog::warn("⚠️ API Limit (429) hit on Key {}. Rotating...", km->get_current_key().substr(0, 8));
             km->report_rate_limit(); 
-            std::this_thread::sleep_for(std::chrono::milliseconds(500)); 
+            
+            // 🚀 SPACE-X FEEDBACK: Increase sleep slightly to let the quota breathe
+            std::this_thread::sleep_for(std::chrono::milliseconds(1000 * (i + 1))); 
             continue;
         }
-        return r;
+        
+        // If it's a 400 or 500 (not a 429), don't bother retrying
+        return r; 
     }
-    return cpr::Response{};
+    return r;
 }
 
 std::vector<float> EmbeddingService::generate_embedding(const std::string& text) {
@@ -123,36 +128,28 @@ std::vector<std::vector<float>> EmbeddingService::generate_embeddings_batch(cons
 }
 
 std::string EmbeddingService::generate_text(const std::string& prompt) {
-    auto start = std::chrono::high_resolution_clock::now();
-
     auto r = perform_request_with_retry([&]() {
         json payload = {
             {"contents", {{ {"parts", {{{"text", prompt}}}} }}}
         };
+        // 🚀 THE FIX: get_endpoint_url is called every time a retry happens
         return cpr::Post(cpr::Url{get_endpoint_url("generateContent")},
-                         cpr::Body{payload.dump(-1, ' ', false, json::error_handler_t::replace)},
+                         cpr::Body{payload.dump()},
                          cpr::Header{{"Content-Type", "application/json"}});
     }, key_manager_);
 
-    auto end = std::chrono::high_resolution_clock::now();
-    double duration = std::chrono::duration<double, std::milli>(end - start).count();
-    SystemMonitor::global_llm_generation_ms.store(duration);
-
+    spdlog::info("📡 Gemini Response Code: {}", r.status_code);
     if (r.status_code != 200) {
-        spdlog::error("Text Generation API error [{}]: {}", r.status_code, r.text);
-        return "Error: AI response blocked.";
+        spdlog::error("❌ Gemini API Error Body: {}", r.text); // THIS WILL TELL US WHY IT FAILS
+        return "ERROR_FROM_BACKEND: Gemini failed with code " + std::to_string(r.status_code);
     }
     
     auto response_json = json::parse(r.text);
     if (response_json.contains("candidates") && !response_json["candidates"].empty()) {
-        std::string text = response_json["candidates"][0]["content"]["parts"][0]["text"];
-        int estimated_tokens = text.length() / 4; 
-        if (estimated_tokens == 0 && text.length() > 0) estimated_tokens = 1;
-        SystemMonitor::global_output_tokens.store(estimated_tokens);
-        return text;
+        return response_json["candidates"][0]["content"]["parts"][0]["text"];
     }
     
-    return "Error: AI response was empty.";
+    return "ERROR: AI response was empty.";
 }
 
 std::string HyDEGenerator::generate_hyde(const std::string& query) {

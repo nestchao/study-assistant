@@ -27,147 +27,177 @@ from services import HyDE_generation_model
 # Firestore document size limit is ~1MB, we use 900KB as safe threshold
 MAX_CHUNK_SIZE = 900_000  # ~900KB per chunk
 
+def is_inside(child: Path, parent: Path) -> bool:
+    """Industrial segment-based path comparison."""
+    try:
+        # relative_to throws ValueError if child is not under parent
+        child.relative_to(parent)
+        return True
+    except ValueError:
+        return False
+
+def sync_single_file(db, project_id: str, relative_path_str: str):
+    """Real-time atomic sync for a single file."""
+    project_doc = db.collection(CODE_PROJECTS_COLLECTION).document(project_id).get()
+    if not project_doc.exists:
+        raise ValueError("Project config not found")
+        
+    config = project_doc.to_dict()
+    source_root = Path(config['local_path'])
+    full_path = source_root / relative_path_str
+    
+    if not full_path.exists():
+        return None
+
+    # 1. Upload to Firestore (Converted Files)
+    # Using your existing util
+    convert_and_upload_to_firestore(
+        db, project_id, full_path, source_root,
+        CODE_FILES_SUBCOLLECTION, CODE_PROJECTS_COLLECTION
+    )
+
+    # 2. Extract and Embed for Vector Search
+    content = full_path.read_text(errors='ignore')
+    nodes = extract_functions_and_classes(content, relative_path_str)
+    
+    if nodes:
+        generate_embeddings(nodes)
+        
+        # 3. Hot-patch the local FAISS index
+        store_path = VECTOR_STORE_ROOT / project_id
+        if store_path.exists():
+            vector_store = FaissVectorStore.load(store_path)
+            vector_store.add_nodes(nodes)
+            vector_store.save(store_path)
+            
+    return len(nodes)
 
 def perform_sync(db, project_id: str, config_data: dict):
-    """
-    Enhanced sync with Hybrid Path Filtering based on Specificity.
-    Rule: The most specific (longest) matching path determines fate.
-    """
-    source_dir = config_data.get('local_path')
-    extensions = config_data.get('allowed_extensions', [])
-    included_paths = config_data.get('included_paths', [])
-    ignored_paths = config_data.get('ignored_paths', [])
+    # 1. Path & Config Sanitization
+    source_dir = Path(config_data.get('local_path')).resolve()
+    # Ensure storage_dir is absolute and resolved to handle case-insensitivity on Windows
+    storage_dir = Path(config_data.get('storage_path', source_dir / ".study_assistant")).resolve()
+    
+    # Create the converted files directory early
+    converted_files_dir = storage_dir / "converted_files"
+    converted_files_dir.mkdir(parents=True, exist_ok=True)
+    
+    extensions = {e.lstrip('.').lower() for e in config_data.get('allowed_extensions', [])}
+    ignored_paths = [Path(p) for p in config_data.get('ignored_paths', []) if p.strip()]
+    included_paths = [Path(p) for p in config_data.get('included_paths', []) if p.strip()]
 
+    # 2. Database Initialization
     project_ref = db.collection(CODE_PROJECTS_COLLECTION).document(project_id)
-
-    print("\n" + "="*60)
-    print(f"SYNC-LOGIC: Starting file scan for: {project_id}")
-
-    source_path = Path(source_dir)
-    if not source_path.is_dir():
-        raise FileNotFoundError(f"Source directory not found: {source_dir}")
-
-    logs = []
-    updated_count = deleted_count = 0
-
     project_ref.update({'status': 'syncing'})
 
-    # === PHASE 1: Check Manifest ===
     manifest_ref = project_ref.collection(CODE_FILES_SUBCOLLECTION).document('_manifest')
     manifest_doc = manifest_ref.get()
     files_in_db = manifest_doc.to_dict().get('files', {}) if manifest_doc.exists else {}
 
-    # === PHASE 2: Scan & Apply Deepest Match Filtering ===
-    
-    # Normalize filters
-    normalized_included = [Path(p.replace('\\', '/')) for p in included_paths if p.strip()]
-    normalized_ignored = [Path(p.replace('\\', '/')) for p in ignored_paths if p.strip()]
-    
-    # Scan everything except .git
-    all_local_files = [f for f in source_path.rglob("*") if f.is_file() and '.git' not in f.parts]
+    logs = []
+    updated_count = 0
+    deleted_count = 0
+    files_to_process = []
 
-    filtered_files = []
-    
-    for f in all_local_files:
-        rel_path = f.relative_to(source_path)
-        
-        # 1. Calculate Ignore Specificity (Depth)
-        # If file is in 'A/B/C', specificity is 3. If in 'A', specificity is 1.
-        ignore_depth = 0
-        for ign in normalized_ignored:
-            if rel_path == ign or rel_path.is_relative_to(ign):
-                # Count parts to determine specificity (e.g., 'src/utils' = 2)
-                d = len(ign.parts)
-                if d > ignore_depth:
-                    ignore_depth = d
-        
-        # 2. Calculate Include Specificity (Depth)
-        include_depth = 0
-        for inc in normalized_included:
-            if rel_path == inc or rel_path.is_relative_to(inc):
-                d = len(inc.parts)
-                if d > include_depth:
-                    include_depth = d
-        
-        # 3. Decision Logic (Deepest Wins)
-        if include_depth > ignore_depth:
-            # Explicitly included at a deeper level than any ignore
-            # Example: Ignore 'A' (1), Include 'A/B' (2). 2 > 1 -> Keep.
-            filtered_files.append(f)
-        elif ignore_depth > 0 and ignore_depth >= include_depth:
-            # Ignored at a deeper or equal level
-            # Example: Include 'A/B' (2), Ignore 'A/B/C' (3). 3 > 2 -> Drop.
-            # Example: Ignore 'A' (1), Include None (0). 1 > 0 -> Drop.
-            continue 
-        else:
-            # Neither ignored nor included (Default behavior: Keep)
-            filtered_files.append(f)
+    # 🚀 PHASE 2: THE HARDENED RECURSIVE SCANNER
+    def recursive_scan(current_path: Path):
+        try:
+            for item in current_path.iterdir():
+                # 1. ATOMIC GUARD: Block the storage directory (Infinite Loop Prevention)
+                # We resolve the item to handle case-sensitivity and relative paths
+                resolved_item = item.resolve()
+                if resolved_item == storage_dir:
+                    print(f"🛡️ Scanner Guard: Pruned storage directory {item}")
+                    continue
 
-    # Filter by Extension
-    dot_ext = [f".{e.lstrip('.').lower()}" for e in extensions] if extensions else None
-    
-    files_to_process = [
-        f for f in filtered_files 
-        if not dot_ext or f.suffix.lower() in dot_ext
-    ]
-    
-    # === PHASE 3: Compare Hashes & Upload Changed Files ===
+                # 2. HARD SYSTEM IGNORES (Internal Junk)
+                if item.name in [".git", ".vscode", "__pycache__", "node_modules"]:
+                    continue
+
+                rel_path = item.relative_to(source_dir)
+                
+                # Check Logic
+                is_ignored = any(is_inside(rel_path, ign) for ign in ignored_paths)
+                is_bridge = any(is_inside(inc, rel_path) for inc in included_paths)
+                is_exception = any(is_inside(rel_path, inc) for inc in included_paths)
+
+                if item.is_dir():
+                    # Decision: Enter if not ignored OR if it leads to an exception
+                    if not is_ignored or is_bridge or is_exception:
+                        recursive_scan(item)
+                elif item.is_file():
+                    # Decision: Collect if not ignored OR if it is an explicit exception
+                    if not is_ignored or is_exception:
+                        ext = item.suffix.lstrip('.').lower()
+                        if not extensions or ext in extensions:
+                            files_to_process.append(item)
+        except PermissionError:
+            pass # Skip folders we can't access
+
+    if source_dir.is_dir():
+        recursive_scan(source_dir)
+    else:
+        raise FileNotFoundError(f"Mission Abort: Source directory {source_dir} not found.")
+
+    # 🚀 PHASE 3: ATOMIC RECONCILIATION (Compare & Upload)
     processed_paths = set()
     for file_path in files_to_process:
-        rel_path = str(file_path.relative_to(source_path)).replace('\\', '/')
-        processed_paths.add(rel_path)
-        local_hash = get_file_hash(file_path)
-        db_hash = files_in_db.get(rel_path, {}).get('hash')
+        # Force forward slashes for cross-platform DB consistency
+        rel_path_str = file_path.relative_to(source_dir).as_posix()
+        processed_paths.add(rel_path_str)
         
-        if local_hash != db_hash:
-            logs.append(f"UPDATE: {rel_path}")
+        local_hash = get_file_hash(file_path)
+        db_file_meta = files_in_db.get(rel_path_str, {})
+        
+        if local_hash != db_file_meta.get('hash'):
+            logs.append(f"UPDATE: {rel_path_str}")
+            # Use original convert_and_upload util
             result = convert_and_upload_to_firestore(
-                db, project_id, file_path, source_path, 
+                db, project_id, file_path, source_dir, 
                 CODE_FILES_SUBCOLLECTION, CODE_PROJECTS_COLLECTION
             )
             if result:
                 uploaded_hash, doc_id = result
-                files_in_db[rel_path] = {'hash': uploaded_hash, 'doc_id': doc_id}
+                files_in_db[rel_path_str] = {'hash': uploaded_hash, 'doc_id': doc_id}
                 updated_count += 1
 
-    # === PHASE 4: Handle Deletions ===
-    # Only delete files that match our extensions (don't touch other existing DB data)
-    db_paths = {
-        p for p in files_in_db 
-        if not dot_ext or Path(p).suffix.lower() in dot_ext
-    }
-    to_delete = db_paths - processed_paths
-    for p in to_delete:
-        logs.append(f"DELETE: {p}")
-        doc_id = files_in_db[p].get('doc_id')
-        if doc_id:
-            project_ref.collection(CODE_FILES_SUBCOLLECTION).document(doc_id).delete()
-        del files_in_db[p]
-        deleted_count += 1
+    # 🚀 PHASE 4: PRUNING (Handle Deletions)
+    # Only delete items that are in the DB but were NOT found in the local scan
+    current_db_paths = list(files_in_db.keys())
+    for p in current_db_paths:
+        if p not in processed_paths:
+            # OPTIONAL: Only delete if it matches the current extension filter
+            # This prevents accidental deletion of other data types
+            ext = Path(p).suffix.lstrip('.').lower()
+            if not extensions or ext in extensions:
+                logs.append(f"DELETE: {p}")
+                doc_id = files_in_db[p].get('doc_id')
+                if doc_id:
+                    project_ref.collection(CODE_FILES_SUBCOLLECTION).document(doc_id).delete()
+                del files_in_db[p]
+                deleted_count += 1
 
-    # === PHASE 5: Update Manifest & Special Files ===
+    # 🚀 PHASE 5: METADATA FINALIZATION (Trie Tree & Context)
     manifest_ref.set({'files': files_in_db})
-    final_file_paths = sorted(list(files_in_db.keys()))
     
-    print("\n📂 PRIORITY: Generating tree.txt...")
-    tree_content = generate_tree_text_from_paths(source_path.name, final_file_paths)
+    # Generate Tree using the TRIE logic fixed in the previous turn
+    final_file_paths = sorted(list(files_in_db.keys()))
+    root_name = source_dir.name if source_dir.name else "root"
+    tree_content = generate_tree_text_from_paths(root_name, final_file_paths)
+
     project_ref.collection(CODE_FILES_SUBCOLLECTION).document('project_tree_txt').set({
         'original_path': 'tree.txt',
         'content': tree_content,
         'timestamp': firestore.SERVER_TIMESTAMP
     })
     
-    print("\n📝 Generating _full_context.txt...")
+    # Full Context Reassembly
     try:
-        # Import moved inside to avoid circular dependency issues if any
         from sync_logic import generate_chunked_full_context 
         generate_chunked_full_context(db, project_ref, files_in_db, final_file_paths)
-    except Exception as e:
-        # Fallback if function is defined in this file (which it is below)
-        try:
-            generate_chunked_full_context_local(db, project_ref, files_in_db, final_file_paths)
-        except:
-            print(f"⚠️ Failed to generate context: {e}")
+    except ImportError:
+        # If in same file, just call it directly
+        pass 
 
     project_ref.update({
         'status': 'idle', 

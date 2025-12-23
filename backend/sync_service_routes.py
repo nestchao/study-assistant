@@ -142,6 +142,21 @@ def run_sync_route(project_id):
         print(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
 
+@sync_service_bp.route('/sync/file/<project_id>', methods=['POST'])
+def sync_file_route(project_id):
+    try:
+        data = request.json
+        rel_path = data.get('file_path')
+        if not rel_path:
+            return jsonify({"error": "No file path"}), 400
+            
+        from sync_logic import sync_single_file
+        node_count = sync_single_file(db, project_id, rel_path)
+        
+        return jsonify({"success": True, "nodes": node_count})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 def force_reindex_project(project_id):
     print(f"\n🔄 FORCE RE-INDEX initiated for project: {project_id}")
     project_ref = db.collection(CODE_PROJECTS_COLLECTION).document(project_id)
