@@ -7,31 +7,35 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'dart:typed_data';
 import 'package:study_assistance/models/dependency_graph.dart';
 import 'package:http_parser/http_parser.dart';
+import 'dart:io' show Platform;
 
 class ApiService {
   late final String baseUrl;
 
   ApiService() {
     if (kIsWeb) {
-      // If we are on the web, ALWAYS use localhost. The browser will handle it.
+      // Browser logic
       baseUrl = 'http://localhost:5000';
+    } else if (Platform.isWindows) {
+      // Windows Native logic: MUST use localhost or 127.0.0.1
+      baseUrl = 'http://127.0.0.1:5000'; 
     } else {
-      // For mobile (Android/iOS), read the IP from the .env file.
-      // Provide a fallback for the emulator just in case.
+      // Android Emulator logic
       baseUrl = dotenv.env['API_URL'] ?? 'http://10.0.2.2:5000';
     }
+    print("API Base URL initialized as: $baseUrl");
   }
 
   // --- MODIFIED: SYNC SERVICE METHODS ---
   Future<List<Map<String, dynamic>>> getSyncProjects() async {
-  final response = await http.get(Uri.parse('$baseUrl/sync/projects'));
-  if (response.statusCode == 200) {
-    return List<Map<String, dynamic>>.from(json.decode(response.body));
+    final response = await http.get(Uri.parse('$baseUrl/sync/projects'));
+    if (response.statusCode == 200) {
+      return List<Map<String, dynamic>>.from(json.decode(response.body));
+    }
+    throw Exception('Failed to load sync projects');
   }
-  throw Exception('Failed to load sync projects');
-}
 
-Future<void> registerFolderToProject(
+  Future<void> registerFolderToProject(
     String projectId,
     String path,
     List<String> extensions,
@@ -55,7 +59,7 @@ Future<void> registerFolderToProject(
     }
   }
 
-Future<void> updateSyncProject(
+  Future<void> updateSyncProject(
     String projectId, {
     bool? isActive,
     List<String>? extensions,
@@ -80,12 +84,13 @@ Future<void> updateSyncProject(
     }
   }
 
-Future<void> deleteSyncFromProject(String projectId) async {
-  final response = await http.delete(Uri.parse('$baseUrl/sync/project/$projectId'));
-  if (response.statusCode != 200) {
-    throw Exception('Failed to delete sync from project');
+  Future<void> deleteSyncFromProject(String projectId) async {
+    final response =
+        await http.delete(Uri.parse('$baseUrl/sync/project/$projectId'));
+    if (response.statusCode != 200) {
+      throw Exception('Failed to delete sync from project');
+    }
   }
-}
 
   // GET /api/get-projects
   Future<List<Map<String, dynamic>>> getProjects() async {
@@ -135,11 +140,11 @@ Future<void> deleteSyncFromProject(String projectId) async {
   }
 
   Future<void> deleteProject(String projectId) async {
-    final response = await http.delete(Uri.parse('$baseUrl/delete-project/$projectId'));
+    final response =
+        await http.delete(Uri.parse('$baseUrl/delete-project/$projectId'));
     if (response.statusCode != 200) throw Exception('Failed to delete project');
   }
 
-  
   Future<void> createProject(String name) async {
     await http.post(
       Uri.parse('$baseUrl/create-project'),
@@ -149,13 +154,15 @@ Future<void> deleteSyncFromProject(String projectId) async {
   }
 
   Future<void> deleteSource(String projectId, String sourceId) async {
-    final response = await http.delete(Uri.parse('$baseUrl/delete-source/$projectId/$sourceId'));
+    final response = await http
+        .delete(Uri.parse('$baseUrl/delete-source/$projectId/$sourceId'));
     if (response.statusCode != 200) throw Exception('Failed to delete source');
   }
 
   // GET /api/get-sources/<project_id>
   Future<List<Map<String, dynamic>>> getSources(String projectId) async {
-    final response = await http.get(Uri.parse('$baseUrl/get-sources/$projectId'));
+    final response =
+        await http.get(Uri.parse('$baseUrl/get-sources/$projectId'));
     return List<Map<String, dynamic>>.from(json.decode(response.body));
   }
 
@@ -163,7 +170,7 @@ Future<void> deleteSyncFromProject(String projectId) async {
   // POST /api/upload-source/<project_id>
   Future<void> uploadSources(String projectId, List<PlatformFile> files) async {
     print("📤 Uploading ${files.length} files to project $projectId");
-    
+
     var request = http.MultipartRequest(
       'POST',
       Uri.parse('$baseUrl/upload-source/$projectId'),
@@ -171,13 +178,13 @@ Future<void> deleteSyncFromProject(String projectId) async {
 
     for (var file in files) {
       print("  Processing file: ${file.name} (Size: ${file.size})");
-      
+
       // FIX: Handle both Path (Desktop/Mobile) and Bytes (Web)
       if (kIsWeb) {
         // Web always provides bytes
         if (file.bytes != null) {
           request.files.add(http.MultipartFile.fromBytes(
-            'pdfs', 
+            'pdfs',
             file.bytes!,
             filename: file.name,
           ));
@@ -187,7 +194,7 @@ Future<void> deleteSyncFromProject(String projectId) async {
         // Mobile/Desktop usually provides path
         if (file.path != null) {
           request.files.add(await http.MultipartFile.fromPath(
-            'pdfs', 
+            'pdfs',
             file.path!,
             filename: file.name,
           ));
@@ -214,7 +221,7 @@ Future<void> deleteSyncFromProject(String projectId) async {
     print("  Sending request with ${request.files.length} parts...");
     var response = await request.send();
     var responseBody = await response.stream.bytesToString();
-    
+
     print("  Response status: ${response.statusCode}");
     // print("  Response body: $responseBody"); // Uncomment for detailed debug
 
@@ -225,7 +232,8 @@ Future<void> deleteSyncFromProject(String projectId) async {
 
   // GET /api/get-note/<project_id>/<source_id>
   Future<String> getNote(String projectId, String sourceId) async {
-    final response = await http.get(Uri.parse('$baseUrl/get-note/$projectId/$sourceId'));
+    final response =
+        await http.get(Uri.parse('$baseUrl/get-note/$projectId/$sourceId'));
     return json.decode(response.body)['note_html'] ?? '<p>No note</p>';
   }
 
@@ -264,7 +272,8 @@ Future<void> deleteSyncFromProject(String projectId) async {
     }
   }
 
-  Future<String?> uploadImageBytes(String projectId, Uint8List imageBytes, String fileName) async {
+  Future<String?> uploadImageBytes(
+      String projectId, Uint8List imageBytes, String fileName) async {
     final String base64Image = base64Encode(imageBytes);
 
     final response = await http.post(
@@ -289,7 +298,7 @@ Future<void> deleteSyncFromProject(String projectId) async {
   Future<Uint8List?> getMediaBytes(String mediaId, String projectId) async {
     final response = await http.get(
       Uri.parse('$baseUrl/media/get/$mediaId'),
-      headers: { 'X-User-ID': projectId },
+      headers: {'X-User-ID': projectId},
     );
 
     if (response.statusCode == 200) {
@@ -301,13 +310,14 @@ Future<void> deleteSyncFromProject(String projectId) async {
     return null;
   }
 
-  Future<bool> updateNote(String projectId, String sourceId, String newHtmlContent) async {
+  Future<bool> updateNote(
+      String projectId, String sourceId, String newHtmlContent) async {
     final response = await http.post(
       Uri.parse('$baseUrl/update-note/$projectId/$sourceId'),
       headers: {'Content-Type': 'application/json'},
       body: json.encode({'html_content': newHtmlContent}),
     );
-    
+
     if (response.statusCode == 200) {
       return true;
     } else {
@@ -318,7 +328,8 @@ Future<void> deleteSyncFromProject(String projectId) async {
 
   // --- NEW: Get Past Papers ---
   Future<List<Map<String, dynamic>>> getPastPapers(String projectId) async {
-    final response = await http.get(Uri.parse('$baseUrl/get-papers/$projectId'));
+    final response =
+        await http.get(Uri.parse('$baseUrl/get-papers/$projectId'));
     if (response.statusCode == 200) {
       // --- MODIFY THIS PART ---
       try {
@@ -330,7 +341,7 @@ Future<void> deleteSyncFromProject(String projectId) async {
       throw Exception('Failed to load past papers');
     }
   }
-  
+
   // --- NEW: Upload Past Paper ---
   Future<Map<String, dynamic>> uploadPastPaper(
     String projectId,
@@ -373,25 +384,26 @@ Future<void> deleteSyncFromProject(String projectId) async {
     );
 
     if (response.statusCode != 200) {
-      final error = json.decode(response.body)['error'] ?? 'Failed to delete past paper';
+      final error =
+          json.decode(response.body)['error'] ?? 'Failed to delete past paper';
       throw Exception(error);
     }
   }
 
   Future<Map<String, dynamic>> runSync(String projectId) async {
-  final response = await http.post(Uri.parse('$baseUrl/sync/run/$projectId'));
-  if (response.statusCode == 200) {
-    return json.decode(response.body);
+    final response = await http.post(Uri.parse('$baseUrl/sync/run/$projectId'));
+    if (response.statusCode == 200) {
+      return json.decode(response.body);
+    }
+    final error = json.decode(response.body)['error'] ?? 'Failed to run sync';
+    throw Exception(error);
   }
-  final error = json.decode(response.body)['error'] ?? 'Failed to run sync';
-  throw Exception(error);
-  }
-
 
   // --- CODE CONVERTER METHODS ---
 
   Future<Map<String, dynamic>> getProjectFileStructure(String projectId) async {
-    final response = await http.get(Uri.parse('$baseUrl/code-converter/structure/$projectId'));
+    final response = await http
+        .get(Uri.parse('$baseUrl/code-converter/structure/$projectId'));
     if (response.statusCode == 200) {
       return json.decode(response.body);
     }
@@ -400,15 +412,17 @@ Future<void> deleteSyncFromProject(String projectId) async {
 
   Future<String> getFileContent(String projectId, String docId) async {
     // Call the new, correct endpoint
-    final response = await http.get(Uri.parse('$baseUrl/code-converter/file/$projectId/$docId'));
-    
+    final response = await http
+        .get(Uri.parse('$baseUrl/code-converter/file/$projectId/$docId'));
+
     if (response.statusCode == 200) {
       // The backend returns JSON: {"content": "...", "original_path": "..."}
       final data = json.decode(response.body);
       return data['content'] ?? 'Error: Content field missing in response.';
     }
-    
-    print("Failed to get file content, Status: ${response.statusCode}, Body: ${response.body}");
+
+    print(
+        "Failed to get file content, Status: ${response.statusCode}, Body: ${response.body}");
     throw Exception('Failed to get file content');
   }
 
@@ -420,7 +434,8 @@ Future<void> deleteSyncFromProject(String projectId) async {
 
     if (response.statusCode == 200) {
       final data = json.decode(response.body);
-      return data['note_html'] ?? '<p>Error: Regeneration failed to return content.</p>';
+      return data['note_html'] ??
+          '<p>Error: Regeneration failed to return content.</p>';
     } else {
       final errorData = json.decode(response.body);
       throw Exception(errorData['error'] ?? 'Failed to regenerate note');
@@ -441,7 +456,7 @@ Future<void> deleteSyncFromProject(String projectId) async {
         'prompt': prompt,
       }),
     );
-    
+
     if (response.statusCode == 200) {
       return json.decode(response.body)['suggestion'] ?? 'No suggestion';
     } else {
@@ -456,16 +471,17 @@ Future<void> deleteSyncFromProject(String projectId) async {
       headers: {'Content-Type': 'application/json'},
       body: json.encode({'name': name}),
     );
-    
+
     if (response.statusCode == 200 || response.statusCode == 201) {
       final data = json.decode(response.body);
       return data['id']; // The backend returns {"id": "project_id"}
     }
-    
+
     throw Exception('Failed to create project: ${response.statusCode}');
   }
 
-  Future<List<Map<String, dynamic>>> getRetrievalCandidates(String projectId, String prompt) async {
+  Future<List<Map<String, dynamic>>> getRetrievalCandidates(
+      String projectId, String prompt) async {
     final response = await http.post(
       Uri.parse('$baseUrl/retrieve-context-candidates'),
       headers: {'Content-Type': 'application/json'},
@@ -483,7 +499,8 @@ Future<void> deleteSyncFromProject(String projectId) async {
     throw Exception('Failed to retrieve candidates: ${response.body}');
   }
 
-  Future<String> generateAnswerFromContext(String projectId, String prompt, List<String> selectedIds) async {
+  Future<String> generateAnswerFromContext(
+      String projectId, String prompt, List<String> selectedIds) async {
     final response = await http.post(
       Uri.parse('$baseUrl/generate-answer-from-context'),
       headers: {'Content-Type': 'application/json'},
@@ -500,7 +517,8 @@ Future<void> deleteSyncFromProject(String projectId) async {
     throw Exception('Failed to generate answer: ${response.body}');
   }
 
-  Future<DependencyGraph> getDependencyGraph(String projectId, String nodeId) async {
+  Future<DependencyGraph> getDependencyGraph(
+      String projectId, String nodeId) async {
     final response = await http.post(
       Uri.parse('$baseUrl/get-dependency-subgraph'),
       body: json.encode({'project_id': projectId, 'node_id': nodeId}),
