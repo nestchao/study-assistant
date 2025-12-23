@@ -1,3 +1,4 @@
+import path from 'path';
 import * as vscode from 'vscode';
 import { StudyHubProvider } from './providers/StudyHubProvider';
 import { PaperSolverProvider } from './providers/PaperSolverProvider';
@@ -37,6 +38,34 @@ export async function activate(context: vscode.ExtensionContext) {
         // Generate project ID from workspace path
         currentProjectId = Buffer.from(workspacePath).toString('base64').replace(/[^a-zA-Z0-9]/g, '_');
     }
+
+    const autoSyncDisposable = vscode.workspace.onDidSaveTextDocument(async (document) => {
+        // Guard 1: Don't sync if no project is loaded
+        if (!currentProjectId) return;
+
+        // Guard 2: Don't sync the AI's own context files or ignored types
+        const ext = path.extname(document.fileName).toLowerCase();
+        if (ext === '.txt' || ext === '.json' || document.uri.scheme !== 'file') return;
+
+        // Guard 3: Only sync if the file is inside the current workspace
+        const workspaceFolder = vscode.workspace.getWorkspaceFolder(document.uri);
+        if (!workspaceFolder) return;
+
+        const relativePath = path.relative(workspaceFolder.uri.fsPath, document.fileName)
+                                 .split(path.sep)
+                                 .join('/');
+
+        // Perform the sync in the background (Silent)
+        try {
+            await backendClient.syncSingleFile(currentProjectId, relativePath);
+            // Non-intrusive feedback in the status bar
+            vscode.window.setStatusBarMessage(`$(sync~spin) AI Synced: ${path.basename(relativePath)}`, 2000);
+        } catch (e) {
+            console.error("Auto-sync failed:", e);
+        }
+    });
+
+    context.subscriptions.push(autoSyncDisposable);
 
     // ==================== Register Providers ====================
 
@@ -170,6 +199,49 @@ export async function activate(context: vscode.ExtensionContext) {
                     vscode.window.showInformationMessage(`✅ Sync complete. Indexed ${count} items.`);
                 } catch (error: any) {
                     vscode.window.showErrorMessage(`Sync failed: ${error.message}`);
+                }
+            });
+        })
+    );
+
+    // Inside activate()
+    context.subscriptions.push(
+        vscode.commands.registerCommand('studyAssistant.syncCurrentFile', async (uri: vscode.Uri) => {
+            // FIX 2: Better Guard Clauses
+            const targetUri = uri || vscode.window.activeTextEditor?.document.uri;
+            
+            if (!currentProjectId) {
+                vscode.window.showErrorMessage("Study Assistant: No active workspace found to sync.");
+                return;
+            }
+
+            if (!targetUri) {
+                vscode.window.showWarningMessage("Study Assistant: No file selected to sync.");
+                return;
+            }
+
+            const workspaceFolder = vscode.workspace.getWorkspaceFolder(targetUri);
+            if (!workspaceFolder) {
+                vscode.window.showErrorMessage("Study Assistant: File is outside the current workspace.");
+                return;
+            }
+
+            // FIX 3: Robust Path Normalization for C++ Backend
+            const relativePath = path.relative(workspaceFolder.uri.fsPath, targetUri.fsPath)
+                                     .split(path.sep)
+                                     .join('/');
+
+            await vscode.window.withProgress({
+                location: vscode.ProgressLocation.Window, // Use Window location for "Atomic" feel
+                title: `$(sync~spin) Syncing: ${path.basename(relativePath)}`,
+                cancellable: false
+            }, async () => {
+                try {
+                    await backendClient.syncSingleFile(currentProjectId!, relativePath);
+                    // Feedback loop for SpaceX-Level UX
+                    vscode.window.setStatusBarMessage(`$(check) ${path.basename(relativePath)} Synced to AI Index`, 3000);
+                } catch (e: any) {
+                    vscode.window.showErrorMessage(`Atomic Sync Failed: ${e.message}`);
                 }
             });
         })

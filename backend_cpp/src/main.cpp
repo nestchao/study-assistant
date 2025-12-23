@@ -42,6 +42,7 @@ private:
     int port_;
     httplib::Server server_;
     ThreadPool thread_pool_;
+    std::mutex store_mutex;
 
     std::shared_ptr<code_assistance::EmbeddingService> embedding_service_;
     std::shared_ptr<code_assistance::CacheManager> cache_manager_;
@@ -182,6 +183,55 @@ private:
                 res.set_content(json{{"error", e.what()}}.dump(), "application/json");
             }
         });
+
+        server_.Post("/sync/file/:project_id", [this](const httplib::Request& req, httplib::Response& res) {
+            try {
+                auto project_id = req.path_params.at("project_id");
+                auto body = json::parse(req.body);
+                std::string relative_path = body.value("file_path", "");
+
+                if (relative_path.empty()) throw std::runtime_error("Missing file_path");
+
+                spdlog::info("🎯 Real-time Sync Triggered: {}/{}", project_id, relative_path);
+
+                // Capture 'this' and variables needed for the background task
+                thread_pool_.enqueue([this, project_id, relative_path]() {
+                    try {
+                        code_assistance::SyncService sync_service(embedding_service_);
+                        json config = load_project_config(project_id);
+                        
+                        // 🚀 THE FIX: Convert paths to strings for the SyncService API
+                        std::string storage_path = config.value("storage_path", "");
+                        if (storage_path.empty()) {
+                            storage_path = (fs::path("data") / project_id).string();
+                        }
+                        
+                        std::string local_root = config.value("local_path", "");
+
+                        // Perform Incremental Sync
+                        auto nodes = sync_service.sync_single_file(project_id, local_root, storage_path, relative_path);
+                        
+                        // Update the Vector Store in memory
+                        if (project_stores_.count(project_id)) {
+                            project_stores_[project_id]->add_nodes(nodes);
+                            
+                            // 🚀 THE FIX: Argument 1 conversion from path to string
+                            fs::path store_dir = fs::path(storage_path) / "vector_store";
+                            project_stores_[project_id]->save(store_dir.string()); 
+                        }
+                        
+                        spdlog::info("✅ File Sync Complete: {}", relative_path);
+                    } catch (const std::exception& e) {
+                        spdlog::error("❌ File Sync Failed for {}: {}", relative_path, e.what());
+                    }
+                });
+
+                res.set_content(json{{"success", true}}.dump(), "application/json");
+            } catch (const std::exception& e) {
+                res.status = 500;
+                res.set_content(json{{"error", e.what()}}.dump(), "application/json");
+            }
+        });
     }
 
     std::vector<std::string> get_json_list(const json& body, const std::string& key1, const std::string& key2) {
@@ -299,53 +349,95 @@ private:
         }
     }
 
+    std::string clean_internal_path(std::string path) {
+        // 1. Convert backslashes to forward slashes for consistency
+        std::replace(path.begin(), path.end(), '\\', '/');
+
+        // 2. Locate the "converted_files/" marker
+        std::string marker = "converted_files/";
+        size_t pos = path.find(marker);
+        
+        if (pos != std::string::npos) {
+            // Strip everything up to and including "converted_files/"
+            std::string cleaned = path.substr(pos + marker.length());
+            
+            // 3. Remove the trailing ".txt" added by the converter
+            if (cleaned.length() > 4 && cleaned.substr(cleaned.length() - 4) == ".txt") {
+                cleaned = cleaned.substr(0, cleaned.length() - 4);
+            }
+            return cleaned;
+        }
+        
+        // 4. Fallback: If it's just in the hidden folder but not converted_files
+        if (path.find(".study_assistant/") != std::string::npos) {
+            size_t last_slash = path.find_last_of('/');
+            return path.substr(last_slash + 1);
+        }
+
+        return path;
+    }
+
     void handle_generate_suggestion(const httplib::Request& req, httplib::Response& res) {
         auto start_time = std::chrono::high_resolution_clock::now();
         std::string project_id;
-        std::string prompt;
-        std::string final_prompt;
-        std::string suggestion;
+        std::string user_prompt;
+        std::string final_ai_prompt; // Unified name
+        std::string ai_response;
+
         try {
             auto body = json::parse(req.body);
             project_id = body["project_id"];
-            prompt = body["prompt"];
-            spdlog::info("🤖 Generating suggestion for: {}", prompt);
+            user_prompt = body["prompt"];
             
             auto store = load_vector_store(project_id);
-            if (!store) throw std::runtime_error("Project not indexed. Please sync first.");
+            if (!store) throw std::runtime_error("Project not indexed.");
             
-            std::string search_query = prompt;
-            if (body.value("use_hyde", false)) { 
-                code_assistance::HyDEGenerator hyde(embedding_service_);
-                std::string hyde_text = hyde.generate_hyde(prompt);
-                search_query += "\n" + hyde_text;
-            }
-            
-            auto query_emb = embedding_service_->generate_embedding(search_query);
+            // 1. Retrieval
+            auto query_emb = embedding_service_->generate_embedding(user_prompt);
             code_assistance::RetrievalEngine engine(store);
-            auto results = engine.retrieve(prompt, query_emb, 80, true);
-            std::string context = engine.build_hierarchical_context(results, 32000); // Optimized size
+            auto results = engine.retrieve(user_prompt, query_emb, 80, true);
+            std::string rag_context = engine.build_hierarchical_context(results, 32000);
+
+            // 2. Metadata Cleaning
+            std::string raw_active_path = body.value("active_file_path", "Unknown");
+            std::string active_content = body.value("active_file_content", "");
+            std::string clean_path = clean_internal_path(raw_active_path);
+
+            // 3. Prompt Construction
+            final_ai_prompt = 
+                "### ROLE\n"
+                "You are a Senior Software Architect with project-wide write access.\n"
+                "Your primary focus is: " + clean_path + ".\n\n"
+                "### INSTRUCTIONS (STRICT PROTOCOL)\n"
+                "1. If you are suggesting code changes, you MUST use triple backticks: ```language ... ```\n"
+                "2. At the VERY FIRST LINE inside the code block, you MUST specify the target file using this tag:\n"
+                "   // [TARGET: path/to/file.ext]\n"
+                "3. DO NOT include explanations OR natural language INSIDE the code block. Use comments instead.\n"
+                "4. DO NOT ramble. If the user asks to write to a file, just provide the code block for that file.\n\n"
+                "### CONTEXT\n" + rag_context + "\n\n"
+                "### USER QUESTION\n" + user_prompt + "\n\n"
+                "### ANSWER (Code First)\n";
+
+            // 4. Dispatch to Gemini
+            spdlog::info("🚀 Calling Gemini API for: {}", clean_path);
+            ai_response = embedding_service_->generate_text(final_ai_prompt);
             
-            final_prompt = "### ROLE\nYou are a Senior Software Architect.\n\n### CONTEXT\n" + context + "\n\n### USER QUESTION\n" + prompt + "\n\n### INSTRUCTIONS\nAnswer based ONLY on the code context. Cite filenames.\n\n### ANSWER\n";
-            suggestion = embedding_service_->generate_text(final_prompt);
-            res.set_content(json{{"suggestion", suggestion}}.dump(), "application/json");
+            // 5. Transmit to Extension
+            res.set_content(json{{"suggestion", ai_response}}.dump(), "application/json");
+
         } catch (const std::exception& e) {
             spdlog::error("❌ Generation error: {}", e.what());
             res.status = 500;
             res.set_content(json{{"error", e.what()}}.dump(), "application/json");
-            suggestion = "Error: " + std::string(e.what());
         }
-        auto end_time = std::chrono::high_resolution_clock::now();
-        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
+
+        // Telemetry
+        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::high_resolution_clock::now() - start_time).count();
+        
         code_assistance::LogManager::instance().add_log({
-            std::chrono::system_clock::to_time_t(std::chrono::system_clock::now()),
-            project_id,
-            prompt.substr(0, 50) + (prompt.length() > 50 ? "..." : ""),
-            prompt,   
-            final_prompt,
-            suggestion,
-            0,
-            (double)duration
+            std::time(nullptr), project_id, user_prompt, user_prompt, 
+            final_ai_prompt, ai_response, 0, (double)duration
         });
     }
 
@@ -391,10 +483,15 @@ private:
 
     // --- SMART INDEX LOADING ---
     std::shared_ptr<code_assistance::FaissVectorStore> load_vector_store(const std::string& project_id) {
-        // 1. Check Memory Cache
-        if (project_stores_.count(project_id)) return project_stores_[project_id];
+        // 🚀 STEP 1: Lock immediately to prevent race conditions on the map
+        std::lock_guard<std::mutex> lock(store_mutex);
 
-        // 2. Determine Path
+        // 🚀 STEP 2: Check Memory Cache (Atomic lookup)
+        if (project_stores_.count(project_id)) {
+            return project_stores_[project_id];
+        }
+
+        // 🚀 STEP 3: Determine Path logic
         json config = load_project_config(project_id);
         std::string storage_path = config.value("storage_path", "");
         
@@ -411,11 +508,20 @@ private:
             spdlog::warn("⚠️ Index not found at {}", vector_path.string());
             return nullptr;
         }
-        
-        auto store = std::make_shared<code_assistance::FaissVectorStore>(768);
-        store->load(vector_path.string());
-        project_stores_[project_id] = store;
-        return store;
+
+        // 🚀 STEP 4: Physical Disk Load
+        try {
+            spdlog::info("📂 Loading FAISS index into memory for project: {}", project_id);
+            auto store = std::make_shared<code_assistance::FaissVectorStore>(768);
+            store->load(vector_path.string());
+            
+            // Cache it for the next request
+            project_stores_[project_id] = store;
+            return store;
+        } catch (const std::exception& e) {
+            spdlog::error("❌ Failed to load vector store: {}", e.what());
+            return nullptr;
+        }
     }
 };
 

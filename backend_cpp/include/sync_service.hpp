@@ -32,6 +32,13 @@ public:
         const std::vector<std::string>& included_paths
     );
 
+    std::vector<std::shared_ptr<CodeNode>> sync_single_file(
+        const std::string& project_id,
+        const std::string& local_root,
+        const std::string& storage_path,
+        const std::string& relative_path
+    );
+
 private:
     std::shared_ptr<EmbeddingService> embedding_service_;
 
