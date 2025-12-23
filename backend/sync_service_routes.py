@@ -48,9 +48,15 @@ def register_folder(project_id):
 
     try:
         project_ref = db.collection(CODE_PROJECTS_COLLECTION).document(project_id)
+
+        doc_snapshot = project_ref.get()
+        existing_data = doc_snapshot.to_dict() if doc_snapshot.exists else {}
+        
+        # Use provided name, or existing name, or fallback to project_id
+        current_name = data.get('name') or existing_data.get('name') or project_id
         
         config_data = {
-            "name": project_id, # Ensure it has a name if creating new
+            "name": current_name, 
             "local_path": local_path,
             "allowed_extensions": allowed_extensions,
             "ignored_paths": ignored_paths,
@@ -99,21 +105,33 @@ def update_sync_project(project_id):
 def delete_sync_project(project_id):
     try:
         project_ref = db.collection(CODE_PROJECTS_COLLECTION).document(project_id)
-        # Unregister by setting local_path to None and deactivating
-        project_ref.update({
-            "local_path": None, 
-            "is_active": False, 
-            "status": "unregistered",
-            "included_paths": firestore.DELETE_FIELD,
-            "ignored_paths": firestore.DELETE_FIELD,
-            "allowed_extensions": firestore.DELETE_FIELD
-        })
+        
+        # 1. Delete Subcollections (Firestore requires manual deletion)
+        print(f"🗑️ Deleting files subcollection for {project_id}...")
+        files_coll = project_ref.collection(CODE_FILES_SUBCOLLECTION)
+        delete_collection(files_coll, batch_size=50)
+
+        print(f"🗑️ Deleting graph nodes subcollection for {project_id}...")
+        graph_coll = project_ref.collection(CODE_GRAPH_COLLECTION)
+        delete_collection(graph_coll, batch_size=50)
+
+        # 2. Delete the Project Document
+        project_ref.delete()
+        print(f"✅ Deleted project document: {project_id}")
+
+        # 3. Delete Vector Store (Local Files)
         store_path = VECTOR_STORE_ROOT / project_id
         if store_path.exists():
             shutil.rmtree(store_path)
+            print(f"🗑️ Deleted vector store at {store_path}")
+
         return jsonify({"success": True})
     except Exception as e:
+        import traceback
+        print(f"❌ Error deleting project: {e}")
+        print(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
+
 
 @sync_service_bp.route('/sync/run/<project_id>', methods=['POST'])
 def run_sync_route(project_id):
