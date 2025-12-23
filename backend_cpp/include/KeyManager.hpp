@@ -102,6 +102,7 @@ public:
 
     std::string get_current_key() const {
         if (api_keys.empty()) return "";
+        // Thread-safe access to the rotated index
         return api_keys[current_key_index.load() % api_keys.size()];
     }
 

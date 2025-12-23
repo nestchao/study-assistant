@@ -335,37 +335,6 @@ def convert_and_upload_to_firestore(db, project_id, file_path, source_root, sub_
         print(f"    -> FAILED {rel_path_str}: {e}")
         return None
 
-def generate_tree_text_from_paths(root_name: str, file_paths: list) -> str:
-    """
-    Builds a tree structure string from a flat list of relative file paths.
-    """
-    tree = {}
-    for path_str in file_paths:
-        parts = Path(path_str).parts
-        d = tree
-        for part in parts[:-1]:
-            d = d.setdefault(part, {})
-        d[parts[-1]] = parts[-1] # Value can be anything, we only care about keys
-
-    def build_lines(sub_tree, prefix=""):
-        lines = []
-        items = sorted(sub_tree.keys())
-        for i, key in enumerate(items):
-            is_last = (i == len(items) - 1)
-            connector = "└── " if is_last else "├── "
-            value = sub_tree[key]
-            
-            if isinstance(value, dict): # It's a directory
-                lines.append(f"{prefix}{connector}{key}/")
-                new_prefix = prefix + ("    " if is_last else "│   ")
-                lines.extend(build_lines(value, new_prefix))
-            else: # It's a file
-                lines.append(f"{prefix}{connector}{key}")
-        return lines
-
-    tree_lines = build_lines(tree)
-    return f"{root_name}/\n" + "\n".join(tree_lines)
-
 # cache
 class SimpleL1Cache:
     def __init__(self, max_size=256, ttl=10):
@@ -408,83 +377,50 @@ L1_CACHE = SimpleL1Cache(max_size=512, ttl=20)
 
 def generate_tree_text_from_paths(root_name: str, file_paths: list) -> str:
     """
-    Builds a visual tree structure string from a flat list of relative file paths.
-    
-    Example output:
-    project_root/
-    ├── backend/
-    │   ├── app.py
-    │   └── utils.py
-    └── frontend/
-        └── index.html
-    
-    Args:
-        root_name: The name of the root directory
-        file_paths: List of relative file paths (e.g., ['backend/app.py', 'frontend/index.html'])
-    
-    Returns:
-        A formatted tree structure as a string
+    Industrial-grade Tree Generator using Trie traversal.
+    Ensures perfect vertical bar continuity and trailing slash folder indicators.
     """
-    # Build nested dictionary structure
-    tree = {}
+    # 1. Build a Trie (Prefix Tree) from the flat list of paths
+    trie = {}
     for path_str in file_paths:
+        # Use Path.parts to handle both \ and / correctly
         parts = Path(path_str).parts
-        current_dict = tree
-        
-        # Navigate through directories
-        for part in parts[:-1]:
-            current_dict = current_dict.setdefault(part, {})
-        
-        # Mark the final file
-        current_dict[parts[-1]] = None  # None indicates a file (not a directory)
+        current_level = trie
+        for part in parts:
+            if part not in current_level:
+                current_level[part] = {}
+            current_level = current_level[part]
 
-    def build_tree_lines(sub_tree, prefix="", is_last_list=None):
-        """
-        Recursively builds the tree lines with proper box-drawing characters.
-        
-        Args:
-            sub_tree: Current dictionary node
-            prefix: The string prefix for the current line (contains │, ├, └, etc.)
-            is_last_list: List tracking if each level is the last item
-        """
-        if is_last_list is None:
-            is_last_list = []
-            
+    # 2. Recursive walk with "Last-Sibling" detection
+    def walk_trie(node, prefix=""):
         lines = []
-        items = sorted(sub_tree.keys())
+        # Sort keys to maintain alphabetical order (standard tree behavior)
+        items = sorted(node.keys())
         
-        for i, key in enumerate(items):
+        for i, name in enumerate(items):
             is_last = (i == len(items) - 1)
-            value = sub_tree[key]
             
-            # Determine connector character
+            # Use standard box-drawing characters
             connector = "└── " if is_last else "├── "
             
-            if value is None:
-                # It's a file
-                lines.append(f"{prefix}{connector}{key}")
-            else:
-                # It's a directory
-                lines.append(f"{prefix}{connector}{key}/")
-                
-                # Prepare prefix for children
+            # Folders are nodes that have children in the Trie
+            is_dir = len(node[name]) > 0
+            display_name = f"{name}/" if is_dir else name
+            
+            lines.append(f"{prefix}{connector}{display_name}")
+            
+            # If it's a directory, recurse into children
+            if is_dir:
+                # If this is the last sibling, the children's prefix is empty space.
+                # If there are more siblings below, the children's prefix needs a vertical bar.
                 extension = "    " if is_last else "│   "
-                new_prefix = prefix + extension
-                
-                # Recursively process children
-                child_lines = build_tree_lines(value, new_prefix, is_last_list + [is_last])
-                lines.extend(child_lines)
-                
+                lines.extend(walk_trie(node[name], prefix + extension))
+        
         return lines
 
-    # Generate the tree
-    tree_lines = build_tree_lines(tree)
-    
-    # Combine with root name
-    full_tree = f"{root_name}/\n" + "\n".join(tree_lines)
-    
-    return full_tree
-
+    # 3. Generate final string
+    tree_lines = walk_trie(trie)
+    return f"{root_name}/\n" + "\n".join(tree_lines)
 
 def generate_tree_with_stats(root_name: str, file_paths: list, files_metadata: dict = None) -> str:
     """

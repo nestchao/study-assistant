@@ -13,6 +13,29 @@
   "main": "./dist/extension.js",
   
   "contributes": {
+    "commands": [
+        {
+            "command": "studyAssistant.syncCurrentFile",
+            "title": "Study Assistant: Sync File",
+            "icon": "$(sync)"
+        }
+    ],
+    "menus": {
+        "explorer/context": [
+            {
+                "command": "studyAssistant.syncCurrentFile",
+                "group": "navigation",
+                "when": "resourceExtname != .txt"
+            }
+        ],
+        "editor/title": [
+            {
+                "command": "studyAssistant.syncCurrentFile",
+                "group": "navigation",
+                "when": "resourceExtname != .txt"
+            }
+        ]
+    },
     "configuration": {
       "title": "Study Assistant",
       "properties": {
