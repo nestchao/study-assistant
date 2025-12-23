@@ -1,100 +1,52 @@
 // lib/screens/workspace_panels.dart
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import 'package:study_assistance/provider/project_provider.dart';
 import 'package:flutter_html/flutter_html.dart';
 import 'package:super_clipboard/super_clipboard.dart';
+import 'package:study_assistance/models/project.dart'; // Ensure Source model is imported
 
-class SourceTile extends StatelessWidget {
+// Shared Constants for Styling
+const Color kNotebookBg = Color(0xFFF0F4F9);
+const Color kSecondaryText = Color(0xFF444746);
+
+// --- SHARED COMPONENTS ---
+
+class PanelHeader extends StatelessWidget {
   final String title;
   final IconData icon;
-  final bool isSelected;
-  final bool isDeleting;
-  final VoidCallback? onTap;
-  final VoidCallback? onDelete;
+  final Color iconColor;
 
-  const SourceTile({
-    super.key,
-    required this.title,
-    required this.icon,
-    this.isSelected = false,
-    this.isDeleting = false,
-    this.onTap,
-    this.onDelete,
-  });
+  const PanelHeader({super.key, required this.title, required this.icon, required this.iconColor});
 
   @override
   Widget build(BuildContext context) {
-    // Use an indigo color scheme for selection to match the TabBars
-    const Color selectedColor = Colors.indigo;
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4.0),
-      child: Material(
-        color: isSelected ? selectedColor.withOpacity(0.3) : Colors.transparent,
-        borderRadius: BorderRadius.circular(8),
-        child: InkWell(
-          onTap: isDeleting ? null : onTap, // Disable tap while deleting
-          borderRadius: BorderRadius.circular(8),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(
-                color: isSelected ? selectedColor : Colors.grey[300]!,
-              ),
-            ),
-            child: Row(
-              children: [
-                Icon(icon, color: isSelected ? selectedColor : Colors.grey[700]),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    title,
-                    style: TextStyle(
-                      fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                      color: Colors.black87,
-                    ),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-                // This logic determines which trailing widget to show
-                if (isDeleting)
-                  const SizedBox(
-                    width: 24,
-                    height: 24,
-                    child: Padding(
-                      padding: EdgeInsets.all(4.0),
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    ),
-                  )
-                else if (onDelete != null)
-                  IconButton(
-                    icon: Icon(Icons.delete_outline, color: Colors.grey[600]),
-                    onPressed: onDelete,
-                    tooltip: 'Delete Source',
-                    splashRadius: 20,
-                  )
-                else if (isSelected)
-                  const Icon(Icons.check_circle, color: selectedColor, size: 20),
-              ],
-            ),
+    return Container(
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        border: Border(bottom: BorderSide(color: Color(0xFFE0E0E0), width: 0.5)),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: iconColor, size: 22),
+          const SizedBox(width: 12),
+          Text(
+            title,
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: kSecondaryText),
           ),
-        ),
+        ],
       ),
     );
   }
 }
 
 // --- PANEL 1: SOURCES ---
+
 class SourcesPanel extends StatelessWidget {
   final ScrollController? scrollController;
-
-  const SourcesPanel({
-    super.key,
-    this.scrollController, // Make the controller an optional named parameter
-  });
+  const SourcesPanel({super.key, this.scrollController});
 
   @override
   Widget build(BuildContext context) {
@@ -102,66 +54,76 @@ class SourcesPanel extends StatelessWidget {
     final sources = p.sources;
     final selected = p.selectedSource;
 
-    final listView = ListView.builder(
-      controller: scrollController,
-      padding: const EdgeInsets.all(8), // Add padding around the whole list
-      itemCount: sources.length + 1, // +1 for the "All Sources" tile
-      itemBuilder: (ctx, i) {
-        // First item is always "All Sources"
-        if (i == 0) {
-          return SourceTile(
-            title: 'All Sources',
-            icon: Icons.all_inclusive_rounded,
-            isSelected: selected == null, // Selected if no specific source is chosen
-            onTap: () => p.selectSource(null),
-            // No delete button for "All Sources"
-          );
-        }
-
-        // Adjust index for the sources list
-        final s = sources[i - 1];
-        
-        // Return a SourceTile for each actual source file
-        return SourceTile(
-          title: s.filename,
-          icon: Icons.picture_as_pdf_rounded,
-          isSelected: s.id == selected?.id,
-          isDeleting: s.id == p.deletingSourceId, // Check if this source is being deleted
-          onTap: () => p.selectSource(s),
-          onDelete: () => _showDeleteSourceConfirmDialog(context, p, s),
-        );
-      },
-    );
-
-    // This is the UI code that needs correction
     return Container(
       color: Colors.white,
       child: Column(
         children: [
-          // Header
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: Colors.blue[50],
-              border: Border(bottom: BorderSide(color: Colors.grey[300]!)),
-            ),
-            child: Row(children: [
-              Icon(Icons.folder_open, color: Colors.blue[700]),
-              const SizedBox(width: 8),
-              const Text("Sources",
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-            ]),
-          ),
-          // Scrollable List
+          PanelHeader(title: "Sources", icon: Icons.folder_outlined, iconColor: Colors.blue[700]!),
           Expanded(
             child: p.isLoadingSources
-                ? const Center(child: CircularProgressIndicator())
-                : scrollController != null
-                    ? Scrollbar(controller: scrollController, thumbVisibility: true, child: listView)
-                    : listView,
+                ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
+                : ListView.builder(
+                    controller: scrollController,
+                    padding: const EdgeInsets.all(16),
+                    itemCount: sources.length + 1,
+                    itemBuilder: (ctx, i) {
+                      if (i == 0) {
+                        return _SourceTile(
+                          title: 'All Sources',
+                          icon: Icons.all_inclusive_rounded,
+                          isSelected: selected == null,
+                          onTap: () => p.selectSource(null),
+                          color: const Color(0xFFF3E5F5), // Light Purple
+                        );
+                      }
+                      final s = sources[i - 1];
+                      return _SourceTile(
+                        title: s.filename,
+                        icon: Icons.description_outlined,
+                        isSelected: s.id == selected?.id,
+                        isDeleting: s.id == p.deletingSourceId,
+                        onTap: () => p.selectSource(s),
+                        onDelete: () => _showDeleteSourceConfirmDialog(context, p, s),
+                        color: i % 2 == 0 ? const Color(0xFFE3F2FD) : const Color(0xFFE8F5E9),
+                      );
+                    },
+                  ),
           ),
-          // Upload Footer
-          _uploadFooter(p, sources),
+          _buildUploadFooter(p, sources),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildUploadFooter(ProjectProvider p, List<Source> s) {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        border: Border(top: BorderSide(color: Color(0xFFE0E0E0), width: 0.5)),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ElevatedButton.icon(
+            onPressed: p.isUploading ? null : p.pickAndUploadFiles,
+            icon: p.isUploading
+                ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                : const Icon(Icons.add, size: 20),
+            label: Text(p.isUploading ? "Uploading..." : "Add sources"),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.black,
+              foregroundColor: Colors.white,
+              minimumSize: const Size(double.infinity, 52),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(26)),
+              elevation: 0,
+            ),
+          ),
+          if (s.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 12),
+              child: Text("${s.length} total sources", style: const TextStyle(fontSize: 12, color: Colors.grey)),
+            ),
         ],
       ),
     );
@@ -171,58 +133,95 @@ class SourcesPanel extends StatelessWidget {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Delete Source?'),
-        content: Text('Are you sure you want to delete "${s.filename}"? This process cannot be undone.'),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text('Remove Source?'),
+        content: Text('Delete "${s.filename}" from this project?'),
         actions: [
-          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Cancel')),
-          TextButton(
-            onPressed: () {
-              Navigator.of(ctx).pop();
-              p.deleteSource(s.id); // Call the provider method
-            },
-            child: const Text('Delete', style: TextStyle(color: Colors.red)),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white, elevation: 0),
+            onPressed: () { Navigator.pop(ctx); p.deleteSource(s.id); },
+            child: const Text('Delete'),
           ),
         ],
       ),
     );
   }
+}
 
-  Widget _uploadFooter(ProjectProvider p, List<Source> s) => Container(
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration( // Changed to decoration for border
-            color: Colors.white,
-            border: Border(top: BorderSide(color: Colors.grey[200]!))),
-        child: Column(
-          children: [
-            ElevatedButton.icon(
-              onPressed: p.isUploading ? null : p.pickAndUploadFiles,
-              icon: p.isUploading
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(
-                          strokeWidth: 2, color: Colors.white))
-                  : const Icon(Icons.upload_file),
-              label: Text(p.isUploading ? "Uploading..." : "Upload PDFs"),
-              style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.indigo,
-                  foregroundColor: Colors.white,
-                  minimumSize: const Size(double.infinity, 50),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))
+class _SourceTile extends StatelessWidget {
+  final String title;
+  final IconData icon;
+  final bool isSelected;
+  final bool isDeleting;
+  final VoidCallback onTap;
+  final VoidCallback? onDelete;
+  final Color color;
+
+  const _SourceTile({
+    required this.title,
+    required this.icon,
+    this.isSelected = false,
+    this.isDeleting = false,
+    required this.onTap,
+    this.onDelete,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8.0),
+      child: InkWell(
+        onTap: isDeleting ? null : onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+          decoration: BoxDecoration(
+            color: isSelected ? color : Colors.white,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: isSelected ? color : const Color(0xFFE0E0E0)),
+          ),
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(color: Colors.white.withOpacity(0.5), borderRadius: BorderRadius.circular(8)),
+                child: Icon(icon, color: kSecondaryText, size: 20),
               ),
-            ),
-            if (s.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(top: 8.0),
-                child: Text("${s.length} source${s.length > 1 ? 's' : ''} uploaded",
-                    style: const TextStyle(fontSize: 12, color: Colors.grey)),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  title,
+                  style: TextStyle(
+                    fontWeight: isSelected ? FontWeight.bold : FontWeight.w400,
+                    fontSize: 14,
+                    color: Colors.black87,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
-          ],
+              if (isDeleting)
+                const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+              else if (onDelete != null)
+                IconButton(
+                  icon: const Icon(Icons.more_vert, size: 18),
+                  onPressed: onDelete,
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(),
+                )
+            ],
+          ),
         ),
-      );
+      ),
+    );
+  }
 }
 
 // --- PANEL 2: AI CHAT ---
+
 class AiChatPanel extends StatelessWidget {
   const AiChatPanel({super.key});
 
@@ -232,77 +231,94 @@ class AiChatPanel extends StatelessWidget {
     final chat = p.chatHistory;
     final thinking = p.isBotThinking;
 
-    // This is the exact UI code from your old _buildChatPanel method
-    return Column(
-      children: [
-        const Padding(
-          padding: EdgeInsets.all(16),
-          child: Text("AI Chat", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-        ),
-        Expanded(
-          child: ListView.builder(
-            padding: const EdgeInsets.all(16),
-            itemCount: chat.length + (thinking ? 1 : 0),
-            itemBuilder: (ctx, i) {
-              if (i == chat.length && thinking) return _chatBubble("Thinking...", false);
-              final msg = chat[i];
-              return _chatBubble(msg.content, msg.isUser);
-            },
+    return Container(
+      color: Colors.white,
+      child: Column(
+        children: [
+          const PanelHeader(title: "AI Chat", icon: Icons.auto_awesome_outlined, iconColor: Colors.purple),
+          Expanded(
+            child: ListView.builder(
+              padding: const EdgeInsets.all(20),
+              itemCount: chat.length + (thinking ? 1 : 0),
+              itemBuilder: (ctx, i) {
+                if (i == chat.length && thinking) return _buildChatBubble("...", false);
+                final msg = chat[i];
+                return _buildChatBubble(msg.content, msg.isUser);
+              },
+            ),
           ),
-        ),
-        _chatInput(p),
-      ],
+          _buildChatInput(p),
+        ],
+      ),
     );
   }
 
-  // --- Helper widgets for Chat Panel ---
-  Widget _chatBubble(String text, bool isUser) => Align(
-    alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
-    child: Container(
-      margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: isUser ? Colors.blue : Colors.grey[200],
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: isUser ? Text(text, style: const TextStyle(color: Colors.white)) : Html(data: text),
-    ),
-  );
-
-  Widget _chatInput(ProjectProvider p) => Container(
-    padding: const EdgeInsets.all(12),
-    color: Colors.grey[100],
-    child: Row(
-      children: [
-        Expanded(
-          child: TextField(
-            controller: p.chatController,
-            decoration: InputDecoration(
-              hintText: "Ask a question...",
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(25)),
-              filled: true,
-              fillColor: Colors.white,
-            ),
-            onSubmitted: (_) => _sendChat(p),
+  Widget _buildChatBubble(String text, bool isUser) {
+    return Align(
+      alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 16),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        constraints: const BoxConstraints(maxWidth: 300),
+        decoration: BoxDecoration(
+          color: isUser ? kNotebookBg : Colors.white,
+          borderRadius: BorderRadius.only(
+            topLeft: const Radius.circular(16),
+            topRight: const Radius.circular(16),
+            bottomLeft: Radius.circular(isUser ? 16 : 4),
+            bottomRight: Radius.circular(isUser ? 4 : 16),
           ),
+          border: isUser ? null : Border.all(color: const Color(0xFFE0E0E0)),
         ),
-        IconButton(
-          icon: const Icon(Icons.send, color: Colors.blue),
-          onPressed: () => _sendChat(p),
+        child: isUser 
+          ? Text(text, style: const TextStyle(color: Colors.black87)) 
+          : SelectionArea(child: Html(data: text, style: {"body": Style(margin: Margins.zero, padding: HtmlPaddings.zero)})),
+      ),
+    );
+  }
+
+  Widget _buildChatInput(ProjectProvider p) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        decoration: BoxDecoration(
+          color: kNotebookBg,
+          borderRadius: BorderRadius.circular(28),
         ),
-      ],
-    ),
-  );
+        child: Row(
+          children: [
+            Expanded(
+              child: TextField(
+                controller: p.chatController,
+                decoration: const InputDecoration(
+                  hintText: "Ask a question...",
+                  border: InputBorder.none,
+                  hintStyle: TextStyle(fontSize: 14),
+                ),
+                onSubmitted: (_) => _sendChat(p),
+              ),
+            ),
+            IconButton(
+              icon: const Icon(Icons.arrow_upward_rounded, color: Colors.black),
+              onPressed: () => _sendChat(p),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   void _sendChat(ProjectProvider p) {
-    final q = p.chatController.text.trim();
-    if (q.isNotEmpty) {
-      p.askQuestion(q);
+    if (p.chatController.text.trim().isNotEmpty) {
+      p.askQuestion(p.chatController.text.trim());
       p.chatController.clear();
     }
   }
 }
 
 // --- PANEL 3: STUDY NOTE ---
+
 class NotesPanel extends StatelessWidget {
   const NotesPanel({super.key});
 
@@ -315,160 +331,135 @@ class NotesPanel extends StatelessWidget {
       color: Colors.white,
       child: Column(
         children: [
-          _buildPanelHeader("Study Note", Icons.edit_note_rounded, Colors.green),
+          const PanelHeader(title: "Study Note", icon: Icons.edit_note_rounded, iconColor: Colors.orange),
           Expanded(
-            child: Container(
-              color: Colors.grey[50],
-              child: p.isLoadingNote
-                  ? _buildNoteLoadingState()
-                  : SingleChildScrollView(
-                      padding: const EdgeInsets.all(16),
+            child: p.isLoadingNote
+                ? _buildLoadingState()
+                : SingleChildScrollView(
+                    padding: const EdgeInsets.all(24),
+                    child: SelectionArea(
                       child: Container(
+                        padding: const EdgeInsets.all(20),
                         decoration: BoxDecoration(
                           color: Colors.white,
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: Colors.grey[200]!),
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(color: const Color(0xFFE0E0E0)),
                         ),
-                        padding: const EdgeInsets.all(16),
-                        child: SelectionArea(child: Html(data: html)),
+                        child: Html(data: html),
                       ),
                     ),
+                  ),
+          ),
+          _buildActionFooter(context, p, html),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLoadingState() {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const CircularProgressIndicator(strokeWidth: 2),
+          const SizedBox(height: 16),
+          Text("Generating note...", style: TextStyle(color: Colors.grey[600])),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildActionFooter(BuildContext context, ProjectProvider p, String html) {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        border: Border(top: BorderSide(color: Color(0xFFE0E0E0), width: 0.5)),
+      ),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: _SmallActionBtn(
+                  icon: Icons.refresh_rounded, 
+                  label: "Reload", 
+                  onTap: p.selectedSource == null ? null : () => p.getNoteForSelectedSource(),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: _SmallActionBtn(
+                  icon: Icons.copy_rounded, 
+                  label: "Copy", 
+                  onTap: () => _copyRichTextToClipboard(context, html),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            decoration: BoxDecoration(color: kNotebookBg, borderRadius: BorderRadius.circular(12)),
+            child: TextField(
+              controller: p.topicController,
+              decoration: const InputDecoration(
+                hintText: "Custom topic...",
+                border: InputBorder.none,
+                hintStyle: TextStyle(fontSize: 14),
+              ),
             ),
           ),
-          _buildScratchpadActions(context, p, html),
+          const SizedBox(height: 12),
+          ElevatedButton(
+            onPressed: () {
+              if (p.topicController.text.trim().isNotEmpty) {
+                p.generateTopicNote(p.topicController.text.trim());
+                FocusScope.of(context).unfocus();
+              }
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.blueAccent[700],
+              foregroundColor: Colors.white,
+              minimumSize: const Size(double.infinity, 48),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              elevation: 0,
+            ),
+            child: const Text("Generate Custom Note", style: TextStyle(fontWeight: FontWeight.bold)),
+          ),
         ],
       ),
     );
   }
 
-  // --- Helper widgets for Notes Panel ---
-  Widget _buildPanelHeader(String title, IconData icon, Color color) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        border: Border(bottom: BorderSide(color: Colors.grey[200]!)),
-      ),
-      child: Row(
-        children: [
-          Icon(icon, color: color),
-          const SizedBox(width: 8),
-          Text(title,
-              style:
-                  const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildNoteLoadingState() {
-    return const Center(
-      child: Padding(
-        padding: EdgeInsets.all(20.0),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            CircularProgressIndicator(),
-            SizedBox(height: 16),
-            Text("Loading AI study note...",
-                style: TextStyle(color: Colors.grey)),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildScratchpadActions(
-      BuildContext context, ProjectProvider p, String html) {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-          color: Colors.white,
-          border: Border(top: BorderSide(color: Colors.grey[200]!))),
-      child: SingleChildScrollView( // Added to prevent overflow on small mobile screens
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: p.selectedSource == null
-                        ? null
-                        : () => p.getNoteForSelectedSource(),
-                    icon: const Icon(Icons.refresh_rounded),
-                    label: const Text("Reload"),
-                    style: OutlinedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 12)),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: () => _copyRichTextToClipboard(context, html),
-                    icon: const Icon(Icons.copy_all_rounded),
-                    label: const Text("Copy"),
-                    style: OutlinedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 12)),
-                  ),
-                ),
-              ],
-            ),
-            const Divider(height: 24),
-            const Text("Generate Custom Note",
-                style: TextStyle(fontWeight: FontWeight.bold)),
-            const SizedBox(height: 8),
-            TextField(
-              controller: p.topicController,
-              decoration: InputDecoration(
-                hintText: "e.g., Explain the main theories...",
-                border:
-                    OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                filled: true,
-                fillColor: Colors.grey[100],
-              ),
-            ),
-            const SizedBox(height: 8),
-            ElevatedButton.icon(
-              onPressed: () {
-                final topic = p.topicController.text.trim();
-                if (topic.isNotEmpty) {
-                  p.generateTopicNote(topic);
-                  FocusScope.of(context).unfocus();
-                }
-              },
-              icon: const Icon(Icons.auto_awesome_rounded),
-              label: const Text("Generate"),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.amber[700],
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 14),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8)),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  String _stripHtmlTags(String html) {
-    final RegExp exp = RegExp(r"<[^>]*>", multiLine: true, caseSensitive: true);
-    return html.replaceAll(exp, '').replaceAll('&nbsp;', ' ');
-  }
-
-  Future<void> _copyRichTextToClipboard(
-      BuildContext context, String html) async {
+  // --- Utility functions ---
+  Future<void> _copyRichTextToClipboard(BuildContext context, String html) async {
     final item = DataWriterItem();
     item.add(Formats.htmlText(html));
-    final plainText = _stripHtmlTags(html).trim();
-    item.add(Formats.plainText(plainText));
+    item.add(Formats.plainText(html.replaceAll(RegExp(r"<[^>]*>"), "")));
     await SystemClipboard.instance?.write([item]);
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text("Formatted note copied!"),
-        backgroundColor: Colors.green,
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Copied!"), behavior: SnackBarBehavior.floating));
+  }
+}
+
+class _SmallActionBtn extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback? onTap;
+
+  const _SmallActionBtn({required this.icon, required this.label, this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return OutlinedButton.icon(
+      onPressed: onTap,
+      icon: Icon(icon, size: 18),
+      label: Text(label),
+      style: OutlinedButton.styleFrom(
+        foregroundColor: kSecondaryText,
+        side: const BorderSide(color: Color(0xFFE0E0E0)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        padding: const EdgeInsets.symmetric(vertical: 12),
       ),
     );
   }
