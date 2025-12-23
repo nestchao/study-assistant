@@ -44,3 +44,15 @@ class Project {
     );
   }
 }
+
+class StudyNote {
+  final String? topic;
+  final String content;
+  final DateTime? createdAt;
+
+  StudyNote({
+    this.topic,
+    required this.content,
+    this.createdAt,
+  });
+}
