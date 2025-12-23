@@ -4,22 +4,36 @@ from flask import Blueprint, request, jsonify
 from firebase_admin import firestore
 from utils import extract_text_from_image, extract_text
 import google.generativeai as genai
-from services import db, paper_solver_model, redis_client
+from services import db, paper_solver_model, cache_manager
 
 # --- BLUEPRINT SETUP ---
 paper_solver_bp = Blueprint('paper_solver_bp', __name__)
 
-# ... (solve_paper_with_file and solve_paper_with_text functions are fine) ...
 def get_project_context(project_id):
-    """Fetches all text chunks from all sources in a project."""
-    all_chunks = []
-    sources_ref = db.collection('projects').document(project_id).collection('sources')
-    for source_doc in sources_ref.stream():
-        chunks_ref = source_doc.reference.collection('chunks')
-        for chunk_doc in chunks_ref.stream():
-            all_chunks.extend(chunk_doc.to_dict().get('chunks', []))
-    context = "\n---\n".join(all_chunks)
-    print(f"  📚 Retrieved context of {len(context)} characters for project {project_id}")
+    """Fetches all text chunks from all sources in a project with Caching."""
+    
+    cache_key = f"project_context:{project_id}"
+
+    def fetch_context_from_db():
+        print(f"  🏗️  Building context from Firestore for {project_id}...")
+        all_chunks = []
+        sources_ref = db.collection('projects').document(project_id).collection('sources')
+        for source_doc in sources_ref.stream():
+            chunks_ref = source_doc.reference.collection('chunks')
+            for chunk_doc in chunks_ref.stream():
+                all_chunks.extend(chunk_doc.to_dict().get('chunks', []))
+        return "\n---\n".join(all_chunks)
+
+    # Use CacheManager
+    # We use a shorter TTL because users might upload new files frequently
+    context = cache_manager.get_or_set(
+        key=cache_key,
+        factory=fetch_context_from_db,
+        ttl_l1=60,    # 1 min memory
+        ttl_l2=600    # 10 min Redis
+    )
+    
+    print(f"  📚 Retrieved context of {len(context)} characters")
     return context
 
 def solve_paper_with_file(file_stream, filename, context):

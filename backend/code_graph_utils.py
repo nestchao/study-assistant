@@ -4,6 +4,7 @@ import numpy as np
 import google.generativeai as genai
 import time
 import re
+import json
 
 # Configure your embedding model
 embedding_model = "models/text-embedding-004"
@@ -27,6 +28,9 @@ class CodeNode:
             "complexity": 0.5,
             "type_bias": 1.0
         }
+        self.ai_summary = ""      # critic
+        self.ai_dependencies = [] 
+        self.ai_quality_score = 0.0 
 
     def to_dict(self):
         return {
@@ -38,7 +42,10 @@ class CodeNode:
             "docstring": self.docstring,
             "dependencies": list(self.dependencies),
             "vector": self.vector,
-            "weights": self.weights
+            "weights": self.weights,
+            "ai_summary": self.ai_summary,
+            "ai_dependencies": self.ai_dependencies,
+            "ai_quality_score": self.ai_quality_score
         }
 
 def extract_functions_and_classes(file_content, file_path):
@@ -186,9 +193,17 @@ def extract_functions_and_classes(file_content, file_path):
 def generate_embeddings(nodes):
     if not nodes: return 
     
-    texts = [f"Type: {n.type}. Name: {n.name}. File: {n.file_path}. \nCode:\n{n.code[:500]}" for n in nodes]
+    # UPDATED: We now include the AI Summary in the text to embed
+    texts = []
+    for n in nodes:
+        # If critic ran, n.docstring now contains the AI summary.
+        # If not, it's just the normal code.
+        content = f"Type: {n.type}. Name: {n.name}. \nSummary: {n.ai_summary}. \nCode:\n{n.code[:800]}"
+        texts.append(content)
+
     try:
-        results = genai.embed_content(model=embedding_model, content=texts, task_type="retrieval_document")
+        # ... existing embedding logic ...
+        results = genai.embed_content(model="models/text-embedding-004", content=texts, task_type="retrieval_document")
         for i, node in enumerate(nodes):
             node.vector = results['embedding'][i]
     except Exception as e:
@@ -320,3 +335,79 @@ def gaussian_retrieval(project_id, user_query, db_instance):
              included_ids.add(node['id'])
 
     return "\n".join(context_parts)
+
+def enrich_nodes_with_critic(nodes, model_instance, max_nodes_to_process=50):
+    """
+    Uses Gemini to analyze the purpose and quality of nodes.
+    Limit max_nodes_to_process to prevent timeouts/high costs.
+    """
+    print(f"  🕵️‍♂️ AI Critic starting analysis on {min(len(nodes), max_nodes_to_process)} nodes...")
+    
+    count = 0
+    for node in nodes:
+        # Skip simple nodes or if we hit the limit
+        if count >= max_nodes_to_process: break
+        if len(node.code) < 50: continue # Skip tiny helpers
+        
+        try:
+            prompt = f"""
+            You are a Senior Code Reviewer. Analyze this Python code structure.
+            
+            NAME: {node.name}
+            TYPE: {node.type}
+            CODE:
+            ```python
+            {node.code[:2000]} 
+            ```
+            
+            Task:
+            1. Write a 1-sentence summary of the PURPOSE (what problem it solves).
+            2. Identify implicit logical DEPENDENCIES (concepts, external libs, or specific classes it likely uses).
+            3. Rate code QUALITY (0.0 to 1.0) based on clarity and naming.
+
+            Return ONLY valid JSON:
+            {{ "summary": "...", "dependencies": ["dep1", "dep2"], "quality": 0.9 }}
+            """
+            
+            response = model_instance.generate_content(prompt)
+            
+            # Clean markdown json blocks if present
+            raw_text = response.text.strip()
+
+            # 情况1：空响应
+            if not raw_text:
+                print(f"警告: Critic 返回空响应，使用兜底值")
+                data = {"summary": "AI returned empty response", "dependencies": [], "quality": 0.6}
+            # 情况2：带代码块的
+            elif raw_text.startswith("```"):
+                # 提取代码块内容，兼容 ```json 和 ```
+                import re
+                match = re.search(r"```[a-zA-Z]*\n?(.*?)```", raw_text, re.DOTALL)
+                if match:
+                    raw_text = match.group(1).strip()
+                else:
+                    raw_text = re.sub(r"^```[a-zA-Z]*\n?|```$", "", raw_text).strip()
+
+            try:
+                data = json.loads(raw_text)
+            except json.JSONDecodeError as e:
+                print(f"警告: Critic JSON 解析失败，使用兜底值: {e}")
+                print(f"原始返回前500字符: {raw_text[:500]}")
+                data = {"summary": f"Parse error: {str(e)}", "dependencies": [], "quality": 0.5}
+                        
+            # Update Node
+            node.ai_summary = data.get("summary", "")
+            node.ai_dependencies = data.get("dependencies", [])
+            node.ai_quality_score = float(data.get("quality", 0.5))
+            
+            # Update weights
+            node.weights['quality'] = node.ai_quality_score
+            
+            # IMPORTANT: Enhance the docstring so Vector Search finds this summary!
+            node.docstring = f"[AI SUMMARY]: {node.ai_summary}\n\n{node.docstring}"
+            
+            print(f"    ✅ Critic analyzed: {node.name} (Score: {node.ai_quality_score})")
+            count += 1
+            
+        except Exception as e:
+            print(f"    ⚠️ Critic failed for {node.name}: {e}")

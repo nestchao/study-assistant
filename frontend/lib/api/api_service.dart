@@ -5,6 +5,8 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'dart:typed_data';
+import 'package:study_assistance/models/dependency_graph.dart';
+import 'package:http_parser/http_parser.dart';
 
 class ApiService {
   late final String baseUrl;
@@ -18,11 +20,6 @@ class ApiService {
       // Provide a fallback for the emulator just in case.
       baseUrl = dotenv.env['API_URL'] ?? 'http://10.0.2.2:5000';
     }
-
-    print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
-    print("Platform: ${kIsWeb ? 'Web' : 'Mobile'}");
-    print("ApiService initialized with baseUrl: $baseUrl");
-    print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
   }
 
   // --- MODIFIED: SYNC SERVICE METHODS ---
@@ -34,36 +31,54 @@ class ApiService {
   throw Exception('Failed to load sync projects');
 }
 
-Future<void> registerFolderToProject(String projectId, String path, List<String> extensions, List<String> ignoredPaths) async {
-  final response = await http.post(
-    Uri.parse('$baseUrl/sync/register/$projectId'), // <-- Note the ID in the URL
-    headers: {'Content-Type': 'application/json'},
-    body: json.encode({
-      'local_path': path,
-      'extensions': extensions,
-      'ignored_paths': ignoredPaths,
-    }),
-  );
-  if (response.statusCode != 200) {
-    throw Exception('Failed to register folder to project');
+Future<void> registerFolderToProject(
+    String projectId,
+    String path,
+    List<String> extensions,
+    List<String> ignoredPaths,
+    List<String> includedPaths, // New
+    String syncMode, // New
+  ) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/sync/register/$projectId'),
+      headers: {'Content-Type': 'application/json'},
+      body: json.encode({
+        'local_path': path,
+        'extensions': extensions,
+        'ignored_paths': ignoredPaths,
+        'included_paths': includedPaths, // New
+        'sync_mode': syncMode, // New
+      }),
+    );
+    if (response.statusCode != 200) {
+      throw Exception('Failed to register folder to project');
+    }
   }
-}
 
-Future<void> updateSyncProject(String projectId, {bool? isActive, List<String>? extensions, List<String>? ignoredPaths}) async {
-  final Map<String, dynamic> body = {};
-  if (isActive != null) body['is_active'] = isActive;
-  if (extensions != null) body['allowed_extensions'] = extensions;
-  if (ignoredPaths != null) body['ignored_paths'] = ignoredPaths;
+Future<void> updateSyncProject(
+    String projectId, {
+    bool? isActive,
+    List<String>? extensions,
+    List<String>? ignoredPaths,
+    List<String>? includedPaths, // New
+    String? syncMode, // New
+  }) async {
+    final Map<String, dynamic> body = {};
+    if (isActive != null) body['is_active'] = isActive;
+    if (extensions != null) body['allowed_extensions'] = extensions;
+    if (ignoredPaths != null) body['ignored_paths'] = ignoredPaths;
+    if (includedPaths != null) body['included_paths'] = includedPaths; // New
+    if (syncMode != null) body['sync_mode'] = syncMode; // New
 
-  final response = await http.put(
-    Uri.parse('$baseUrl/sync/project/$projectId'),
-    headers: {'Content-Type': 'application/json'},
-    body: json.encode(body),
-  );
-  if (response.statusCode != 200) {
-    throw Exception('Failed to update sync project');
+    final response = await http.put(
+      Uri.parse('$baseUrl/sync/project/$projectId'),
+      headers: {'Content-Type': 'application/json'},
+      body: json.encode(body),
+    );
+    if (response.statusCode != 200) {
+      throw Exception('Failed to update sync project');
+    }
   }
-}
 
 Future<void> deleteSyncFromProject(String projectId) async {
   final response = await http.delete(Uri.parse('$baseUrl/sync/project/$projectId'));
@@ -110,7 +125,6 @@ Future<void> deleteSyncFromProject(String projectId) async {
     throw Exception('Failed to create code project: ${response.statusCode}');
   }
 
-  // --- NEW ---
   Future<void> renameProject(String projectId, String newName) async {
     final response = await http.put(
       Uri.parse('$baseUrl/rename-project/$projectId'),
@@ -146,6 +160,7 @@ Future<void> deleteSyncFromProject(String projectId) async {
   }
 
   // POST /api/upload-source/<project_id>
+  // POST /api/upload-source/<project_id>
   Future<void> uploadSources(String projectId, List<PlatformFile> files) async {
     print("📤 Uploading ${files.length} files to project $projectId");
     
@@ -155,23 +170,53 @@ Future<void> deleteSyncFromProject(String projectId) async {
     );
 
     for (var file in files) {
-      print("  Adding file: ${file.name} (${file.size} bytes)");
+      print("  Processing file: ${file.name} (Size: ${file.size})");
       
-      if (file.bytes != null) {
-        request.files.add(http.MultipartFile.fromBytes(
-          'pdfs',  // ⚠️  MUST match Flask route's request.files.getlist('pdfs')
-          file.bytes!,
-          filename: file.name,
-        ));
+      // FIX: Handle both Path (Desktop/Mobile) and Bytes (Web)
+      if (kIsWeb) {
+        // Web always provides bytes
+        if (file.bytes != null) {
+          request.files.add(http.MultipartFile.fromBytes(
+            'pdfs', 
+            file.bytes!,
+            filename: file.name,
+          ));
+          print("    -> Added from bytes (Web)");
+        }
+      } else {
+        // Mobile/Desktop usually provides path
+        if (file.path != null) {
+          request.files.add(await http.MultipartFile.fromPath(
+            'pdfs', 
+            file.path!,
+            filename: file.name,
+          ));
+          print("    -> Added from path: ${file.path}");
+        } else if (file.bytes != null) {
+          // Fallback if path is null but bytes exist
+          request.files.add(http.MultipartFile.fromBytes(
+            'pdfs',
+            file.bytes!,
+            filename: file.name,
+          ));
+          print("    -> Added from bytes (Fallback)");
+        } else {
+          print("    ⚠️ SKIPPED: File has no path and no bytes.");
+        }
       }
     }
 
-    print("  Sending request...");
+    // Check if files were actually added
+    if (request.files.isEmpty) {
+      throw Exception('No files could be read. Please try again.');
+    }
+
+    print("  Sending request with ${request.files.length} parts...");
     var response = await request.send();
     var responseBody = await response.stream.bytesToString();
     
     print("  Response status: ${response.statusCode}");
-    print("  Response body: $responseBody");
+    // print("  Response body: $responseBody"); // Uncomment for detailed debug
 
     if (response.statusCode != 200) {
       throw Exception('Upload failed: $responseBody');
@@ -383,25 +428,25 @@ Future<void> deleteSyncFromProject(String projectId) async {
   }
 
   Future<String> getCodeSuggestion({
-    required String projectId, // <-- ADD
-    required List<String> extensions, // <-- ADD
+    required String projectId,
+    required List<String> extensions,
     required String prompt,
   }) async {
     final response = await http.post(
-      Uri.parse('$baseUrl/generate-code-suggestion'), // This URL is now correct
+      Uri.parse('$baseUrl/generate-code-suggestion'),
       headers: {'Content-Type': 'application/json'},
       body: json.encode({
-        'project_id': projectId, // <-- SEND
-        'extensions': extensions, // <-- SEND
+        'project_id': projectId,
+        'extensions': extensions,
         'prompt': prompt,
       }),
     );
     
     if (response.statusCode == 200) {
-      return json.decode(response.body)['suggestion'] ?? 'Sorry, I could not generate a suggestion.';
+      return json.decode(response.body)['suggestion'] ?? 'No suggestion';
     } else {
       final error = json.decode(response.body)['error'] ?? 'Unknown error';
-      throw Exception('Failed to get code suggestion: $error');
+      throw Exception('Failed: $error');
     }
   }
 
@@ -418,5 +463,51 @@ Future<void> deleteSyncFromProject(String projectId) async {
     }
     
     throw Exception('Failed to create project: ${response.statusCode}');
+  }
+
+  Future<List<Map<String, dynamic>>> getRetrievalCandidates(String projectId, String prompt) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/retrieve-context-candidates'),
+      headers: {'Content-Type': 'application/json'},
+      body: json.encode({
+        'project_id': projectId,
+        'prompt': prompt,
+      }),
+    );
+
+    if (response.statusCode == 200) {
+      final data = json.decode(response.body);
+      // Backend returns { "candidates": [...] }
+      return List<Map<String, dynamic>>.from(data['candidates']);
+    }
+    throw Exception('Failed to retrieve candidates: ${response.body}');
+  }
+
+  Future<String> generateAnswerFromContext(String projectId, String prompt, List<String> selectedIds) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/generate-answer-from-context'),
+      headers: {'Content-Type': 'application/json'},
+      body: json.encode({
+        'project_id': projectId,
+        'prompt': prompt,
+        'selected_ids': selectedIds,
+      }),
+    );
+
+    if (response.statusCode == 200) {
+      return json.decode(response.body)['suggestion'] ?? 'No response';
+    }
+    throw Exception('Failed to generate answer: ${response.body}');
+  }
+
+  Future<DependencyGraph> getDependencyGraph(String projectId, String nodeId) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/get-dependency-subgraph'),
+      body: json.encode({'project_id': projectId, 'node_id': nodeId}),
+    );
+    if (response.statusCode == 200) {
+      return DependencyGraph.fromJson(json.decode(response.body));
+    }
+    throw Exception("Failed to load graph");
   }
 }

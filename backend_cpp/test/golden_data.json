@@ -1,0 +1,22 @@
+[
+  {
+    "question": "Where is the application entry point defined?",
+    "expected_files": ["main.ts"],
+    "forbidden_files": []
+  },
+  {
+    "question": "Show me the routing configuration.",
+    "expected_files": ["app.routes.ts"],
+    "forbidden_files": []
+  },
+  {
+    "question": "How is the login logic handled?",
+    "expected_files": ["login.component.ts"],
+    "forbidden_files": []
+  },
+  {
+    "question": "Where are the global app settings?",
+    "expected_files": ["app.config.ts"],
+    "forbidden_files": []
+  }
+]
