@@ -1,10 +1,10 @@
 # backend/app.py
 from flask import Flask, jsonify
 from flask_cors import CORS
-from services import init_services
+from services import init_all_services
 
 # Initialize Services BEFORE importing blueprints that use them
-init_services()
+init_all_services()
 
 # Now import blueprints (they will import db/models from services.py internally)
 from media_routes import media_bp

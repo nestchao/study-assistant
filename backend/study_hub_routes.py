@@ -26,26 +26,23 @@ from config import (
 from code_graph_engine import (
     FaissVectorStore, 
     CrossEncoderReranker,
-    hybrid_retrieval_pipeline
+    hybrid_retrieval_pipeline,
+    build_hierarchical_context
 )
 
-from services import db, note_generation_model, chat_model, redis_client
+from services import db, note_generation_model, chat_model, cache_manager 
 
-cross_encoder = None
+cross_encoder = CrossEncoderReranker()
 study_hub_bp = Blueprint('study_hub_bp', __name__)
 
-def set_dependencies(db_instance, note_model_instance, chat_model_instance, redis_instance):
-    """Injects database and AI model dependencies from the main app."""
-    global db, note_generation_model, chat_model, redis_client, cross_encoder
-    db = db_instance
-    note_generation_model = note_model_instance
-    chat_model = chat_model_instance
-    redis_client = redis_instance
+# def set_dependencies(db_instance, note_model_instance, chat_model_instance, redis_instance):
+#     """Injects database and AI model dependencies from the main app."""
+#     global cross_encoder
     
-    # --- 新增：初始化 Cross-Encoder（只加载一次） ---
-    print("✅ Loading Cross-Encoder model...")
-    cross_encoder = CrossEncoderReranker()
-    print("✅ Study Hub dependencies injected.")
+#     # --- 新增：初始化 Cross-Encoder（只加载一次） ---
+#     print("✅ Loading Cross-Encoder model...")
+#     cross_encoder = CrossEncoderReranker()
+#     print("✅ Study Hub dependencies injected.")
 
 # --- HELPER FUNCTIONS for Study Hub ---
 def get_original_text(project_id, source_id):
@@ -230,10 +227,23 @@ def get_sources(project_id):
 @study_hub_bp.route('/upload-source/<project_id>', methods=['POST'])
 def upload_source(project_id):
     print(f"\n📁 UPLOAD REQUEST for project: {project_id}")
-    if 'pdfs' not in request.files:
-        return jsonify({"error": "No files provided", "success": False}), 400
     
+    # --- DEBUGGING PRINT ---
+    print(f"  > Request Files Keys: {list(request.files.keys())}")
+    # -----------------------
+
+    # Check if 'pdfs' exists OR if 'pdfs[]' exists (sometimes frameworks add brackets)
+    if 'pdfs' not in request.files and not request.files:
+         print("  ❌ Error: No files found in request.files")
+         return jsonify({"error": "No files provided", "success": False}), 400
+    
+    # Get files using getlist. If 'pdfs' is missing, try getting values from the first key found
     files = request.files.getlist('pdfs')
+    if not files and request.files:
+        # Fallback: grab files from whatever key was sent
+        first_key = list(request.files.keys())[0]
+        files = request.files.getlist(first_key)
+
     if not files or files[0].filename == '':
         return jsonify({"error": "No files selected", "success": False}), 400
     
@@ -313,13 +323,11 @@ def delete_source(project_id, source_id):
             delete_collection(collection_ref, batch_size=50)
         source_ref.delete()
 
-        if redis_client:
-            try:
-                note_redis_key = f"note:{project_id}:{source_id}"
-                redis_client.delete(note_redis_key)
-                print(f"✅ Invalidated Redis cache for deleted source: {note_redis_key}")
-            except Exception as e:
-                print(f"⚠️ Failed to invalidate note cache for deleted source: {e}")
+        # Invalidate Cache using unified CacheManager
+        if cache_manager:
+            note_key = f"note:{project_id}:{source_id}"
+            cache_manager.delete(note_key)
+            print(f"✅ Invalidated cache for deleted source: {note_key}")
 
         print(f"✅ Successfully deleted source document: {source_id}")
         return jsonify({"success": True, "message": f"Source {source_id} deleted."}), 200
@@ -329,57 +337,38 @@ def delete_source(project_id, source_id):
 
 @study_hub_bp.route('/get-note/<project_id>/<path:source_id>')
 def get_note(project_id, source_id):
-    note_key = f"note:{project_id}:{source_id}"
+    # 1. Define the cache key
+    cache_key = f"note:{project_id}:{source_id}"
 
-    # 1. Check L1 Cache
-    cached_value = L1_CACHE.get(note_key)
-    if cached_value:
-        print(f"✅ L1 CACHE HIT for note: {note_key}")
-        # If the cached value is our special null marker, return empty
-        return jsonify({"note_html": "" if cached_value == NULL_CACHE_VALUE else cached_value})
+    # 2. Define the factory function (what to do if cache misses)
+    def fetch_note_from_db():
+        print(f"  🔍 Fetching note from Firestore for {cache_key}...")
+        pages_query = db.collection(STUDY_PROJECTS_COLLECTION)\
+            .document(project_id).collection('sources').document(source_id)\
+            .collection('note_pages').order_by('order').stream()
+        
+        html = "".join(p.to_dict().get('html', '') for p in pages_query)
+        
+        # Return empty string if nothing found
+        return html if html else ""
 
-    # 2. Check L2 Cache (Redis)
-    if redis_client:
+    # 3. Use CacheManager
+    if cache_manager:
         try:
-            cached_bytes = redis_client.get(note_key)
-            if cached_bytes:
-                print(f"✅ L2 CACHE HIT (Redis) for note: {note_key}")
-                content = cached_bytes.decode('utf-8')
-                L1_CACHE.set(note_key, content) # Backfill L1
-                return jsonify({"note_html": "" if content == NULL_CACHE_VALUE else content})
+            note_html = cache_manager.get_or_set(
+                key=cache_key,
+                factory=fetch_note_from_db,
+                ttl_l1=300,   # 5 mins in memory
+                ttl_l2=3600   # 1 hour in Redis
+            )
+            return jsonify({"note_html": note_html})
         except Exception as e:
-            print(f"⚠️ Redis cache check failed for note: {e}")
-
-    print(f"CACHE MISS for note: {note_key}. Fetching from Firestore...")
-
-    # 3. If miss, get from Firestore
-    lock_key = f"lock:{note_key}"
-    lock_acquired = redis_client.set(lock_key, "1", ex=10, nx=True) if redis_client else False
-
-    if lock_acquired:
-        print(f"  ✅ Lock acquired for {note_key}. Rebuilding cache...")
-        try:
-            pages_query = db.collection(STUDY_PROJECTS_COLLECTION).document(project_id).collection('sources').document(source_id).collection('note_pages').order_by('order').stream()
-            html = "".join(p.to_dict().get('html', '') for p in pages_query)
-            
-            value_to_cache = html if html else NULL_CACHE_VALUE
-            ttl = 300 + random.randint(0, 60) if html else 30
-
-            if redis_client:
-                redis_client.setex(note_key, ttl, value_to_cache)
-            L1_CACHE.set(note_key, value_to_cache)
-            
-            return jsonify({"note_html": "" if value_to_cache == NULL_CACHE_VALUE else value_to_cache})
-
-        finally:
-            if redis_client:
-                redis_client.delete(lock_key)
-            print(f"  🔑 Lock released for {note_key}.")
-            
+            print(f"Cache Error: {e}")
+            # Fallback if cache fails
+            return jsonify({"note_html": fetch_note_from_db()})
     else:
-        print(f"  ...Could not acquire lock. Waiting briefly for cache to be rebuilt...")
-        time.sleep(0.1) 
-        return get_note(project_id, source_id)
+        # Fallback if no cache manager
+        return jsonify({"note_html": fetch_note_from_db()})
 
 @study_hub_bp.route('/update-note/<project_id>/<path:source_id>', methods=['POST'])
 def update_note(project_id, source_id):
@@ -406,13 +395,11 @@ def update_note(project_id, source_id):
             note_pages_saved += 1
             print(f"  + Saving new note page {page_num}")
 
-        if redis_client:
-            try:
-                note_redis_key = f"note:{project_id}:{source_id}"
-                redis_client.delete(note_redis_key)
-                print(f"✅ Invalidated Redis cache for note: {note_redis_key}")
-            except Exception as e:
-                print(f"⚠️ Failed to invalidate note cache: {e}")
+        # Invalidate Cache
+        if cache_manager:
+            cache_key = f"note:{project_id}:{source_id}"
+            cache_manager.delete(cache_key)
+            print(f"✅ Invalidated cache for {cache_key}")
         
         print(f"✅ Note updated successfully. {note_pages_saved} pages saved.")
         return jsonify({"success": True, "message": "Note updated successfully"}), 200
@@ -522,21 +509,11 @@ def regenerate_note(project_id, source_id):
             })
             print(f"  + Saved note page {page_num}")
 
-        if redis_client:
-            note_redis_key = f"note:{project_id}:{source_id}"
-            redis_client.delete(note_redis_key)
-            print(f"  ✅ Invalidated Redis cache for regenerated note: {note_redis_key}")
-
-        note_key = f"note:{project_id}:{source_id}"
-        if hasattr(L1_CACHE, 'pop'):
-            L1_CACHE.pop(note_key, None)
-            print(f"  ✅ Invalidated L1 cache (using .pop) for regenerated note")
-        elif hasattr(L1_CACHE, 'delete'):
-            L1_CACHE.delete(note_key)
-            print(f"  ✅ Invalidated L1 cache (using .delete) for regenerated note")
-        else:
-            print("  ⚠️ Warning: Could not invalidate L1 cache. Missing delete/pop method.")
-
+        # Invalidate Cache
+        if cache_manager:
+            note_key = f"note:{project_id}:{source_id}"
+            cache_manager.delete(note_key)
+            print(f"  ✅ Invalidated cache for regenerated note: {note_key}")
 
         print(f"  ✅ SUCCESS: Note for '{source_id}' regenerated.")
         return jsonify({"success": True, "note_html": new_note_html})
@@ -585,14 +562,30 @@ def generate_code_suggestion():
         )
         
         # --- 3. 生成最终答案 ---
-        final_prompt = f"""You are an expert developer assistant.
+        final_prompt = f"""
+        ### ROLE
+        You are a Senior Software Architect and Codebase Expert. You are assisting a developer by analyzing the provided code context to answer their questions accurately.
 
-        CONTEXT:
+        ### CONTEXT (Retrieved Code)
+        The following text contains the most relevant files and code snippets from the project. The format is: `# FILE: <path>` followed by the code.
+        --------------------------------------------------
         {context}
+        --------------------------------------------------
 
-        USER QUESTION: {prompt_text}
+        ### USER QUESTION
+        {prompt_text}
 
-        Provide a clear, actionable answer. Include code examples if relevant."""
+        ### INSTRUCTIONS
+        1. **Source-Based Truth:** Answer ONLY based on the code provided in the CONTEXT. If the answer is not in the context, admit it. Do not make up functions or files that do not exist.
+        2. **Citation:** When explaining logic, explicitly mention the filename (e.g., "In `backend/app.py`...") so the user knows where to look.
+        3. **Actionable Output:**
+        - If explaining concepts: Use clear, high-level summaries followed by technical details.
+        - If fixing bugs: Explain the root cause, then provide the corrected code block.
+        - If writing new code: Ensure it matches the style and patterns found in the CONTEXT.
+        4. **Formatting:** Use Markdown. Use code blocks (```language) for code. Use bold text for variable names or file paths.
+
+        ### ANSWER
+        """
 
         print("  🤖 Generating final response with Gemini...")
         response = chat_model.generate_content(final_prompt)
@@ -616,4 +609,83 @@ def generate_code_suggestion():
         import traceback
         print(f"  ❌ CRITICAL ERROR: {e}")
         print(traceback.format_exc())
+        return jsonify({"error": str(e)}), 500
+
+@study_hub_bp.route('/retrieve-context-candidates', methods=['POST'])
+def retrieve_candidates():
+    data = request.json
+    project_id = data.get('project_id')
+    prompt_text = data.get('prompt')
+    
+    try:
+        store_path = VECTOR_STORE_ROOT / project_id
+        if not store_path.exists():
+             return jsonify({"error": "Project index not found"}), 404
+
+        vector_store = FaissVectorStore.load(store_path)
+        
+        # Get candidates with return_nodes_only=True
+        candidates = hybrid_retrieval_pipeline(
+            project_id=project_id,
+            user_query=prompt_text,
+            db_instance=db,
+            vector_store=vector_store,
+            cross_encoder=cross_encoder,
+            use_hyde=True,
+            return_nodes_only=True 
+        )
+        
+        return jsonify({"candidates": candidates})
+    except Exception as e:
+        print(f"Error retrieving candidates: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@study_hub_bp.route('/generate-answer-from-context', methods=['POST'])
+def generate_answer_from_context():
+    data = request.json
+    project_id = data.get('project_id')
+    prompt_text = data.get('prompt')
+    selected_ids = data.get('selected_ids', [])
+
+    if not selected_ids:
+        return jsonify({"suggestion": "❌ No context selected. Please select at least one file for me to analyze."})
+
+    print(f"📥 Received {len(selected_ids)} IDs for generation: {selected_ids}")
+    
+    try:
+        store_path = VECTOR_STORE_ROOT / project_id
+        vector_store = FaissVectorStore.load(store_path)
+        
+        # Re-fetch full node content
+        selected_nodes = []
+        all_keys = list(vector_store.name_to_id.keys())
+        print(f"🔎 DEBUG: First 5 keys in Vector Store: {all_keys[:5]}")
+
+        for uid in selected_ids:
+            node_data = vector_store.get_node_by_name(uid)
+            if node_data:
+                selected_nodes.append({'node': node_data})
+            else:
+                print(f"⚠️ Node not found for ID: {uid}")
+        
+        # Build Context
+        context = build_hierarchical_context(selected_nodes)
+        
+        final_prompt = f"""
+        ### ROLE
+        You are a Senior Software Architect.
+
+        ### CONTEXT
+        {context}
+
+        ### QUESTION
+        {prompt_text}
+
+        ### INSTRUCTION
+        Answer based on the code above.
+        """
+        response = chat_model.generate_content(final_prompt)
+        return jsonify({"suggestion": response.text})
+        
+    except Exception as e:
         return jsonify({"error": str(e)}), 500

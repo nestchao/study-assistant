@@ -1,0 +1,101 @@
+{
+  "name": "study-assistant",
+  "displayName": "Study Assistant AI",
+  "description": "Complete AI-powered study and code assistant",
+  "version": "1.0.0",
+  "publisher": "your-name",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": ["AI", "Education", "Other"],
+  "keywords": ["ai", "study", "notes", "code-completion", "assistant"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./dist/extension.js",
+  
+  "contributes": {
+    "configuration": {
+      "title": "Study Assistant",
+      "properties": {
+        "studyAssistant.allowedExtensions": {
+          "type": "string",
+          "default": "py,ts,js,cpp,h,java,dart,md,txt",
+          "description": "Comma-separated list of file extensions to index."
+        },
+        "studyAssistant.ignoredPaths": {
+          "type": "string",
+          "default": "node_modules, .git, dist, build, __pycache__, .vscode",
+          "description": "Comma-separated list of folders to ignore."
+        },
+        "studyAssistant.includedPaths": {
+          "type": "string",
+          "default": "",
+          "description": "Specific paths to force include even if ignored."
+        }
+      }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "study-assistant-sidebar",
+          "title": "Study Assistant",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "study-assistant-sidebar": [
+        {
+          "id": "study-assistant-config",
+          "name": "Configuration",
+          "type": "webview"
+        },
+        {
+          "id": "study-assistant-chat",
+          "name": "AI Code Assistant",
+          "type": "webview"
+        },
+        {
+          "id": "study-assistant-hub",
+          "name": "Study Hub",
+          "type": "webview"
+        },
+        {
+          "id": "study-assistant-papers",
+          "name": "Paper Solver",
+          "type": "webview"
+        }
+      ]
+    }
+  },
+  
+  "scripts": {
+    "vscode:prepublish": "npm run package",
+    "compile": "webpack",
+    "watch": "webpack --watch",
+    "package": "webpack --mode production --devtool hidden-source-map",
+    "lint": "eslint src --ext ts",
+    "test": "node ./out/test/runTest.js"
+  },
+  
+  "devDependencies": {
+    "@types/glob": "^8.1.0",
+    "@types/mocha": "^10.0.1",
+    "@types/node": "20.2.5",
+    "@types/vscode": "^1.80.0",
+    "@typescript-eslint/eslint-plugin": "^8.48.1",
+    "@typescript-eslint/parser": "^8.48.1",
+    "eslint": "^9.39.1",
+    "glob": "^8.1.0",
+    "mocha": "^10.2.0",
+    "ts-loader": "^9.4.3",
+    "typescript": "^5.1.3",
+    "webpack": "^5.85.0",
+    "webpack-cli": "^5.1.1"
+  },
+  
+  "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "axios": "^1.6.0",
+    "form-data": "^4.0.0"
+  }
+}

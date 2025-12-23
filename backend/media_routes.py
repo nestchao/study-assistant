@@ -1,35 +1,42 @@
-# backend/media_routes.py
+# backend/media_routes.py - UPGRADED VERSION
+"""
+Media routes with industry-standard multi-tier caching
+"""
+
 import time
 import base64
 from flask import Blueprint, request, jsonify, Response
 from firebase_admin import firestore
-import redis
-import random
-from utils import L1_CACHE
-from services import db, redis_client 
 
-redis_client = None 
+# Import the new cache manager
+from services import db, cache_manager
 
-# Create a Blueprint. This is like a mini-Flask app that can be registered with the main app.
 media_bp = Blueprint('media_bp', __name__)
 
 # Constants
 MEDIA_COLLECTION = "media_metadata"
 MAX_CHUNK_SIZE_BYTES = 900_000
 
-# --- HELPER / AUTH MOCK ---
+
+# ============================================================================
+# HELPER FUNCTIONS
+# ============================================================================
+
 def get_current_user_id():
-    """Placeholder for your authentication logic."""
+    """Placeholder for authentication logic."""
     return request.headers.get("X-User-ID")
 
-def store_media(media_id: str, base64_string: str, file_name: str, media_type: str, user_id: str):
+
+def store_media(media_id: str, base64_string: str, file_name: str, 
+                media_type: str, user_id: str):
     """
-    Splits a Base64 string into chunks and stores it in Firestore using firebase-admin SDK.
+    Splits a Base64 string into chunks and stores it in Firestore.
+    Invalidates cache after successful storage.
     """
     if not db:
         raise ConnectionError("Firestore client is not available.")
 
-    print(f"Attempting to store media. mediaId: {media_id}, userId: {user_id}")
+    print(f"📤 Storing media: {media_id} ({media_type})")
     metadata_ref = db.collection(MEDIA_COLLECTION).document(media_id)
     
     try:
@@ -50,53 +57,73 @@ def store_media(media_id: str, base64_string: str, file_name: str, media_type: s
             "status": "uploading"
         }
         
+        # Use transaction for consistency
         transaction = db.transaction()
+        
         @firestore.transactional
         def upload_in_transaction(transaction):
             transaction.set(metadata_ref, metadata)
+            
             for i, chunk_data in enumerate(chunks):
                 chunk_ref = metadata_ref.collection("chunks").document(str(i))
-
                 transaction.set(chunk_ref, {
                     "chunk": chunk_data,
-                    "order": i  # Add the numeric index
+                    "order": i
                 })
-
+            
             transaction.update(metadata_ref, {"status": "completed"})
 
         upload_in_transaction(transaction)
         
-        print(f"{media_type.capitalize()} '{file_name}' stored successfully as {media_id}")
+        print(f"✅ Media stored: {media_id}")
+        
+        # Invalidate cache (new version might be uploaded)
+        if cache_manager:
+            cache_key = f"media:{media_id}"
+            cache_manager.delete(cache_key)
+            print(f"  🗑️ Cache invalidated for: {cache_key}")
 
     except Exception as e:
-        print(f"Error storing {media_type}: {e}")
+        print(f"❌ Error storing media: {e}")
         try:
             metadata_ref.update({"status": "failed", "error": str(e)})
-        except Exception as update_exception:
-            print(f"Failed to update error status: {update_exception}")
+        except:
+            pass
         raise
 
+
 def get_media_data(media_id: str) -> bytes:
+    """
+    Fetches media data with industry-standard multi-tier caching.
+    
+    Cache Strategy:
+        - L1 (In-Memory): 5 min TTL
+        - L2 (Redis): 1 hour TTL with jitter
+        - L3 (Firestore): Source of truth
+    """
+    if not cache_manager:
+        # Fallback to direct DB fetch if cache unavailable
+        return _fetch_from_firestore(media_id)
+    
+    cache_key = f"media:{media_id}"
+    
+    # Use cache manager's get_or_set with stampede prevention
+    return cache_manager.get_or_set(
+        key=cache_key,
+        factory=lambda: _fetch_from_firestore(media_id),
+        ttl_l1=300,   # 5 minutes in L1
+        ttl_l2=3600,  # 1 hour in L2
+        use_lock=True  # Prevent cache stampede
+    )
 
-    cached_bytes = L1_CACHE.get(media_id)
-    if cached_bytes:
-        print(f"✅ L1 CACHE HIT for mediaId: {media_id}")
-        return cached_bytes
 
-    if redis_client:
-        try:
-            cached_data_redis = redis_client.get(media_id)
-            if cached_data_redis:
-                print(f"✅ L2 CACHE HIT (Redis) for mediaId: {media_id}")
-                # Backfill L1 Cache
-                L1_CACHE.set(media_id, cached_data_redis)
-                return cached_data_redis
-        except Exception as e:
-            print(f"Redis cache check failed: {e}")
-
-    print(f"CACHE MISS for mediaId: {media_id}. Fetching from Firestore...")
-
-    # 2. If miss, get from Firestore
+def _fetch_from_firestore(media_id: str) -> bytes:
+    """
+    Internal function to fetch media from Firestore.
+    Called only on cache miss.
+    """
+    print(f"💾 Fetching from Firestore: {media_id}")
+    
     if not db:
         raise ConnectionError("Firestore client is not available.")
         
@@ -104,48 +131,47 @@ def get_media_data(media_id: str) -> bytes:
     metadata_doc = metadata_ref.get()
 
     if not metadata_doc.exists:
-        raise FileNotFoundError(f"Media metadata not found for ID: {media_id}")
+        raise FileNotFoundError(f"Media not found: {media_id}")
 
     metadata = metadata_doc.to_dict()
     status = metadata.get("status")
+    
     if status != "completed":
-        raise ValueError(f"Media is not ready. Status: {status}")
+        raise ValueError(f"Media not ready. Status: {status}")
     
     total_chunks = metadata.get("totalChunks")
     if total_chunks is None:
-        raise ValueError("Invalid metadata: totalChunks missing.")
+        raise ValueError("Invalid metadata: totalChunks missing")
 
+    # Fetch chunks in order
     chunk_docs = metadata_ref.collection("chunks").order_by("order").stream()
-
     chunk_list = list(chunk_docs)
+    
     if len(chunk_list) != total_chunks:
-        raise IOError(f"Incomplete media data: Expected {total_chunks} chunks, but found {len(chunk_list)}")
+        raise IOError(
+            f"Incomplete media: Expected {total_chunks} chunks, "
+            f"found {len(chunk_list)}"
+        )
 
-    full_base64_string = "".join([doc.to_dict().get("chunk", "") for doc in chunk_list])
+    # Reassemble
+    full_base64_string = "".join([
+        doc.to_dict().get("chunk", "") 
+        for doc in chunk_list
+    ])
     
     media_bytes = base64.b64decode(full_base64_string)
-
-    if media_bytes:
-        # --- APPLY RANDOM EXPIRATION ---
-        # Base TTL of 1 hour (3600s) + a random value up to 5 minutes (300s)
-        random_ttl = 3600 + random.randint(0, 300)
-
-        # 4. Backfill L2 Cache (Redis)
-        if redis_client:
-            try:
-                redis_client.setex(media_id, random_ttl, media_bytes)
-                print(f"💾 Stored media in Redis cache with TTL: {random_ttl}s.")
-            except Exception as e:
-                print(f"Failed to store media in Redis cache: {e}")
-        
-        # 5. Backfill L1 Cache (In-Memory)
-        L1_CACHE.set(media_id, media_bytes)
-        print(f"💾 Stored media in L1 cache.")
-
+    
+    print(f"✅ Fetched from Firestore: {len(media_bytes):,} bytes")
     return media_bytes
+
+
+# ============================================================================
+# ROUTES
+# ============================================================================
 
 @media_bp.route('/media/upload', methods=['POST'])
 def upload_media_route():
+    """Upload media file"""
     data = request.json
     if not data:
         return jsonify({"error": "Invalid JSON payload"}), 400
@@ -156,10 +182,14 @@ def upload_media_route():
     
     user_id = get_current_user_id()
     if not user_id:
-        return jsonify({"error": "Authentication required. Provide 'X-User-ID' header."}), 401
+        return jsonify({
+            "error": "Authentication required. Provide 'X-User-ID' header."
+        }), 401
 
     if not all([base64_content, media_type]):
-        return jsonify({"error": "Missing required fields: 'content', 'type'"}), 400
+        return jsonify({
+            "error": "Missing required fields: 'content', 'type'"
+        }), 400
 
     prefix = "img" if media_type == "image" else "aud"
     media_id = f"{prefix}_{int(time.time() * 1000)}"
@@ -172,26 +202,30 @@ def upload_media_route():
             "message": "File uploaded successfully."
         }), 201
     except Exception as e:
-        return jsonify({"error": f"Failed to upload file: {e}"}), 500
+        return jsonify({"error": f"Failed to upload: {e}"}), 500
+
 
 @media_bp.route('/media/get/<string:media_id>', methods=['GET'])
 def get_media_route(media_id):
+    """
+    Get media file with automatic caching.
+    Returns media with proper CORS headers.
+    """
     user_id = get_current_user_id()
     if not user_id:
-        return jsonify({"error": "Authentication required. Provide 'X-User-ID' header."}), 401
+        return jsonify({
+            "error": "Authentication required. Provide 'X-User-ID' header."
+        }), 401
     
     try:
-        media_bytes = get_media_data(media_id) # This calls your single, correct, caching function
+        # Get from cache (automatic L1 -> L2 -> DB fallback)
+        media_bytes = get_media_data(media_id)
         
-        # --- THIS IS THE FIX FOR THE WEBSITE ---
-        # 1. Create the response object.
+        # Create response with CORS headers
         response = Response(media_bytes, mimetype='image/jpeg')
-        
-        # 2. Add the crucial CORS header to the response.
-        #    The '*' allows any website to request this image.
         response.headers['Access-Control-Allow-Origin'] = '*'
+        response.headers['Cache-Control'] = 'public, max-age=3600'  # Browser cache
         
-        # 3. Return the response with the new header.
         return response
 
     except FileNotFoundError as e:
@@ -200,7 +234,89 @@ def get_media_route(media_id):
         return jsonify({"error": str(e)}), 409
     except Exception as e:
         import traceback
-        print(f"CRITICAL ERROR in get_media_route: {e}")
+        print(f"❌ CRITICAL ERROR in get_media_route: {e}")
         print(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
 
+
+@media_bp.route('/media/delete/<string:media_id>', methods=['DELETE'])
+def delete_media_route(media_id):
+    """
+    Delete media file and invalidate cache.
+    """
+    user_id = get_current_user_id()
+    if not user_id:
+        return jsonify({
+            "error": "Authentication required"
+        }), 401
+    
+    try:
+        # Delete from Firestore
+        metadata_ref = db.collection(MEDIA_COLLECTION).document(media_id)
+        
+        # Delete chunks
+        for chunk in metadata_ref.collection("chunks").stream():
+            chunk.reference.delete()
+        
+        # Delete metadata
+        metadata_ref.delete()
+        
+        # Invalidate cache
+        if cache_manager:
+            cache_key = f"media:{media_id}"
+            cache_manager.delete(cache_key)
+            print(f"✅ Cache invalidated: {cache_key}")
+        
+        return jsonify({
+            "success": True,
+            "message": f"Media {media_id} deleted"
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ Error deleting media: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@media_bp.route('/media/cache/stats', methods=['GET'])
+def get_cache_stats():
+    """
+    Get cache performance metrics (for monitoring/debugging).
+    """
+    if not cache_manager:
+        return jsonify({
+            "error": "Cache manager not available"
+        }), 503
+    
+    try:
+        stats = cache_manager.get_all_stats()
+        return jsonify(stats), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@media_bp.route('/media/cache/clear', methods=['POST'])
+def clear_cache():
+    """
+    Clear media cache (admin endpoint).
+    """
+    if not cache_manager:
+        return jsonify({
+            "error": "Cache manager not available"
+        }), 503
+    
+    try:
+        # Clear only media-related keys
+        if cache_manager.l2 and cache_manager.l2.available:
+            cache_manager.l2.clear(pattern="media:*")
+        
+        if cache_manager.l1:
+            # L1 doesn't support pattern clearing, so clear all
+            cache_manager.l1.clear()
+        
+        return jsonify({
+            "success": True,
+            "message": "Media cache cleared"
+        }), 200
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500

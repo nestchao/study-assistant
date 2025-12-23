@@ -403,3 +403,215 @@ class SimpleL1Cache:
         self.cache[key] = (value, expiry)
 
 L1_CACHE = SimpleL1Cache(max_size=512, ttl=20)
+
+# Add these functions to utils.py
+
+def generate_tree_text_from_paths(root_name: str, file_paths: list) -> str:
+    """
+    Builds a visual tree structure string from a flat list of relative file paths.
+    
+    Example output:
+    project_root/
+    ├── backend/
+    │   ├── app.py
+    │   └── utils.py
+    └── frontend/
+        └── index.html
+    
+    Args:
+        root_name: The name of the root directory
+        file_paths: List of relative file paths (e.g., ['backend/app.py', 'frontend/index.html'])
+    
+    Returns:
+        A formatted tree structure as a string
+    """
+    # Build nested dictionary structure
+    tree = {}
+    for path_str in file_paths:
+        parts = Path(path_str).parts
+        current_dict = tree
+        
+        # Navigate through directories
+        for part in parts[:-1]:
+            current_dict = current_dict.setdefault(part, {})
+        
+        # Mark the final file
+        current_dict[parts[-1]] = None  # None indicates a file (not a directory)
+
+    def build_tree_lines(sub_tree, prefix="", is_last_list=None):
+        """
+        Recursively builds the tree lines with proper box-drawing characters.
+        
+        Args:
+            sub_tree: Current dictionary node
+            prefix: The string prefix for the current line (contains │, ├, └, etc.)
+            is_last_list: List tracking if each level is the last item
+        """
+        if is_last_list is None:
+            is_last_list = []
+            
+        lines = []
+        items = sorted(sub_tree.keys())
+        
+        for i, key in enumerate(items):
+            is_last = (i == len(items) - 1)
+            value = sub_tree[key]
+            
+            # Determine connector character
+            connector = "└── " if is_last else "├── "
+            
+            if value is None:
+                # It's a file
+                lines.append(f"{prefix}{connector}{key}")
+            else:
+                # It's a directory
+                lines.append(f"{prefix}{connector}{key}/")
+                
+                # Prepare prefix for children
+                extension = "    " if is_last else "│   "
+                new_prefix = prefix + extension
+                
+                # Recursively process children
+                child_lines = build_tree_lines(value, new_prefix, is_last_list + [is_last])
+                lines.extend(child_lines)
+                
+        return lines
+
+    # Generate the tree
+    tree_lines = build_tree_lines(tree)
+    
+    # Combine with root name
+    full_tree = f"{root_name}/\n" + "\n".join(tree_lines)
+    
+    return full_tree
+
+
+def generate_tree_with_stats(root_name: str, file_paths: list, files_metadata: dict = None) -> str:
+    """
+    Enhanced tree generation that includes file statistics.
+    
+    Args:
+        root_name: The name of the root directory
+        file_paths: List of relative file paths
+        files_metadata: Optional dict mapping paths to metadata (size, lines, etc.)
+    
+    Returns:
+        A formatted tree structure with statistics
+    """
+    tree = {}
+    file_count = 0
+    dir_count = 0
+    total_size = 0
+    
+    for path_str in file_paths:
+        parts = Path(path_str).parts
+        current_dict = tree
+        
+        for part in parts[:-1]:
+            if part not in current_dict:
+                dir_count += 1
+            current_dict = current_dict.setdefault(part, {})
+        
+        # Store file with metadata
+        file_info = {'_is_file': True}
+        if files_metadata and path_str in files_metadata:
+            file_info.update(files_metadata[path_str])
+            total_size += files_metadata[path_str].get('size', 0)
+        
+        current_dict[parts[-1]] = file_info
+        file_count += 1
+
+    def build_tree_lines(sub_tree, prefix=""):
+        lines = []
+        items = sorted(sub_tree.keys())
+        
+        for i, key in enumerate(items):
+            is_last = (i == len(items) - 1)
+            value = sub_tree[key]
+            connector = "└── " if is_last else "├── "
+            
+            if isinstance(value, dict) and value.get('_is_file'):
+                # It's a file with metadata
+                size_info = ""
+                if 'size' in value:
+                    size_kb = value['size'] / 1024
+                    size_info = f" ({size_kb:.1f} KB)"
+                lines.append(f"{prefix}{connector}{key}{size_info}")
+            elif isinstance(value, dict):
+                # It's a directory
+                lines.append(f"{prefix}{connector}{key}/")
+                extension = "    " if is_last else "│   "
+                new_prefix = prefix + extension
+                lines.extend(build_tree_lines(value, new_prefix))
+            else:
+                # Simple file
+                lines.append(f"{prefix}{connector}{key}")
+                
+        return lines
+
+    tree_lines = build_tree_lines(tree)
+    
+    # Create summary header
+    summary = f"""
+    {root_name}/
+    {'='*60}
+    Directories: {dir_count}
+    Files: {file_count}
+    Total Size: {total_size / 1024 / 1024:.2f} MB
+    {'='*60}
+    """
+    
+    full_tree = summary + "\n".join(tree_lines)
+    return full_tree
+
+
+def format_bytes(size_bytes: int) -> str:
+    """
+    Converts bytes to human-readable format.
+    
+    Args:
+        size_bytes: Size in bytes
+    
+    Returns:
+        Formatted string (e.g., "1.5 MB", "348 KB")
+    """
+    for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+        if size_bytes < 1024.0:
+            return f"{size_bytes:.1f} {unit}"
+        size_bytes /= 1024.0
+    return f"{size_bytes:.1f} PB"
+
+
+def validate_tree_structure(tree: dict) -> bool:
+    """
+    Validates that a tree structure is properly formed.
+    
+    Args:
+        tree: Dictionary representing the file tree
+    
+    Returns:
+        True if valid, False otherwise
+    """
+    def check_node(node):
+        if not isinstance(node, dict):
+            return False
+        
+        for key, value in node.items():
+            if not isinstance(key, str):
+                return False
+            
+            # Files are marked with None or have _is_file flag
+            if value is None or (isinstance(value, dict) and value.get('_is_file')):
+                continue
+            
+            # Directories must be dicts
+            if not isinstance(value, dict):
+                return False
+            
+            # Recursively check subdirectories
+            if not check_node(value):
+                return False
+        
+        return True
+    
+    return check_node(tree)
