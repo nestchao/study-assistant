@@ -1,0 +1,123 @@
+/* extension/media/chat.css */
+:root {
+    --bubble-padding: 12px;
+}
+
+body {
+    background-color: var(--vscode-sideBar-background);
+    color: var(--vscode-foreground);
+    font-family: var(--vscode-font-family);
+    margin: 0; padding: 0;
+    display: flex; flex-direction: column; height: 100vh;
+}
+
+#chat-container {
+    flex: 1; overflow-y: auto;
+    padding: 15px; display: flex; flex-direction: column; gap: 12px;
+}
+
+/* Chat Bubbles */
+.message {
+    max-width: 90%;
+    padding: var(--bubble-padding);
+    border-radius: 8px;
+    line-height: 1.4;
+    word-wrap: break-word;
+}
+
+.user {
+    align-self: flex-end;
+    background: var(--vscode-button-background);
+    color: var(--vscode-button-foreground);
+}
+
+.bot {
+    align-self: flex-start;
+    background: var(--vscode-editor-inactiveSelectionBackground);
+    border: 1px solid var(--vscode-widget-border);
+}
+
+/* Code Block with Action Header */
+.code-block-container {
+    position: relative; /* Ensure it stays in flow */
+    z-index: 1;
+    background: var(--vscode-editor-background);
+    margin: 12px 0;
+    border: 1px solid var(--vscode-widget-border);
+    border-radius: 4px;
+    pointer-events: auto !important; /* Force clickability */
+}
+
+.code-header {
+    z-index: 2; /* Keep buttons on top */
+    position: relative;
+    background: var(--vscode-editorWidget-background);
+    border-bottom: 1px solid var(--vscode-widget-border);
+    padding: 8px 12px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.code-actions {
+    display: flex;
+    gap: 4px;
+}
+
+.action-btn {
+    pointer-events: auto !important;
+    cursor: pointer !important;
+    user-select: none;
+    z-index: 10;
+}
+
+.accept-btn { background: #28a745; color: white; margin-right: 4px; }
+.reject-btn { background: #6c757d; color: white; }
+.action-btn:hover { filter: brightness(1.2); }
+
+pre {
+    padding: 10px;
+    margin: 0;
+    overflow-x: auto;
+}
+
+/* Input Area Fix */
+.input-wrapper {
+    padding: 10px;
+    background: var(--vscode-sideBar-background);
+    border-top: 1px solid var(--vscode-widget-border);
+}
+
+.input-container {
+    display: flex;
+    align-items: center;
+    background: var(--vscode-input-background);
+    border: 1px solid var(--vscode-input-border);
+    border-radius: 4px;
+    padding: 4px 8px;
+}
+
+#prompt {
+    flex: 1;
+    background: transparent;
+    color: var(--vscode-input-foreground);
+    border: none;
+    outline: none;
+    padding: 8px;
+    resize: none;
+}
+
+#send-btn {
+    background: var(--vscode-button-background);
+    color: var(--vscode-button-foreground);
+    border: none;
+    border-radius: 4px;
+    width: 32px; height: 32px;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+}
+
+code {
+    font-family: var(--vscode-editor-font-family);
+    font-size: var(--vscode-editor-font-size);
+}

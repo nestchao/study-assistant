@@ -1,21 +1,30 @@
 import * as vscode from 'vscode';
-import { BackendClient } from '../services/BackendClient';
+import * as path from 'path';
+import * as fs from 'fs';
 
 export class CodeChatProvider implements vscode.WebviewViewProvider {
-    _view?: vscode.WebviewView;
+    private _view?: vscode.WebviewView;
 
     constructor(
         private readonly _extensionUri: vscode.Uri,
-        private readonly _backendClient: BackendClient,
+        private readonly _backendClient: any,
         private readonly _projectId: string | null
     ) {}
 
-    public resolveWebviewView(webviewView: vscode.WebviewView) {
+    public resolveWebviewView(
+        webviewView: vscode.WebviewView,
+        context: vscode.WebviewViewResolveContext,
+        _token: vscode.CancellationToken,
+    ) {
         this._view = webviewView;
-        
+
         webviewView.webview.options = {
             enableScripts: true,
-            localResourceRoots: [this._extensionUri]
+            // 🚀 CRITICAL: Allow access to the media folder
+            localResourceRoots: [
+                vscode.Uri.joinPath(this._extensionUri, 'media'),
+                vscode.Uri.joinPath(this._extensionUri, 'node_modules')
+            ]
         };
 
         webviewView.webview.html = this._getHtmlForWebview(webviewView.webview);
@@ -24,151 +33,165 @@ export class CodeChatProvider implements vscode.WebviewViewProvider {
             switch (data.type) {
                 case 'askCode': {
                     if (!data.value || !this._projectId) {
-                        webviewView.webview.postMessage({
+                        this._view?.webview.postMessage({
                             type: 'addResponse',
-                            value: this._projectId 
-                                ? 'Please enter a question' 
-                                : 'Please register your project first (Cmd+Shift+P → "Register Project")'
+                            value: '⚠️ Project not registered. Please use the Config panel first.'
                         });
                         return;
                     }
 
-                    // Show thinking message
-                    webviewView.webview.postMessage({
-                        type: 'addResponse',
-                        value: '🤔 Analyzing your codebase...'
-                    });
+                    // 🚀 SPACE-X FEEDBACK: Initial Thinking state
+                    this._view?.webview.postMessage({ type: 'addResponse', value: '🤔 Analyzing...' });
 
                     try {
-                        // Get suggestion from C++ backend
+                        const activeEditor = vscode.window.activeTextEditor;
+                        const activeContext = activeEditor ? {
+                            filePath: vscode.workspace.asRelativePath(activeEditor.document.uri),
+                            content: activeEditor.document.getText(),
+                            selection: activeEditor.document.getText(activeEditor.selection)
+                        } : { filePath: "None", content: "", selection: "" };
+
+                        // Call C++ Backend
                         const response = await this._backendClient.getCodeSuggestion(
                             this._projectId,
-                            data.value
+                            data.value,
+                            activeContext
                         );
 
-                        webviewView.webview.postMessage({
+                        // Update the "Thinking" bubble with real data
+                        this._view?.webview.postMessage({
                             type: 'updateLastResponse',
                             value: response
                         });
                     } catch (error: any) {
-                        webviewView.webview.postMessage({
+                        this._view?.webview.postMessage({
                             type: 'updateLastResponse',
-                            value: `❌ Error: ${error.message}`
+                            value: `❌ Critical Failure: ${error.message}. Check if C++ backend is frozen.`
                         });
                     }
                     break;
                 }
 
-                case 'selectContext': {
-                    // Get context candidates for user to select
-                    if (!this._projectId) return;
+                case 'applyCode': {
+                    const rawCode = data.value;
+                    const blockId = data.id;
+                    
+                    // 1. Extract Target using Regex from the [TARGET: path] tag
+                    const targetMatch = rawCode.match(/(?:\/\/|#|--)\s*\[TARGET:\s*([^\]\s]+)\]/i);
+                    const workspaceFolders = vscode.workspace.workspaceFolders;
+
+                    if (!workspaceFolders) {
+                        vscode.window.showErrorMessage("No active workspace found.");
+                        return;
+                    }
 
                     try {
-                        const candidates = await this._backendClient.getContextCandidates(
-                            this._projectId,
-                            data.value
+                        let targetUri: vscode.Uri;
+                        
+                        if (targetMatch) {
+                            const relativePath = targetMatch[1].trim();
+                            targetUri = vscode.Uri.joinPath(workspaceFolders[0].uri, relativePath);
+                        } else {
+                            // Fallback: Apply to currently active editor if no tag found
+                            const activeEditor = vscode.window.activeTextEditor;
+                            if (!activeEditor) throw new Error("No target file specified and no active editor.");
+                            targetUri = activeEditor.document.uri;
+                        }
+
+                        // 2. Clean the code (remove the TARGET tag line)
+                        const cleanCode = rawCode.replace(/(?:\/\/|#|--)\s*\[TARGET:.*?\]\s*\n?/, "").trim();
+
+                        // 3. SpaceX Integrity Check: Create file if it doesn't exist
+                        const edit = new vscode.WorkspaceEdit();
+                        
+                        // Create or Overwrite logic
+                        const documentExists = await vscode.workspace.fs.stat(targetUri).then(() => true, () => false);
+                        
+                        if (!documentExists) {
+                            edit.createFile(targetUri, { ignoreIfExists: true });
+                        }
+
+                        // Select the whole range to replace or append
+                        // For this implementation, we overwrite (High Authority Mode)
+                        const fullRange = new vscode.Range(
+                            new vscode.Position(0, 0),
+                            new vscode.Position(10000, 0) // Overly large range to ensure overwrite
                         );
 
-                        webviewView.webview.postMessage({
-                            type: 'showCandidates',
-                            candidates: candidates
-                        });
-                    } catch (error: any) {
-                        webviewView.webview.postMessage({
-                            type: 'addResponse',
-                            value: `Error getting candidates: ${error.message}`
-                        });
+                        edit.replace(targetUri, fullRange, cleanCode);
+                        
+                        await vscode.workspace.applyEdit(edit);
+                        await vscode.workspace.openTextDocument(targetUri).then(doc => doc.save());
+
+                        // 4. Notify UI of success
+                        webviewView.webview.postMessage({ type: 'applySuccess', id: blockId });
+                        vscode.window.setStatusBarMessage(`$(check) Applied AI changes to ${path.basename(targetUri.fsPath)}`, 3000);
+
+                    } catch (err: any) {
+                        vscode.window.showErrorMessage(`Docking failed: ${err.message}`);
                     }
                     break;
                 }
 
-                case 'insertCode': {
-                    // Insert code at cursor position
-                    const editor = vscode.window.activeTextEditor;
-                    if (editor && data.value) {
-                        editor.edit(editBuilder => {
-                            editBuilder.insert(editor.selection.active, data.value);
-                        });
+                case 'openFile': {
+                    // 🚀 PROGRAMMER FIX: Robust file opening
+                    const workspaceFolders = vscode.workspace.workspaceFolders;
+                    if (workspaceFolders) {
+                        const fullPath = path.join(workspaceFolders[0].uri.fsPath, data.value);
+                        const uri = vscode.Uri.file(fullPath);
+                        try {
+                            const doc = await vscode.workspace.openTextDocument(uri);
+                            await vscode.window.showTextDocument(doc);
+                        } catch (e) {
+                            // If path is already absolute or slightly different, try finding it
+                            const found = await vscode.workspace.findFiles(`**/${data.value}`, null, 1);
+                            if (found.length > 0) {
+                                const doc = await vscode.workspace.openTextDocument(found[0]);
+                                await vscode.window.showTextDocument(doc);
+                            }
+                        }
                     }
                     break;
                 }
             }
         });
+
+        webviewView.onDidDispose(() => { this._view = undefined; });
     }
 
     private _getHtmlForWebview(webview: vscode.Webview) {
+        // 🚀 RESOLVER: Map absolute paths
+        const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'chat.js'));
+        const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'chat.css'));
+        // Use a CDN link that is most likely to pass CSP, but add it to the policy
+        const markedUri = "https://cdn.jsdelivr.net/npm/marked/marked.min.js";
+
+        console.log("🚀 [Host] Injecting Script URI:", scriptUri.toString());
+        console.log("🚀 [Host] Injecting Style URI:", styleUri.toString());
+
         return `<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Code Assistant</title>
-    <style>
-        body { font-family: var(--vscode-font-family); background: var(--vscode-editor-background); color: var(--vscode-editor-foreground); padding: 16px; height: 100vh; display: flex; flex-direction: column; }
-        .chat-container { flex: 1; overflow-y: auto; margin-bottom: 16px; display: flex; flex-direction: column; gap: 12px; }
-        .message { padding: 12px; border-radius: 8px; max-width: 90%; word-wrap: break-word; }
-        .user { background: var(--vscode-button-background); color: var(--vscode-button-foreground); align-self: flex-end; }
-        .bot { background: var(--vscode-editor-inactiveSelectionBackground); align-self: flex-start; }
-        .input-area { display: flex; gap: 8px; }
-        textarea { flex: 1; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border); border-radius: 4px; padding: 8px; resize: vertical; min-height: 40px; font-family: inherit; }
-        button { background: var(--vscode-button-background); color: var(--vscode-button-foreground); border: none; border-radius: 4px; padding: 0 16px; cursor: pointer; }
-        button:hover { background: var(--vscode-button-hoverBackground); }
-    </style>
-</head>
-<body>
-    <div class="chat-container" id="chat"></div>
-
-    <div class="input-area">
-        <textarea id="prompt" placeholder="Ask about your code..."></textarea>
-        <button id="sendBtn">Send</button>
-    </div>
-
-    <script>
-        const vscode = acquireVsCodeApi();
-        const chatContainer = document.getElementById('chat');
-        const promptInput = document.getElementById('prompt');
-        const sendBtn = document.getElementById('sendBtn');
-
-        function addMessage(text, sender = 'bot') {
-            const div = document.createElement('div');
-            div.className = 'message ' + sender;
-            div.innerHTML = text.replace(/\\n/g, '<br>'); // Simple line break handling
-            chatContainer.appendChild(div);
-            chatContainer.scrollTop = chatContainer.scrollHeight;
-        }
-
-        function sendMessage() {
-            const text = promptInput.value.trim();
-            if (!text) return;
-
-            addMessage(text, 'user');
-            promptInput.value = ''; // Clear input
-
-            vscode.postMessage({
-                type: 'askCode',
-                value: text
-            });
-        }
-
-        // Event Listeners
-        sendBtn.addEventListener('click', sendMessage);
-        
-        promptInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                sendMessage();
-            }
-        });
-
-        // Handle messages from Extension
-        window.addEventListener('message', event => {
-            const message = event.data;
-            if (message.type === 'addResponse' || message.type === 'updateLastResponse') {
-                addMessage(message.value);
-            }
-        });
-    </script>
-</body>
-</html>`;
+        <html lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <!-- 🚀 CSP: Explicitly allow the scripts and styles -->
+            <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource} https:; script-src ${webview.cspSource} 'unsafe-inline' https://cdn.jsdelivr.net; style-src ${webview.cspSource} 'unsafe-inline';">
+            <link href="${styleUri}" rel="stylesheet">
+        </head>
+        <body>
+            <div id="chat-container"></div>
+            <div class="input-wrapper">
+                <div class="input-container">
+                    <textarea id="prompt" rows="1" placeholder="Ask anything..."></textarea>
+                    <button id="send-btn">
+                        <svg viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+                    </button>
+                </div>
+            </div>
+            <!-- Load dependencies -->
+            <script src="${markedUri}"></script>
+            <script src="${scriptUri}"></script>
+        </body>
+        </html>`;
     }
 }
