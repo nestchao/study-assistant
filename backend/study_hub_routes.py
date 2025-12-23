@@ -76,37 +76,44 @@ def generate_note(text):
     """Generates a simplified study note using the injected AI model."""
     print("  🤖 Generating AI study note...")
     prompt = f"""
-    You are an expert academic study assistant. Your mission is to transform dense academic texts into simplified, well-structured study notes that are easy to understand.
-    
-    Your output must be in the **same language as the source text**. Follow these rules meticulously.
+    You are an expert study assistant. Your goal is to convert original study notes into "Simplified Notes" that are visually engaging and easy for a beginner to understand.
 
-    # 🚀 Core Transformation Rules
+    **1. Simplification Strategy (The "How"):**
+    *   **Rewrite:** Convert dense, academic sentences into short, direct statements.
+    *   **Vocabulary:** Replace complex words (e.g., 'utilization', 'paradigm') with simple, everyday equivalents (e.g., 'use', 'model').
+    *   **Tone:** Use a friendly, teaching tone.
 
-    ## 0. 🏛️ Preserve the Original Structure (The Golden Rule)
-    *   You MUST follow the structure, headings, and topic order of the original text **EXACTLY**.
-    *   Do not merge or re-order sections. Simplify content **within** the original structure.
+    **2. Annotation & Language Rules (The "Style"):**
+    *   **Main Text:** Keep the main text in the **same language** as the source (e.g., if input is English, output is English).
+    *   **Inline Annotations:** You must identify **any complex word**, **academic term**, or **difficult vocabulary** (not just key concepts). Immediately follow these words with parentheses containing:
+        1.  The **Chinese translation**.
+        2.  A **relevant emoji**.
+        *   *Format:* `Word (Chinese Translation Emoji)`
+        *   *Example:* `It requires calculation (计算 🧮) and logic (逻辑 🧠).`
 
-    ## 1. 💡 Simplify and Shorten Content (Aggressive Simplification)
-    *   **Clarity Priority:** **REWRITE** dense, convoluted academic sentences into short, direct, simple statements. The resulting text must be immediately clear to a novice reader.
-    *   **Sentence Compression:** Aim for maximum brevity. Sentences should be **as short as possible** where grammatically possible. Keep the flow simple (Subject-Verb-Object).
-    *   **Word Replacement:** Replace complex or academic terminology (e.g., 'paradigm,' 'utilization,' 'delineate') with simpler, everyday equivalents (e.g., 'model,' 'use,' 'show').
-    *   **Keep Key Points:** Retain all essential definitions, data, and core arguments accurately.
-    *   **Exam Purpose:** The note is generate for exam purpose, so the key word can't miss. 
-
-    ## 3. 🎨 Formatting and Tone
+    **3. Visual Formatting:**
     *   Use markdown headings (`#`, `##`) that match the original text's structure. Add a relevant **emoji** to each main heading.
-    *   Use **bold text** to emphasize key simplified concepts.
-    *   Maintain a clear, direct, and helpful academic tone.
+    *   **Layout:** Use bullet points for lists to make them easy to scan.
+    *   **Bolding:** **Bold** the key terms that are being defined.
 
-    ## 4. 🧠 Memory Aid and Accuracy
+    **4. 🧠 Memory Aid and Accuracy:**
     *   Cover all major topics accurately. Do not skip sections or add new information.
     *   At the end of each major section, create a short, creative **Mnemonic Tip (记忆技巧)** to aid recall.
 
-    ---
-    Here is the text to process:
-    ---
+    **Example Input:**
+    "Algorithm analysis helps us to determine which algorithm is most efficient in terms of time and space consumed."
+
+    **Example Output:**
+    🔍 **Algorithm Analysis (算法分析)**
+    Algorithm analysis helps us find which method is best in terms of:
+    *   **Time used** (时间消耗 ⏳)
+    *   **Space used** (空间消耗 💾)
+
+    ***
+
+    **Please generate the Simplified Note for the following text:**
+
     {text}
-    ---
     """
     try:
         # Use the injected note_generation_model

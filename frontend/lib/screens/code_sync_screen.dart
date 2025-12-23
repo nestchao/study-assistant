@@ -14,8 +14,20 @@ class CodeSyncScreen extends StatefulWidget {
 
 class _CodeSyncScreenState extends State<CodeSyncScreen> with SingleTickerProviderStateMixin {
   late TabController _tabController;
+  final TextEditingController _searchController = TextEditingController();
   
   static const double mobileBreakpoint = 900.0;
+  String _searchQuery = '';
+  bool _isGridView = true;
+
+  // Pastel colors matching Dashboard
+  final List<Color> _cardColors = [
+    const Color(0xFFFDF6E3), // Cream
+    const Color(0xFFE8F5E9), // Light Green
+    const Color(0xFFE3F2FD), // Light Blue
+    const Color(0xFFF3E5F5), // Light Purple
+    const Color(0xFFFFF3E0), // Light Orange
+  ];
 
   @override
   void initState() {
@@ -29,8 +41,11 @@ class _CodeSyncScreenState extends State<CodeSyncScreen> with SingleTickerProvid
   @override
   void dispose() {
     _tabController.dispose();
+    _searchController.dispose();
     super.dispose();
   }
+
+  Color _getCardColor(int index) => _cardColors[index % _cardColors.length];
 
   void _showRegisterDialog() {
     showDialog(
@@ -42,28 +57,140 @@ class _CodeSyncScreenState extends State<CodeSyncScreen> with SingleTickerProvid
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Code Sync'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.add_rounded),
-            onPressed: _showRegisterDialog,
-            tooltip: 'Register Folder',
-          ),
-        ],
-        bottom: TabBar(
-          controller: _tabController,
-          tabs: const [
-            Tab(icon: Icon(Icons.folder_outlined), text: 'Configurations'),
-            Tab(icon: Icon(Icons.code), text: 'Code Viewer'),
+      backgroundColor: Colors.white,
+      body: SafeArea(
+        child: Column(
+          children: [
+            _buildTopActions(),
+            const Divider(height: 1, color: Color(0xFFE0E0E0)),
+            
+            // Tab Bar integrated into the flow
+            Container(
+              color: Colors.white,
+              width: double.infinity,
+              alignment: Alignment.centerLeft,
+              child: TabBar(
+                controller: _tabController,
+                labelColor: Colors.indigo,
+                unselectedLabelColor: Colors.grey,
+                indicatorColor: Colors.indigo,
+                indicatorSize: TabBarIndicatorSize.label,
+                isScrollable: true,
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                tabs: const [
+                  Tab(text: 'Configurations'),
+                  Tab(text: 'Workspace'),
+                ],
+              ),
+            ),
+            
+            Expanded(
+              child: TabBarView(
+                controller: _tabController,
+                children: [
+                  _buildConfigurationsTab(),
+                  _buildCodeViewerTab(),
+                ],
+              ),
+            ),
           ],
         ),
       ),
-      body: TabBarView(
-        controller: _tabController,
+    );
+  }
+
+  Widget _buildTopActions() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+      child: Row(
         children: [
-          _buildConfigurationsTab(),
-          _buildCodeViewerTab(),
+          // 1. Logo/Title
+          const Text('Code Intelligence',
+              style: TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: -0.5)),
+
+          const SizedBox(width: 40),
+
+          // 2. Search Bar
+          Expanded(
+            child: Container(
+              height: 48,
+              decoration: BoxDecoration(
+                color: const Color(0xFFF0F4F9),
+                borderRadius: BorderRadius.circular(24),
+              ),
+              child: TextField(
+                controller: _searchController,
+                onChanged: (v) => setState(() => _searchQuery = v),
+                decoration: const InputDecoration(
+                  hintText: 'Search repositories...',
+                  prefixIcon: Icon(Icons.search, color: Colors.black54),
+                  border: InputBorder.none,
+                  contentPadding: EdgeInsets.symmetric(vertical: 10),
+                ),
+              ),
+            ),
+          ),
+
+          const SizedBox(width: 20),
+
+          // 3. Navigation (Back to Home)
+          Container(
+            decoration: BoxDecoration(
+              color: Colors.white,
+              border: Border.all(color: const Color(0xFFE0E0E0)),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: IconButton(
+              tooltip: 'Back to Study Assistance',
+              icon: const Icon(Icons.home_outlined, size: 20, color: Colors.black87),
+              onPressed: () => Navigator.pop(context),
+            ),
+          ),
+
+          const SizedBox(width: 12),
+
+          // 4. View Toggle (Grid/List)
+          Container(
+            decoration: BoxDecoration(
+              color: const Color(0xFFF0F4F9),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Row(
+              children: [
+                IconButton(
+                  icon: Icon(Icons.grid_view_rounded,
+                      size: 20,
+                      color: _isGridView ? Colors.blue[800] : Colors.black54),
+                  onPressed: () => setState(() => _isGridView = true),
+                ),
+                IconButton(
+                  icon: Icon(Icons.list_rounded,
+                      size: 20,
+                      color: !_isGridView ? Colors.blue[800] : Colors.black54),
+                  onPressed: () => setState(() => _isGridView = false),
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(width: 20),
+
+          // 5. Create Button
+          ElevatedButton.icon(
+            onPressed: _showRegisterDialog,
+            icon: const Icon(Icons.add, size: 18),
+            label: const Text('New Repo', style: TextStyle(fontWeight: FontWeight.bold)),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.black,
+              foregroundColor: Colors.white,
+              elevation: 0,
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 18),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+            ),
+          ),
         ],
       ),
     );
@@ -75,24 +202,28 @@ class _CodeSyncScreenState extends State<CodeSyncScreen> with SingleTickerProvid
         if (provider.isLoadingSyncProjects) {
           return const Center(child: CircularProgressIndicator());
         }
-        if (provider.syncProjects.isEmpty) {
+        
+        final filteredProjects = provider.syncProjects
+            .where((p) => p.name.toLowerCase().contains(_searchQuery.toLowerCase()))
+            .toList();
+
+        if (filteredProjects.isEmpty) {
           return Center(
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Icon(Icons.folder_off, size: 80, color: Colors.grey.shade400),
+                Icon(Icons.folder_off_outlined, size: 80, color: Colors.grey.shade200),
                 const SizedBox(height: 16),
                 Text(
-                  'No folders registered',
+                  _searchQuery.isEmpty ? 'No Synced Projects' : 'No matching projects found',
                   style: Theme.of(context).textTheme.headlineSmall?.copyWith(
                         color: Colors.grey.shade600,
+                        fontWeight: FontWeight.bold
                       ),
                 ),
                 const SizedBox(height: 8),
-                Text(
-                  'Click the + button to add your first folder',
-                  style: TextStyle(color: Colors.grey.shade500),
-                ),
+                if (_searchQuery.isEmpty)
+                  const Text('Register a folder to start.', style: TextStyle(color: Colors.grey)),
               ],
             ),
           );
@@ -100,25 +231,74 @@ class _CodeSyncScreenState extends State<CodeSyncScreen> with SingleTickerProvid
 
         return RefreshIndicator(
           onRefresh: provider.fetchSyncProjects,
-          child: GridView.builder(
-            padding: const EdgeInsets.all(16),
-            gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-              maxCrossAxisExtent: 350.0,
-              mainAxisSpacing: 16.0,
-              crossAxisSpacing: 16.0,
-              childAspectRatio: 0.85,
-            ),
-            itemCount: provider.syncProjects.length,
-            itemBuilder: (context, index) {
-              final project = provider.syncProjects[index];
-              return _SyncProjectCard(
-                project: project,
-                onViewFiles: () {
-                  provider.fetchFileTree(project.id);
-                  _tabController.animateTo(1);
-                },
-              );
-            },
+          child: CustomScrollView(
+            slivers: [
+              SliverPadding(
+                padding: const EdgeInsets.fromLTRB(24, 24, 24, 0),
+                sliver: SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.only(bottom: 20),
+                    child: Text(
+                      "Active Repositories (${filteredProjects.length})", 
+                      style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w600, color: Color(0xFF444746)),
+                    ),
+                  ),
+                ),
+              ),
+              
+              _isGridView
+                  ? SliverPadding(
+                      padding: const EdgeInsets.symmetric(horizontal: 24),
+                      sliver: SliverGrid(
+                        gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                          maxCrossAxisExtent: 350.0,
+                          mainAxisSpacing: 20.0,
+                          crossAxisSpacing: 20.0,
+                          childAspectRatio: 1.1,
+                        ),
+                        delegate: SliverChildBuilderDelegate(
+                          (context, index) {
+                            final project = filteredProjects[index];
+                            return _SyncProjectCard(
+                              project: project,
+                              color: _getCardColor(index),
+                              isGrid: true,
+                              onViewFiles: () {
+                                provider.fetchFileTree(project.id);
+                                _tabController.animateTo(1);
+                              },
+                            );
+                          },
+                          childCount: filteredProjects.length,
+                        ),
+                      ),
+                    )
+                  : SliverPadding(
+                      padding: const EdgeInsets.symmetric(horizontal: 24),
+                      sliver: SliverList(
+                        delegate: SliverChildBuilderDelegate(
+                          (context, index) {
+                            final project = filteredProjects[index];
+                            return Padding(
+                              padding: const EdgeInsets.only(bottom: 12),
+                              child: _SyncProjectCard(
+                                project: project,
+                                color: _getCardColor(index),
+                                isGrid: false,
+                                onViewFiles: () {
+                                  provider.fetchFileTree(project.id);
+                                  _tabController.animateTo(1);
+                                },
+                              ),
+                            );
+                          },
+                          childCount: filteredProjects.length,
+                        ),
+                      ),
+                    ),
+                    
+              const SliverPadding(padding: EdgeInsets.only(bottom: 100), sliver: SliverToBoxAdapter(child: SizedBox())),
+            ],
           ),
         );
       },
@@ -138,63 +318,267 @@ class _CodeSyncScreenState extends State<CodeSyncScreen> with SingleTickerProvid
   }
 }
 
-// --- EXTRACTED REGISTER DIALOG TO ISOLATE STATE ---
+// --- PROJECT CARD ---
+class _SyncProjectCard extends StatelessWidget {
+  final CodeProject project;
+  final VoidCallback onViewFiles;
+  final Color color;
+  final bool isGrid;
+
+  const _SyncProjectCard({
+    required this.project,
+    required this.onViewFiles,
+    required this.color,
+    required this.isGrid,
+  });
+
+  void _showEditConfigDialog(BuildContext context) {
+    showDialog(context: context, builder: (context) => _EditConfigDialog(project: project));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final provider = context.watch<ProjectProvider>();
+    final isSyncing = provider.syncingProjectId == project.id || project.status == 'syncing';
+
+    if (!isGrid) {
+      // LIST VIEW LAYOUT
+      return Container(
+        height: 100,
+        decoration: BoxDecoration(
+          color: color,
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.02), blurRadius: 10, offset: const Offset(0, 4))],
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(color: Colors.white.withOpacity(0.6), shape: BoxShape.circle),
+              child: const Icon(Icons.code_rounded, color: Colors.black87, size: 20),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(project.name, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold), maxLines: 1),
+                  const SizedBox(height: 4),
+                  Text(project.localPath ?? 'Path unknown', style: TextStyle(fontSize: 12, color: Colors.black.withOpacity(0.6)), maxLines: 1),
+                ],
+              ),
+            ),
+            if (isSyncing)
+              const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+            else
+              Row(
+                children: [
+                  IconButton.filledTonal(
+                    onPressed: onViewFiles,
+                    icon: const Icon(Icons.open_in_new, size: 18),
+                    tooltip: "Open Workspace",
+                  ),
+                  const SizedBox(width: 8),
+                  IconButton(
+                    onPressed: () => provider.runSync(project.id),
+                    icon: const Icon(Icons.sync),
+                    tooltip: "Sync",
+                  ),
+                  const SizedBox(width: 8),
+                  _buildMenu(context, provider),
+                ],
+              )
+          ],
+        ),
+      );
+    }
+
+    // GRID VIEW LAYOUT
+    return Container(
+      decoration: BoxDecoration(
+        color: color,
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: Colors.transparent),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withOpacity(0.02), blurRadius: 10, offset: const Offset(0, 4))
+        ],
+      ),
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.6),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.code_rounded, color: Colors.black87, size: 20),
+              ),
+              const Spacer(),
+              _buildMenu(context, provider),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text(
+            project.name,
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.black87),
+            maxLines: 1, overflow: TextOverflow.ellipsis,
+          ),
+          const SizedBox(height: 4),
+          Text(
+            project.localPath ?? 'Path unknown',
+            style: TextStyle(fontSize: 12, color: Colors.black.withOpacity(0.6)),
+            maxLines: 1, overflow: TextOverflow.ellipsis,
+          ),
+          
+          const Spacer(),
+          
+          // Extensions Chips
+          if (project.allowedExtensions.isNotEmpty)
+            SizedBox(
+              height: 24,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                itemCount: project.allowedExtensions.length,
+                separatorBuilder: (_, __) => const SizedBox(width: 4),
+                itemBuilder: (ctx, i) => Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withOpacity(0.05),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text(".${project.allowedExtensions[i]}", style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.black54)),
+                ),
+              ),
+            ),
+            
+          const SizedBox(height: 16),
+          
+          // Action Buttons
+          if (isSyncing)
+            Row(children: const [
+              SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+              SizedBox(width: 8),
+              Text("Syncing...", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.indigo)),
+            ])
+          else
+            Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: onViewFiles,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.white,
+                      foregroundColor: Colors.black87,
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                    child: const Text("Open"),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                IconButton(
+                  onPressed: () => provider.runSync(project.id),
+                  icon: const Icon(Icons.sync),
+                  tooltip: "Sync Now",
+                  style: IconButton.styleFrom(
+                    backgroundColor: Colors.black.withOpacity(0.05),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                )
+              ],
+            )
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMenu(BuildContext context, ProjectProvider provider) {
+    return PopupMenuButton<String>(
+      icon: const Icon(Icons.more_horiz, color: Colors.black54),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      onSelected: (value) {
+        if (value == 'edit') _showEditConfigDialog(context);
+        if (value == 'delete') {
+          // Add a confirmation dialog for safety
+          showDialog(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: const Text("Delete Repository?"),
+              content: const Text("This will permanently delete the project configuration and indexed data. This action cannot be undone."),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("Cancel")),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    provider.deleteSyncFromProject(project.id);
+                  },
+                  child: const Text("Delete"),
+                ),
+              ],
+            ),
+          );
+        }
+      },
+      itemBuilder: (c) => [
+        const PopupMenuItem(value: 'edit', child: Text('Configuration')),
+        // Changed label from 'Unregister' to 'Delete'
+        const PopupMenuItem(value: 'delete', child: Text('Delete', style: TextStyle(color: Colors.red))),
+      ],
+    );
+  }
+}
+
+// --- REGISTER DIALOG ---
 class _RegisterProjectDialog extends StatefulWidget {
   const _RegisterProjectDialog();
-
   @override
   State<_RegisterProjectDialog> createState() => _RegisterProjectDialogState();
 }
 
 class _RegisterProjectDialogState extends State<_RegisterProjectDialog> {
-  final _projectNameController = TextEditingController();
-  final _pathController = TextEditingController();
-  final _extensionsController = TextEditingController(text: 'py, dart, kt, java, ts, js, md');
-  final _pathsController = TextEditingController();
-
-  // State to track which view is active
-  String _activeView = 'ignore'; // 'ignore' or 'include'
+  final _nameCtrl = TextEditingController();
+  final _pathCtrl = TextEditingController();
+  final _extCtrl = TextEditingController(text: 'py, dart, kt, java, ts, js, md');
+  final _pathsCtrl = TextEditingController();
   
-  // Storage for both lists
+  String _activeView = 'ignore';
   String _tempIgnored = 'build/\n.dart_tool/\nnode_modules/\n.git/';
-  String _tempIncluded = ''; // Empty by default
+  String _tempIncluded = '';
 
   @override
   void initState() {
     super.initState();
-    _pathsController.text = _tempIgnored;
-  }
-
-  @override
-  void dispose() {
-    _projectNameController.dispose();
-    _pathController.dispose();
-    _extensionsController.dispose();
-    _pathsController.dispose();
-    super.dispose();
+    _pathsCtrl.text = _tempIgnored;
   }
 
   @override
   Widget build(BuildContext context) {
-    final provider = Provider.of<ProjectProvider>(context, listen: false);
-
     return Dialog(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
       child: Container(
-        constraints: const BoxConstraints(maxWidth: 500),
         padding: const EdgeInsets.all(24),
+        constraints: const BoxConstraints(maxWidth: 500),
         child: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('Register Code Project', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+              const Text("New Code Repository", style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
               const SizedBox(height: 24),
-              TextField(controller: _projectNameController, decoration: const InputDecoration(labelText: 'Project Name')),
+              _buildField("Project Name", _nameCtrl, icon: Icons.label_outline),
               const SizedBox(height: 16),
-              TextField(controller: _pathController, decoration: const InputDecoration(labelText: 'Folder Path')),
+              _buildField("Folder Path", _pathCtrl, icon: Icons.folder_open),
               const SizedBox(height: 16),
-              TextField(controller: _extensionsController, decoration: const InputDecoration(labelText: 'File Extensions (comma-separated)')),
+              _buildField("Extensions", _extCtrl, icon: Icons.extension_outlined),
               const SizedBox(height: 24),
               
               Text("Path Filters", style: Theme.of(context).textTheme.titleSmall),
@@ -207,276 +591,85 @@ class _RegisterProjectDialogState extends State<_RegisterProjectDialog> {
                 selected: {_activeView},
                 onSelectionChanged: (newSelection) {
                   setState(() {
-                    // 1. Save text from current view to its buffer
-                    if (_activeView == 'ignore') {
-                      _tempIgnored = _pathsController.text;
-                    } else {
-                      _tempIncluded = _pathsController.text;
-                    }
-
-                    // 2. Switch View
+                    if (_activeView == 'ignore') _tempIgnored = _pathsCtrl.text;
+                    else _tempIncluded = _pathsCtrl.text;
+                    
                     _activeView = newSelection.first;
-
-                    // 3. Load text for new view
-                    _pathsController.text = _activeView == 'ignore' ? _tempIgnored : _tempIncluded;
+                    _pathsCtrl.text = _activeView == 'ignore' ? _tempIgnored : _tempIncluded;
                   });
                 },
               ),
               const SizedBox(height: 8),
-              
-              // Helper Text
-              Text(
-                _activeView == 'ignore' 
-                  ? "Files in these folders will be SKIPPED." 
-                  : "Files in these folders will be UPLOADED, even if they are inside an Ignored folder.",
-                style: TextStyle(fontSize: 12, color: _activeView == 'ignore' ? Colors.grey : Colors.green[700]),
-              ),
-              
-              const SizedBox(height: 8),
               TextField(
-                controller: _pathsController,
+                controller: _pathsCtrl,
                 decoration: InputDecoration(
                   labelText: _activeView == 'ignore' ? 'Paths to Ignore (one per line)' : 'Paths to Force Include (one per line)',
-                  hintText: _activeView == 'ignore' ? 'build/\nnode_modules/' : 'backend/src/\nutils/helpers.py',
-                  border: const OutlineInputBorder(),
+                  border: const OutlineInputBorder(borderRadius: BorderRadius.all(Radius.circular(12))),
+                  alignLabelWithHint: true,
                 ),
                 maxLines: 4,
               ),
-
-              const SizedBox(height: 24),
+              
+              const SizedBox(height: 32),
               Row(
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
-                  TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+                  TextButton(onPressed: () => Navigator.pop(context), child: const Text("Cancel")),
                   const SizedBox(width: 8),
-                  FilledButton(
+                  ElevatedButton(
                     onPressed: () async {
-                      // 1. Capture final edits from the active text box
-                      if (_activeView == 'ignore') {
-                        _tempIgnored = _pathsController.text;
-                      } else {
-                        _tempIncluded = _pathsController.text;
-                      }
-
-                      final projectName = _projectNameController.text.trim();
-                      final path = _pathController.text.trim();
-                      final extensions = _extensionsController.text.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
-                      
-                      // 2. Prepare Lists
-                      final ignoredPaths = _tempIgnored.split('\n').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
-                      final includedPaths = _tempIncluded.split('\n').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
-
-                      if (projectName.isEmpty || path.isEmpty) return;
+                      if (_nameCtrl.text.isEmpty || _pathCtrl.text.isEmpty) return;
+                      // Save current view state
+                      if (_activeView == 'ignore') _tempIgnored = _pathsCtrl.text;
+                      else _tempIncluded = _pathsCtrl.text;
 
                       try {
-                        // 3. Send BOTH lists to backend (Mode is always 'hybrid' implicitly)
-                        await provider.createCodeProjectAndRegisterFolder(
-                          projectName: projectName,
-                          folderPath: path,
-                          extensions: extensions,
-                          ignoredPaths: ignoredPaths,
-                          includedPaths: includedPaths,
-                          syncMode: 'hybrid', // Just passing a dummy value, backend logic handles it
+                        await Provider.of<ProjectProvider>(context, listen: false).createCodeProjectAndRegisterFolder(
+                          projectName: _nameCtrl.text,
+                          folderPath: _pathCtrl.text,
+                          extensions: _extCtrl.text.split(',').map((e) => e.trim()).toList(),
+                          ignoredPaths: _tempIgnored.split('\n').map((e) => e.trim()).where((e) => e.isNotEmpty).toList(),
+                          includedPaths: _tempIncluded.split('\n').map((e) => e.trim()).where((e) => e.isNotEmpty).toList(),
+                          syncMode: 'hybrid'
                         );
-                        if (mounted) Navigator.pop(context);
+                        if(mounted) Navigator.pop(context);
                       } catch (e) {
-                        if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red));
+                        if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("$e")));
                       }
                     },
-                    child: const Text('Create & Register'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.black,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12)
+                    ),
+                    child: const Text("Create"),
                   ),
                 ],
-              ),
+              )
             ],
           ),
         ),
       ),
     );
   }
-}
 
-// --- PROJECT CARD (Stateless) ---
-class _SyncProjectCard extends StatelessWidget {
-  final CodeProject project;
-  final VoidCallback onViewFiles;
-
-  const _SyncProjectCard({
-    required this.project,
-    required this.onViewFiles,
-  });
-
-  void _showEditConfigDialog(BuildContext context) {
-    showDialog(
-      context: context,
-      builder: (context) => _EditConfigDialog(project: project),
-    );
-  }
-
-  void _showDeleteConfirmation(BuildContext context, ProjectProvider provider) {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Unregister Folder?'),
-        content: Text('This will remove the sync configuration for "${project.name}".'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-          FilledButton(
-            onPressed: () {
-              provider.deleteSyncFromProject(project.id);
-              Navigator.pop(ctx);
-            },
-            style: FilledButton.styleFrom(backgroundColor: Colors.red),
-            child: const Text('Unregister'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final provider = context.watch<ProjectProvider>();
-    final isSyncing = provider.syncingProjectId == project.id || project.status == 'syncing';
-
-    return Card(
-      elevation: 0,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-        side: BorderSide(color: isSyncing ? Colors.blue.shade200 : Colors.grey.shade200),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: project.isActive ? Colors.green.shade50 : Colors.grey.shade100,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Icon(
-                    Icons.folder_copy_outlined,
-                    color: project.isActive ? Colors.green.shade700 : Colors.grey.shade600,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        project.name,
-                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        project.localPath ?? 'Folder not registered',
-                        style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ],
-                  ),
-                ),
-                Transform.scale(
-                  scale: 0.8,
-                  child: Switch(
-                    value: project.isActive,
-                    onChanged: isSyncing ? null : (value) => provider.updateSyncProjectStatus(project.id, value),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-
-            if (project.allowedExtensions.isNotEmpty)
-              Wrap(
-                spacing: 6,
-                runSpacing: 6,
-                children: project.allowedExtensions.take(4).map((ext) {
-                  return Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: Colors.blue.shade50,
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    child: Text(
-                      '.$ext',
-                      style: TextStyle(color: Colors.blue.shade700, fontSize: 11, fontWeight: FontWeight.w500),
-                    ),
-                  );
-                }).toList(),
-              ),
-
-            const Spacer(), 
-
-            if (isSyncing) ...[
-              const SizedBox(height: 8),
-              Row(
-                children: [
-                  const SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2)),
-                  const SizedBox(width: 8),
-                  Text("Syncing files & indexing...", style: TextStyle(fontSize: 12, color: Colors.blue.shade700, fontWeight: FontWeight.bold)),
-                ],
-              ),
-              const SizedBox(height: 4),
-              const LinearProgressIndicator(minHeight: 4),
-            ] else ...[
-              Row(
-                children: [
-                  Expanded(
-                    child: FilledButton.tonalIcon(
-                      onPressed: () {
-                        provider.runSync(project.id);
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Sync job started...'), behavior: SnackBarBehavior.floating),
-                        );
-                      },
-                      icon: const Icon(Icons.sync, size: 18),
-                      label: const Text('Sync Now'),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: onViewFiles,
-                      icon: const Icon(Icons.visibility_outlined, size: 18),
-                      label: const Text('View'),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  PopupMenuButton<String>(
-                    icon: const Icon(Icons.more_vert),
-                    tooltip: 'More Options',
-                    onSelected: (value) {
-                      if (value == 'edit_config') _showEditConfigDialog(context);
-                      if (value == 'unregister') _showDeleteConfirmation(context, provider);
-                    },
-                    itemBuilder: (context) => [
-                      const PopupMenuItem(value: 'edit_config', child: Text('Edit Configuration')),
-                      const PopupMenuItem(value: 'unregister', child: Text('Unregister Folder')),
-                    ],
-                  ),
-                ],
-              ),
-            ],
-          ],
-        ),
+  Widget _buildField(String label, TextEditingController ctrl, {required IconData icon}) {
+    return TextField(
+      controller: ctrl,
+      decoration: InputDecoration(
+        labelText: label,
+        prefixIcon: Icon(icon, size: 20),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
       ),
     );
   }
 }
 
-// --- EXTRACTED EDIT CONFIG DIALOG ---
+// --- EDIT DIALOG ---
 class _EditConfigDialog extends StatefulWidget {
   final CodeProject project;
-
   const _EditConfigDialog({required this.project});
 
   @override
@@ -484,8 +677,10 @@ class _EditConfigDialog extends StatefulWidget {
 }
 
 class _EditConfigDialogState extends State<_EditConfigDialog> {
-  late TextEditingController _extensionsController;
-  late TextEditingController _pathsController;
+  late TextEditingController _nameCtrl;
+  late TextEditingController _pathCtrl;
+  late TextEditingController _extCtrl;
+  late TextEditingController _pathsCtrl;
   
   String _activeView = 'ignore';
   late String _tempIgnored;
@@ -494,113 +689,115 @@ class _EditConfigDialogState extends State<_EditConfigDialog> {
   @override
   void initState() {
     super.initState();
-    _extensionsController = TextEditingController(text: widget.project.allowedExtensions.join(', '));
-    
-    // Load existing data
+    _nameCtrl = TextEditingController(text: widget.project.name);
+    _pathCtrl = TextEditingController(text: widget.project.localPath);
+    _extCtrl = TextEditingController(text: widget.project.allowedExtensions.join(', '));
     _tempIgnored = widget.project.ignoredPaths.join('\n');
     _tempIncluded = widget.project.includedPaths.join('\n');
-    
-    // Initial view shows Ignore paths
-    _pathsController = TextEditingController(text: _tempIgnored);
-  }
-
-  @override
-  void dispose() {
-    _extensionsController.dispose();
-    _pathsController.dispose();
-    super.dispose();
+    _pathsCtrl = TextEditingController(text: _tempIgnored);
   }
 
   @override
   Widget build(BuildContext context) {
-    final provider = Provider.of<ProjectProvider>(context, listen: false);
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      child: Container(
+        padding: const EdgeInsets.all(24),
+        constraints: const BoxConstraints(maxWidth: 500),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text("Edit Configuration", style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 24),
+              _buildField("Project Name", _nameCtrl, icon: Icons.label_outline),
+              const SizedBox(height: 16),
+              _buildField("Folder Path", _pathCtrl, icon: Icons.folder_open),
+              const SizedBox(height: 16),
+              _buildField("Extensions", _extCtrl, icon: Icons.extension_outlined),
+              const SizedBox(height: 24),
+              
+              Text("Path Filters", style: Theme.of(context).textTheme.titleSmall),
+              const SizedBox(height: 8),
+              SegmentedButton<String>(
+                segments: const [
+                  ButtonSegment(value: 'ignore', label: Text('Ignored Paths')),
+                  ButtonSegment(value: 'include', label: Text('Exceptions')),
+                ],
+                selected: {_activeView},
+                onSelectionChanged: (newSelection) {
+                  setState(() {
+                    if (_activeView == 'ignore') _tempIgnored = _pathsCtrl.text;
+                    else _tempIncluded = _pathsCtrl.text;
+                    
+                    _activeView = newSelection.first;
+                    _pathsCtrl.text = _activeView == 'ignore' ? _tempIgnored : _tempIncluded;
+                  });
+                },
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: _pathsCtrl,
+                decoration: InputDecoration(
+                  labelText: _activeView == 'ignore' ? 'Ignored' : 'Force Include',
+                  border: const OutlineInputBorder(borderRadius: BorderRadius.all(Radius.circular(12))),
+                  alignLabelWithHint: true,
+                ),
+                maxLines: 4,
+              ),
+              
+              const SizedBox(height: 32),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton(onPressed: () => Navigator.pop(context), child: const Text("Cancel")),
+                  const SizedBox(width: 8),
+                  ElevatedButton(
+                    onPressed: () async {
+                      // Save current view state
+                      if (_activeView == 'ignore') _tempIgnored = _pathsCtrl.text;
+                      else _tempIncluded = _pathsCtrl.text;
 
-    return AlertDialog(
-      title: const Text('Edit Configuration'),
-      content: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            TextField(
-              controller: _extensionsController, 
-              decoration: const InputDecoration(labelText: 'File Extensions (comma-separated)')
-            ),
-            const SizedBox(height: 24),
-            
-            SegmentedButton<String>(
-              segments: const [
-                ButtonSegment(value: 'ignore', label: Text('Ignored')),
-                ButtonSegment(value: 'include', label: Text('Exceptions')),
-              ],
-              selected: {_activeView},
-              onSelectionChanged: (newSelection) {
-                setState(() {
-                  // 1. Save
-                  if (_activeView == 'ignore') {
-                    _tempIgnored = _pathsController.text;
-                  } else {
-                    _tempIncluded = _pathsController.text;
-                  }
-                  
-                  // 2. Switch
-                  _activeView = newSelection.first;
-                  
-                  // 3. Load
-                  _pathsController.text = _activeView == 'ignore' ? _tempIgnored : _tempIncluded;
-                });
-              },
-            ),
-            const SizedBox(height: 8),
-             Text(
-                _activeView == 'ignore' 
-                  ? "Standard Ignore list." 
-                  : "Forces upload for these subfolders/files.",
-                style: TextStyle(fontSize: 12, color: _activeView == 'ignore' ? Colors.grey : Colors.green[700]),
-              ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _pathsController,
-              decoration: InputDecoration(
-                labelText: _activeView == 'ignore' ? 'Paths to Ignore' : 'Paths to Force Include', 
-                border: const OutlineInputBorder()
-              ),
-              maxLines: 5,
-            ),
-          ],
+                      try {
+                        await Provider.of<ProjectProvider>(context, listen: false).updateSyncConfig(
+                          widget.project.id,
+                          extensions: _extCtrl.text.split(',').map((e) => e.trim()).toList(),
+                          ignoredPaths: _tempIgnored.split('\n').map((e) => e.trim()).where((e) => e.isNotEmpty).toList(),
+                          includedPaths: _tempIncluded.split('\n').map((e) => e.trim()).where((e) => e.isNotEmpty).toList(),
+                          syncMode: 'hybrid'
+                        );
+                        if(mounted) Navigator.pop(context);
+                      } catch (e) {
+                        if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("$e")));
+                      }
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.black,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12)
+                    ),
+                    child: const Text("Save"),
+                  ),
+                ],
+              )
+            ],
+          ),
         ),
       ),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-        ElevatedButton(
-          onPressed: () async {
-            // Capture final edits
-            if (_activeView == 'ignore') {
-              _tempIgnored = _pathsController.text;
-            } else {
-              _tempIncluded = _pathsController.text;
-            }
+    );
+  }
 
-            final newExt = _extensionsController.text.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
-            final newIgnored = _tempIgnored.split('\n').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
-            final newIncluded = _tempIncluded.split('\n').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
-
-            try {
-              await provider.updateSyncConfig(
-                widget.project.id,
-                extensions: newExt,
-                syncMode: 'hybrid', // Implicitly hybrid now
-                ignoredPaths: newIgnored,
-                includedPaths: newIncluded,
-              );
-              if (mounted) Navigator.pop(context);
-            } catch (e) {
-              if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red));
-            }
-          },
-          child: const Text('Save'),
-        ),
-      ],
+  Widget _buildField(String label, TextEditingController ctrl, {required IconData icon}) {
+    return TextField(
+      controller: ctrl,
+      decoration: InputDecoration(
+        labelText: label,
+        prefixIcon: Icon(icon, size: 20),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+      ),
     );
   }
 }
