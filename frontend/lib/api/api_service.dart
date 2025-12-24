@@ -18,7 +18,7 @@ class ApiService {
       baseUrl = 'http://localhost:5000';
     } else if (Platform.isWindows) {
       // Windows Native logic: MUST use localhost or 127.0.0.1
-      baseUrl = 'http://127.0.0.1:5000'; 
+      baseUrl = 'http://127.0.0.1:5000';
     } else {
       // Android Emulator logic
       baseUrl = dotenv.env['API_URL'] ?? 'http://10.0.2.2:5000';
@@ -61,18 +61,20 @@ class ApiService {
 
   Future<void> updateSyncProject(
     String projectId, {
+    String? name, // <--- 1. ADD THIS ARGUMENT
     bool? isActive,
     List<String>? extensions,
     List<String>? ignoredPaths,
-    List<String>? includedPaths, // New
-    String? syncMode, // New
+    List<String>? includedPaths,
+    String? syncMode,
   }) async {
     final Map<String, dynamic> body = {};
+    if (name != null) body['name'] = name; // <--- 2. ADD THIS LINE
     if (isActive != null) body['is_active'] = isActive;
     if (extensions != null) body['allowed_extensions'] = extensions;
     if (ignoredPaths != null) body['ignored_paths'] = ignoredPaths;
-    if (includedPaths != null) body['included_paths'] = includedPaths; // New
-    if (syncMode != null) body['sync_mode'] = syncMode; // New
+    if (includedPaths != null) body['included_paths'] = includedPaths;
+    if (syncMode != null) body['sync_mode'] = syncMode;
 
     final response = await http.put(
       Uri.parse('$baseUrl/sync/project/$projectId'),

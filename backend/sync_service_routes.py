@@ -89,11 +89,12 @@ def list_sync_projects():
 @sync_service_bp.route('/sync/project/<project_id>', methods=['PUT'])
 def update_sync_project(project_id):
     data = request.json
-    # --- NEW: Add new fields to allowed updates ---
+    # --- ADD 'name' TO THE LIST ---
     allowed_updates = [
-        'allowed_extensions', 'is_active', 'ignored_paths',
+        'name', 'allowed_extensions', 'is_active', 'ignored_paths',
         'included_paths', 'sync_mode'
     ]
+    # ------------------------------
     updates = {key: data[key] for key in data if key in allowed_updates}
     try:
         db.collection(CODE_PROJECTS_COLLECTION).document(project_id).update(updates)
