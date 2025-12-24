@@ -873,6 +873,7 @@ class ProjectProvider with ChangeNotifier {
 
   Future<void> updateSyncConfig(
     String projectId, {
+    String? name, // <--- 1. ADD THIS ARGUMENT
     List<String>? extensions,
     List<String>? ignoredPaths,
     List<String>? includedPaths,
@@ -881,12 +882,13 @@ class ProjectProvider with ChangeNotifier {
     try {
       await _api.updateSyncProject(
         projectId,
+        name: name, // <--- 2. PASS IT HERE
         extensions: extensions,
         ignoredPaths: ignoredPaths,
         includedPaths: includedPaths,
         syncMode: syncMode,
       );
-      await fetchSyncProjects(); // Refresh the list to show changes
+      await fetchSyncProjects(); 
     } catch (e) {
       print("Error updating sync config: $e");
       rethrow;
