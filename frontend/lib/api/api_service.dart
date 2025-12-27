@@ -346,39 +346,45 @@ class ApiService {
 
   // --- NEW: Upload Past Paper ---
   Future<Map<String, dynamic>> uploadPastPaper(
-    String projectId,
-    PlatformFile file,
-    String analysisMode, // <-- NEW PARAMETER
-  ) async {
-    var request = http.MultipartRequest(
-      'POST',
-      Uri.parse('$baseUrl/upload-paper/$projectId'),
-    );
+  String projectId,
+  PlatformFile file,
+  String analysisMode,
+) async {
+  var request = http.MultipartRequest(
+    'POST',
+    Uri.parse('$baseUrl/upload-paper/$projectId'),
+  );
 
-    // Add the analysis mode as a field in the multipart request
-    request.fields['analysis_mode'] = analysisMode;
+  request.fields['analysis_mode'] = analysisMode;
 
-    if (file.bytes != null) {
-      request.files.add(http.MultipartFile.fromBytes(
-        'paper', // MUST match Flask's request.files['paper']
-        file.bytes!,
-        filename: file.name,
-      ));
-    } else {
-      throw Exception('File bytes are null');
-    }
-
-    var response = await request.send();
-    var responseBody = await response.stream.bytesToString();
-    var decodedBody = json.decode(responseBody);
-
-    if (response.statusCode == 200) {
-      return decodedBody;
-    } else {
-      throw Exception(
-          decodedBody['error'] ?? 'Failed to upload and process paper');
-    }
+  // HANDLE PATH (Desktop/Mobile) vs BYTES (Web)
+  if (kIsWeb) {
+    if (file.bytes == null) throw Exception('No file data found');
+    request.files.add(http.MultipartFile.fromBytes(
+      'paper',
+      file.bytes!,
+      filename: file.name,
+    ));
+  } else {
+    // On Windows/Android/iOS, use the file path
+    if (file.path == null) throw Exception('File path not found');
+    request.files.add(await http.MultipartFile.fromPath(
+      'paper',
+      file.path!,
+      filename: file.name,
+    ));
   }
+
+  var response = await request.send();
+  var responseBody = await response.stream.bytesToString();
+  
+  if (response.statusCode == 200) {
+    return json.decode(responseBody);
+  } else {
+    final decoded = json.decode(responseBody);
+    throw Exception(decoded['error'] ?? 'Failed to upload paper');
+  }
+}
 
   Future<void> deletePastPaper(String projectId, String paperId) async {
     final response = await http.delete(

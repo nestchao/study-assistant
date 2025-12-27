@@ -415,11 +415,13 @@ class ProjectProvider with ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> pickAndUploadFiles() async {
+   Future<void> pickAndUploadFiles() async {
     if (_currentProject == null) return;
+    
+    // UPDATE: Added 'pptx' to allowedExtensions
     FilePickerResult? result = await FilePicker.platform.pickFiles(
       type: FileType.custom,
-      allowedExtensions: ['pdf'],
+      allowedExtensions: ['pdf', 'pptx'], 
       allowMultiple: true,
     );
 
@@ -429,10 +431,8 @@ class ProjectProvider with ChangeNotifier {
       try {
         await _api.uploadSources(_currentProject!.id, result.files);
         await fetchSources();
-        notifyListeners();
-        log("Uploading...");
       } catch (e) {
-        // print("Upload error: $e");
+        print("Upload error: $e");
       }
       _isUploading = false;
       notifyListeners();
@@ -562,36 +562,39 @@ class ProjectProvider with ChangeNotifier {
   }
 
   Future<void> pickAndProcessPaper(String analysisMode) async {
-    if (_currentProject == null) return;
+  if (_currentProject == null) return;
 
-    FilePickerResult? result = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['pdf', 'png', 'jpg', 'jpeg'],
-      allowMultiple: false,
-    );
+  FilePickerResult? result = await FilePicker.platform.pickFiles(
+    type: FileType.custom,
+    allowedExtensions: ['pdf', 'png', 'jpg', 'jpeg', 'pptx'], // 1. Added pptx
+    allowMultiple: false,
+    withData: true, // This helps on web, but on desktop we still use path
+  );
 
-    if (result != null && result.files.single.bytes != null) {
-      _isUploadingPaper = true;
-      _paperError = null;
+  // 2. FIXED CONDITION: Remove the strict .bytes != null check
+  if (result != null && result.files.isNotEmpty) {
+    _isUploadingPaper = true;
+    _paperError = null;
+    notifyListeners();
+    
+    try {
+      // Pass the whole PlatformFile object to the API service
+      final newPaperData = await _api.uploadPastPaper(
+          _currentProject!.id, 
+          result.files.single, 
+          analysisMode
+      );
+      
+      _pastPapers.insert(0, PastPaper.fromMap(newPaperData));
+    } catch (e) {
+      print("Paper processing error: $e");
+      _paperError = e.toString();
+    } finally {
+      _isUploadingPaper = false;
       notifyListeners();
-      try {
-        // Pass the mode to the API service
-        final newPaperData = await _api.uploadPastPaper(
-            _currentProject!.id, result.files.single, analysisMode);
-        
-        // Add the new paper to the top of the list instantly
-        _pastPapers.insert(0, PastPaper.fromMap(newPaperData));
-
-      } catch (e) {
-        print("Paper processing error: $e");
-        _paperError = e.toString();
-      } finally {
-        _isUploadingPaper = false;
-        notifyListeners();
-      }
     }
   }
-
+}
   Future<void> deletePastPaper(String paperId) async {
     if (_currentProject == null) return;
     

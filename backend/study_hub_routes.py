@@ -1,5 +1,3 @@
-# backend/study_hub_routes.py
-
 import re
 import markdown
 import html2text
@@ -10,9 +8,10 @@ import random
 import time 
 from pathlib import Path 
 import google.api_core.exceptions
-
+from browser_bridge import browser_bridge
 from utils import extract_text, delete_collection, split_chunks
 import redis
+from google.genai import types 
 
 # --- 从配置文件导入 ---
 from config import (
@@ -30,19 +29,10 @@ from code_graph_engine import (
     build_hierarchical_context
 )
 
-from services import db, note_generation_model, chat_model, cache_manager 
+from services import ai_client, note_generation_model, db, chat_model, cache_manager
 
 cross_encoder = CrossEncoderReranker()
 study_hub_bp = Blueprint('study_hub_bp', __name__)
-
-# def set_dependencies(db_instance, note_model_instance, chat_model_instance, redis_instance):
-#     """Injects database and AI model dependencies from the main app."""
-#     global cross_encoder
-    
-#     # --- 新增：初始化 Cross-Encoder（只加载一次） ---
-#     print("✅ Loading Cross-Encoder model...")
-#     cross_encoder = CrossEncoderReranker()
-#     print("✅ Study Hub dependencies injected.")
 
 # --- HELPER FUNCTIONS for Study Hub ---
 def get_original_text(project_id, source_id):
@@ -73,10 +63,17 @@ def get_original_text(project_id, source_id):
         return "" # Return empty on failure
 
 def generate_note(text):
-    """Generates a simplified study note using the injected AI model."""
-    print("  🤖 Generating AI study note...")
+    """Generates a simplified study note using the Browser Bridge (Direct)."""
+    print("  🤖 Generating AI study note via Browser Bridge...")
     prompt = f"""
     You are an expert study assistant. Your goal is to convert original study notes into "Simplified Notes" that are visually engaging and easy for a beginner to understand.
+
+    ### 📝 CRITICAL OUTPUT RULE (The "Wrapper"):
+    1.  **Markdown Syntax:** To preserve formatting, you **MUST** wrap your ENTIRE response inside a Markdown code block.
+    2.  **Headings:** Use `#` for main titles and `##` for sections. Start every heading with an **Emoji**.
+    3.  **Bold Keywords:** You **MUST** bold (`**text**`) all key terms, definitions, and important concepts. Do not output plain text for important parts.
+    4.  **Dividers:** Insert a horizontal rule (`---`) between every major section to separate topics visually.
+    5.  **Lists:** Use bullet points (`*` or `-`) for lists. Avoid long paragraphs.
 
     **1. Simplification Strategy (The "How"):**
     *   **Rewrite:** Convert dense, academic sentences into short, direct statements.
@@ -116,11 +113,16 @@ def generate_note(text):
     {text}
     """
     try:
-        # Use the injected note_generation_model
-        response = note_generation_model.generate_content(prompt)
-        return markdown.markdown(response.text, extensions=['tables'])
+        # --- DIRECT BROWSER BRIDGE USAGE ---
+        # Ensure bridge thread is running
+        browser_bridge.start()
+        
+        response_text = browser_bridge.send_prompt(prompt)
+        print("  ✅ Browser Bridge response received.")
+        
+        return markdown.markdown(response_text, extensions=['tables'])
     except Exception as e:
-        print(f"  ❌ Note generation failed: {e}")
+        print(f"  ❌ Browser Bridge Note Generation Failed: {e}")
         raise
 
 def get_simplified_note_context(project_id, source_id=None):
@@ -209,14 +211,9 @@ def get_code_projects():
 @study_hub_bp.route('/create-code-project', methods=['POST'])
 def create_code_project():
     name = request.json.get('name')
-
     ref = db.collection(CODE_PROJECTS_COLLECTION).document()
-    ref.set({
-        'name': name,
-        'timestamp': firestore.SERVER_TIMESTAMP,
-    })
+    ref.set({'name': name, 'timestamp': firestore.SERVER_TIMESTAMP})
     return jsonify({"id": ref.id})
-
 
 @study_hub_bp.route('/get-sources/<project_id>', methods=['GET'])
 def get_sources(project_id):
@@ -250,11 +247,21 @@ def upload_source(project_id):
     processed, errors = [], []
     for file in files:
         filename = file.filename
+        ext = filename.split('.')[-1].lower()
         safe_id = re.sub(r'[.#$/[\]]', '_', filename) # Make filename Firestore-safe
         print(f"\n🔄 Processing '{filename}'...")
         try:
             file.stream.seek(0)
-            text = extract_text(file.stream)
+
+            if ext == 'pdf':
+                text = extract_text(file.stream) # Your existing PDF function
+            elif ext == 'pptx':
+                from utils import extract_text_from_pptx
+                text = extract_text_from_pptx(file.stream)
+            else:
+                errors.append({"filename": filename, "error": f"Unsupported extension: {ext}"})
+                continue
+
             if not text.strip():
                 errors.append({"filename": filename, "error": "No text could be extracted."})
                 continue
@@ -393,7 +400,7 @@ def update_note(project_id, source_id):
                 'order': page_num
             })
             note_pages_saved += 1
-            print(f"  + Saving new note page {page_num}")
+            print(f"  + Saved note page {page_num}")
 
         # Invalidate Cache
         if cache_manager:
@@ -406,6 +413,8 @@ def update_note(project_id, source_id):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+# ... imports ...
+
 @study_hub_bp.route('/ask-chatbot/<project_id>', methods=['POST'])
 def ask_chatbot(project_id):
     data = request.json
@@ -417,35 +426,60 @@ def ask_chatbot(project_id):
     if not context:
         return jsonify({"answer": "I couldn't find any generated notes to read. Please upload a document first!"})
 
-    system_prompt = f"""You are a helpful study assistant. Your primary goal is to answer the user's questions based *only* on the provided study notes.
-    - Be concise and clear in your answers.
-    - If the answer is not in the notes, you MUST say 'I'm sorry, that information isn't in my simplified notes.'
-    - Do not use any external knowledge.
+    # --- UPDATED SYSTEM PROMPT ---
+    system_prompt = f"""You are an intelligent study assistant. Your goal is to help the user understand the provided study notes.
 
-    Here are the study notes you must use as your knowledge base:
+    ### 🧠 Guidelines for Answering:
+    1.  **Source of Truth:** Base your answers on the provided notes.
+    2.  **Allowed Actions:** You ARE allowed to **summarize**, **rephrase**, **simplify**, or **structure** the information.
+    3.  **Handling Missing Info:** Only refuse to answer if the specific *topic* is completely absent from the notes.
+
+    ### 📝 CRITICAL OUTPUT RULE (The "Wrapper"):
+    To preserve formatting, you **MUST** wrap your ENTIRE response inside a Markdown code block.
+
+    Here are the study notes you must use:
     ---
     {context}
     ---
     """
 
-    messages = [{'role': 'user', 'parts': [system_prompt]}]
-    messages.append({'role': 'model', 'parts': ["Okay, I have read the study notes. I am ready to answer your questions based on them."]})
-    
-    for turn in history:
-        role = turn.get('role')
-        content = turn.get('content')
-        if role and content: # The frontend sends 'bot', but Gemini expects 'model'
-            role = 'model' if role == 'bot' else role 
-            messages.append({'role': role, 'parts': [content]})
- 
-    messages.append({'role': 'user', 'parts': [question]})
-
     try:
-        print(f"  🤖 Sending chat request with {len(history)} history turns...")
-        response = chat_model.generate_content(messages)
-        answer = response.text
-        print("  ✅ Received chat response.")
-        return jsonify({"answer": answer})
+        browser_bridge.start()
+        
+        # CHANGE: If you want a TRULY new chat every time, 
+        # do not include 'history' in the flat_prompt.
+        flat_prompt = f"SYSTEM: {system_prompt}\n\n"
+        
+        # Comment this loop out if you don't want the AI to remember 
+        # previous questions from the current session:
+        # for turn in history:
+        #     role = turn.get('role', 'user').upper()
+        #     content = turn.get('content', '')
+        #     flat_prompt += f"{role}: {content}\n"
+            
+        flat_prompt += f"USER: {question}\n"
+        flat_prompt += "MODEL: "
+
+        # Send to Browser (which will now refresh the page first)
+        raw_answer = browser_bridge.send_prompt(flat_prompt)
+        print("  ✅ Browser Bridge response received.")
+        
+        # --- CLEANING LOGIC ---
+        # We strip the wrapper we asked for, leaving the raw Markdown behind.
+        clean_answer = raw_answer
+        
+        # Remove the opening ```markdown or ```
+        if "```markdown" in clean_answer:
+            clean_answer = clean_answer.replace("```markdown", "", 1)
+        elif clean_answer.startswith("```"):
+            clean_answer = clean_answer.replace("```", "", 1)
+            
+        # Remove the closing ```
+        if clean_answer.endswith("```"):
+            clean_answer = clean_answer.substring(0, len(clean_answer) - 3) if hasattr(clean_answer, 'substring') else clean_answer[:-3]
+
+        return jsonify({"answer": clean_answer.strip()})
+
     except Exception as e:
         print(f"  ❌ Error during chatbot generation: {e}")
         return jsonify({"answer": f"Sorry, an error occurred: {e}"})
@@ -477,7 +511,10 @@ def topic_note(project_id):
     """
     
     try:
-        response_text = note_generation_model.generate_content(prompt).text
+        # --- DIRECT BROWSER BRIDGE USAGE ---
+        browser_bridge.start()
+            
+        response_text = browser_bridge.send_prompt(prompt)
         html = markdown.markdown(response_text, extensions=['tables'])
         return jsonify({"note_html": html})
     except Exception as e:
@@ -531,7 +568,7 @@ def generate_code_suggestion():
     prompt_text = data.get('prompt')
     
     print("\n" + "="*80)
-    print(f"🚀 Generating Code Suggestion (Hybrid e-based + Industry Standard)")
+    print(f"🚀 Generating Code Suggestion via Browser Bridge")
     print(f"Project: {project_id}")
     print(f"Query: {prompt_text}")
     print("="*80)
@@ -540,7 +577,7 @@ def generate_code_suggestion():
         return jsonify({"error": "Missing 'project_id' or 'prompt'"}), 400
 
     try:
-        # --- 1. 加载向量存储 ---
+        # --- 1. Load Vector Store ---
         store_path = Path("vector_stores") / project_id
         
         if not store_path.exists():
@@ -551,17 +588,17 @@ def generate_code_suggestion():
         print(f"  📂 Loading vector store from {store_path}...")
         vector_store = FaissVectorStore.load(store_path)
         
-        # --- 2. 运行混合检索流程 ---
+        # --- 2. Run Hybrid Retrieval (HyDE will now use Browser Bridge internally) ---
         context = hybrid_retrieval_pipeline(
             project_id=project_id,
             user_query=prompt_text,
             db_instance=db,
             vector_store=vector_store,
             cross_encoder=cross_encoder,
-            use_hyde=True  # 使用 HyDE
+            use_hyde=True 
         )
         
-        # --- 3. 生成最终答案 ---
+        # --- 3. Generate Final Answer ---
         final_prompt = f"""
         ### ROLE
         You are a Senior Software Architect and Codebase Expert. You are assisting a developer by analyzing the provided code context to answer their questions accurately.
@@ -587,14 +624,12 @@ def generate_code_suggestion():
         ### ANSWER
         """
 
-        print("  🤖 Generating final response with Gemini...")
-        response = chat_model.generate_content(final_prompt)
+        print("  🤖 Sending final prompt to Browser Bridge...")
         
-        if not response.candidates:
-            return jsonify({"error": "AI response blocked or empty."}), 400
-        
-        suggestion_text = response.candidates[0].content.parts[0].text
-        
+        # --- DIRECT BROWSER BRIDGE USAGE ---
+        browser_bridge.start()
+        suggestion_text = browser_bridge.send_prompt(final_prompt)
+
         print("="*80)
         print("✅ Response generated successfully")
         print("="*80 + "\n")
@@ -625,6 +660,7 @@ def retrieve_candidates():
         vector_store = FaissVectorStore.load(store_path)
         
         # Get candidates with return_nodes_only=True
+        # HyDE in pipeline will now use Bridge
         candidates = hybrid_retrieval_pipeline(
             project_id=project_id,
             user_query=prompt_text,
@@ -658,9 +694,6 @@ def generate_answer_from_context():
         
         # Re-fetch full node content
         selected_nodes = []
-        all_keys = list(vector_store.name_to_id.keys())
-        print(f"🔎 DEBUG: First 5 keys in Vector Store: {all_keys[:5]}")
-
         for uid in selected_ids:
             node_data = vector_store.get_node_by_name(uid)
             if node_data:
@@ -684,8 +717,12 @@ def generate_answer_from_context():
         ### INSTRUCTION
         Answer based on the code above.
         """
-        response = chat_model.generate_content(final_prompt)
-        return jsonify({"suggestion": response.text})
+        
+        # --- DIRECT BROWSER BRIDGE USAGE ---
+        browser_bridge.start()
+        
+        answer = browser_bridge.send_prompt(final_prompt)
+        return jsonify({"suggestion": answer})
         
     except Exception as e:
         return jsonify({"error": str(e)}), 500

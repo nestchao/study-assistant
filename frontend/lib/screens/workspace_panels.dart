@@ -6,6 +6,7 @@ import 'package:study_assistance/provider/project_provider.dart';
 import 'package:flutter_html/flutter_html.dart';
 import 'package:super_clipboard/super_clipboard.dart';
 import 'package:study_assistance/models/project.dart'; // Ensure Source model is imported
+import 'package:flutter_markdown/flutter_markdown.dart'; 
 
 // Shared Constants for Styling
 const Color kNotebookBg = Color(0xFFF0F4F9);
@@ -241,9 +242,9 @@ class AiChatPanel extends StatelessWidget {
               padding: const EdgeInsets.all(20),
               itemCount: chat.length + (thinking ? 1 : 0),
               itemBuilder: (ctx, i) {
-                if (i == chat.length && thinking) return _buildChatBubble("...", false);
+                if (i == chat.length && thinking) return _buildChatBubble(context, "...", false);
                 final msg = chat[i];
-                return _buildChatBubble(msg.content, msg.isUser);
+                return _buildChatBubble(context, msg.content, msg.isUser);
               },
             ),
           ),
@@ -253,13 +254,13 @@ class AiChatPanel extends StatelessWidget {
     );
   }
 
-  Widget _buildChatBubble(String text, bool isUser) {
+  Widget _buildChatBubble(BuildContext context, String text, bool isUser) {
     return Align(
       alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
         margin: const EdgeInsets.only(bottom: 16),
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        constraints: const BoxConstraints(maxWidth: 300),
+        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.7), // Improved width constraint
         decoration: BoxDecoration(
           color: isUser ? kNotebookBg : Colors.white,
           borderRadius: BorderRadius.only(
@@ -269,10 +270,27 @@ class AiChatPanel extends StatelessWidget {
             bottomRight: Radius.circular(isUser ? 4 : 16),
           ),
           border: isUser ? null : Border.all(color: const Color(0xFFE0E0E0)),
+          boxShadow: isUser ? [] : [
+            BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 5, offset: const Offset(0, 2))
+          ],
         ),
+        // 2. UPDATED CHILD WIDGET LOGIC
         child: isUser 
-          ? Text(text, style: const TextStyle(color: Colors.black87)) 
-          : SelectionArea(child: Html(data: text, style: {"body": Style(margin: Margins.zero, padding: HtmlPaddings.zero)})),
+          ? Text(text, style: const TextStyle(color: Colors.black87, fontSize: 14)) 
+          : MarkdownBody(
+              data: text,
+              selectable: true,
+              styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context)).copyWith(
+                p: const TextStyle(fontSize: 14, height: 1.5, color: Colors.black87),
+                strong: const TextStyle(fontWeight: FontWeight.bold, color: Colors.black),
+                code: const TextStyle(backgroundColor: Color(0xFFF5F7FA), fontFamily: 'monospace', fontSize: 13),
+                codeblockDecoration: BoxDecoration(
+                  color: const Color(0xFFF5F7FA), 
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.grey.shade200)
+                ),
+              ),
+            ),
       ),
     );
   }
