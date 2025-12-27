@@ -38,23 +38,16 @@ template<typename Func>
 cpr::Response perform_request_with_retry(Func request_factory, std::shared_ptr<KeyManager> km) {
     int max_retries = 4; 
     cpr::Response r; 
-    
     for (int i = 0; i < max_retries; ++i) {
         r = request_factory(); 
-        
         if (r.status_code == 200) return r;
-        
-        if (r.status_code == 429) {
-            spdlog::warn("⚠️ API Limit (429) hit on Key {}. Rotating...", km->get_current_key().substr(0, 8));
-            km->report_rate_limit(); 
-            
-            // 🚀 SPACE-X FEEDBACK: Increase sleep slightly to let the quota breathe
-            std::this_thread::sleep_for(std::chrono::milliseconds(1000 * (i + 1))); 
+        if (r.status_code == 429 && km) {
+            spdlog::warn("⚠️ API 429. Rotating key...");
+            km->report_rate_limit(); // Using the correct method name
+            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
             continue;
         }
-        
-        // If it's a 400 or 500 (not a 429), don't bother retrying
-        return r; 
+        break;
     }
     return r;
 }
@@ -128,28 +121,41 @@ std::vector<std::vector<float>> EmbeddingService::generate_embeddings_batch(cons
 }
 
 std::string EmbeddingService::generate_text(const std::string& prompt) {
-    auto r = perform_request_with_retry([&]() {
+    cpr::Response r;
+    int max_retries = 4;
+
+    for (int i = 0; i < max_retries; ++i) {
+        // 🚀 THE FIX: Re-generate the URL inside the loop! 
+        // This ensures the ROTATED KEY and NEW MODEL are used for the retry.
+        std::string current_url = get_endpoint_url("generateContent");
+        
         json payload = {
             {"contents", {{ {"parts", {{{"text", prompt}}}} }}}
         };
-        // 🚀 THE FIX: get_endpoint_url is called every time a retry happens
-        return cpr::Post(cpr::Url{get_endpoint_url("generateContent")},
-                         cpr::Body{payload.dump()},
-                         cpr::Header{{"Content-Type", "application/json"}});
-    }, key_manager_);
 
-    spdlog::info("📡 Gemini Response Code: {}", r.status_code);
-    if (r.status_code != 200) {
-        spdlog::error("❌ Gemini API Error Body: {}", r.text); // THIS WILL TELL US WHY IT FAILS
-        return "ERROR_FROM_BACKEND: Gemini failed with code " + std::to_string(r.status_code);
+        r = cpr::Post(cpr::Url{current_url},
+                      cpr::Body{payload.dump()},
+                      cpr::Header{{"Content-Type", "application/json"}});
+
+        if (r.status_code == 200) break;
+
+        if (r.status_code == 429) {
+            spdlog::warn("⚠️ Quota Exceeded (429). Rotating key and initiating 2s thermal cooldown...");
+            key_manager_->report_rate_limit();
+            // 🚀 SPACE-X FIX: Increase sleep to 2 seconds to allow quota window to reset
+            std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+            continue;
+        }
+
+        // If it's a 400 or 404, the model name or prompt is wrong
+        spdlog::error("❌ Fatal API Error [{}]: {}", r.status_code, r.text);
+        return "ERROR: API Protocol Failure.";
     }
-    
+
+    if (r.status_code != 200) return "ERROR: System Throttled.";
+
     auto response_json = json::parse(r.text);
-    if (response_json.contains("candidates") && !response_json["candidates"].empty()) {
-        return response_json["candidates"][0]["content"]["parts"][0]["text"];
-    }
-    
-    return "ERROR: AI response was empty.";
+    return response_json["candidates"][0]["content"]["parts"][0]["text"];
 }
 
 std::string HyDEGenerator::generate_hyde(const std::string& query) {
@@ -160,6 +166,38 @@ std::string HyDEGenerator::generate_hyde(const std::string& query) {
         spdlog::warn("HyDE generation failed: {}", e.what());
         return "";
     }
+}
+
+std::string EmbeddingService::generate_autocomplete(const std::string& prefix) {
+    // Use the aligned method name 'get_current_key'
+    std::string key = key_manager_->get_current_key();
+    std::string url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=" + key;
+
+    json payload = {
+        {"contents", {{ {"parts", {{{"text", "Finish this code: " + prefix}}}} }}},
+        {"generationConfig", {
+            {"maxOutputTokens", 64},
+            {"stopSequences", {";", "\n", "}"}}
+        }}
+    };
+
+    auto r = cpr::Post(cpr::Url{url}, cpr::Body{payload.dump()}, cpr::Header{{"Content-Type", "application/json"}});
+    
+    if (r.status_code == 429) {
+        key_manager_->report_rate_limit(); // Aligned name
+        return ""; 
+    }
+
+    if (r.status_code != 200) return "";
+
+    // 🚀 FIX 3: Implementation of parse_gemini_response inline to avoid C3861
+    try {
+        auto j = json::parse(r.text);
+        if (j.contains("candidates") && !j["candidates"].empty()) {
+            return j["candidates"][0]["content"]["parts"][0]["text"];
+        }
+    } catch (...) {}
+    return "";
 }
 
 } // namespace code_assistance

@@ -53,6 +53,11 @@
           "type": "string",
           "default": "",
           "description": "Specific paths to force include even if ignored."
+        },
+        "studyAssistant.enableAutoCompletion": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable AI Ghost Text"
         }
       }
     },
@@ -88,6 +93,11 @@
           "type": "webview"
         }
       ]
+    },
+    "studyAssistant.enableGhostText": {
+      "type": "boolean",
+      "default": true,
+      "description": "Enable AI ghost text suggestions"
     }
   },
   

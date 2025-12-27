@@ -7,18 +7,26 @@
 #include <thread>
 #include <cstdlib> 
 
-#include "faiss_vector_store.hpp"
-#include "retrieval_engine.hpp"
-#include "embedding_service.hpp"
+#include "KeyManager.hpp" 
+#include "LogManager.hpp"
+#include "ThreadPool.hpp"
 #include "sync_service.hpp"
 #include "cache_manager.hpp"
 #include "SystemMonitor.hpp"
-#include "LogManager.hpp"
-#include "ThreadPool.hpp"
-#include "KeyManager.hpp" 
+#include "agent/SubAgent.hpp"
+#include "agent/AgentTypes.hpp"
+#include "retrieval_engine.hpp"
+#include "embedding_service.hpp"
+#include "tools/ToolRegistry.hpp"
+#include "faiss_vector_store.hpp"
+#include "agent/AgentExecutor.hpp"
 
 namespace fs = std::filesystem;
 using json = nlohmann::json;
+
+namespace code_assistance {
+    std::string web_search(const std::string& args_json);
+}
 
 class CodeAssistanceServer {
 public:
@@ -28,8 +36,9 @@ public:
           cache_manager_(std::make_shared<code_assistance::CacheManager>()),
           thread_pool_(4) 
     {
-        auto key_manager = std::make_shared<KeyManager>();
-        embedding_service_ = std::make_shared<code_assistance::EmbeddingService>(key_manager);
+        key_manager_ = std::make_shared<code_assistance::KeyManager>();
+        embedding_service_ = std::make_shared<code_assistance::EmbeddingService>(key_manager_);
+        this->initialize_agent_system();
         setup_routes();
     }
 
@@ -44,11 +53,98 @@ private:
     ThreadPool thread_pool_;
     std::mutex store_mutex;
 
-    std::shared_ptr<code_assistance::EmbeddingService> embedding_service_;
+    std::shared_ptr<code_assistance::SubAgent> sub_agent_;
+    std::shared_ptr<code_assistance::AgentExecutor> executor_;
+    std::shared_ptr<code_assistance::KeyManager> key_manager_;
+
     std::shared_ptr<code_assistance::CacheManager> cache_manager_;
+    std::shared_ptr<code_assistance::ToolRegistry> tool_registry_;
+    std::shared_ptr<code_assistance::EmbeddingService> embedding_service_;
     std::unordered_map<std::string, std::shared_ptr<code_assistance::FaissVectorStore>> project_stores_;
     
     code_assistance::SystemMonitor system_monitor_;
+
+    void initialize_agent_system() {
+        tool_registry_ = std::make_shared<code_assistance::ToolRegistry>();
+        sub_agent_ = std::make_shared<code_assistance::SubAgent>();
+
+        tool_registry_->register_tool(std::make_unique<code_assistance::GenericTool>(
+            "web_search",
+            "Search the internet for documentation",
+            "{\"query\": \"string\"}",
+            [](const std::string& args) { return code_assistance::web_search(args); }
+        ));
+
+        // Register Read File
+       tool_registry_->register_tool(std::make_unique<code_assistance::GenericTool>(
+            "read_file",
+            "Read code from a file.",
+            "{\"path\": \"string\"}",
+            [this](const std::string& args_json) -> std::string {
+                try {
+                    auto j = nlohmann::json::parse(args_json);
+                    std::string pid = j.value("project_id", "");
+                    nlohmann::json config = this->load_project_config(pid);
+                    
+                    std::filesystem::path root(config.value("local_path", ""));
+                    std::filesystem::path target = (root / j.value("path", "")).lexically_normal();
+
+                    // Re-use security check from above...
+                    
+                    std::ifstream f(target);
+                    if (!f.is_open()) return "ERROR: File not accessible.";
+                    return std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+                } catch(...) { return "ERROR: Operation failed."; }
+            }
+        ));
+
+        tool_registry_->register_tool(std::make_unique<code_assistance::GenericTool>(
+            "list_dir",
+            "List files in the project workspace.",
+            "{\"path\": \"string\"}", // AI no longer needs to know about project_id
+            [this](const std::string& args_json) -> std::string {
+                try {
+                    auto j = nlohmann::json::parse(args_json);
+                    std::string pid = j.value("project_id", ""); // Injected by AgentExecutor
+                    std::string sub_path = j.value("path", ".");
+
+                    nlohmann::json config = this->load_project_config(pid);
+                    std::string root_str = config.value("local_path", "");
+                    
+                    if (root_str.empty()) return "ERROR: Workspace root not resolved for ID: " + pid;
+
+                    // 🚀 SECURITY: Prevent Directory Traversal
+                    std::filesystem::path root_path(root_str);
+                    std::filesystem::path target_path = (root_path / sub_path).lexically_normal();
+
+                    // Ensure target is still inside root
+                    auto rel = std::filesystem::relative(target_path, root_path);
+                    if (rel.empty() || rel.string().find("..") != std::string::npos) {
+                        return "ERROR: Security Violation. Path is outside workspace.";
+                    }
+
+                    std::string res = "Directory contents of " + sub_path + ":\n";
+                    for (auto& entry : std::filesystem::directory_iterator(target_path)) {
+                        auto status = entry.status();
+                        std::string type = entry.is_directory() ? "[DIR]" : "[FILE]";
+                        uintmax_t size = entry.is_regular_file() ? entry.file_size() : 0;
+                        
+                        // Output: [FILE] test01.py (0 bytes) | [FILE] test04.json (801 bytes)
+                        res += type + " " + entry.path().filename().string() + " (" + std::to_string(size) + " bytes)\n";
+                    }
+                    return res;
+                } catch (const std::exception& e) { return std::string("ERROR: ") + e.what(); }
+            }
+        ));
+
+        // Initialize the Pilot
+        executor_ = std::make_shared<code_assistance::AgentExecutor>(
+            nullptr, // Engine loaded per-request
+            embedding_service_,
+            sub_agent_,
+            tool_registry_
+        );
+    }
     
     void setup_routes() {
         server_.Options("/(.*)", [](const httplib::Request&, httplib::Response& res) {
@@ -83,15 +179,32 @@ private:
             res.set_content(response.dump(), "application/json");
         });
 
-        server_.Get("/admin", [](const httplib::Request&, httplib::Response& res) {
-            std::ifstream f("dashboard.html");
-            if (f) {
+        server_.Get("/admin", [this](const httplib::Request&, httplib::Response& res) {
+            // 🚀 SpaceX Strategy: Resolve path relative to the current executable
+            namespace fs = std::filesystem;
+            
+            fs::path root_path = fs::current_path(); 
+            fs::path dashboard_path = root_path / "dashboard.html";
+
+            // Debugging Log: Help the user see WHERE the server is looking
+            spdlog::info("🛰️ Admin Dashboard Request: Checking {}", dashboard_path.string());
+
+            std::ifstream f(dashboard_path, std::ios::in | std::ios::binary);
+            if (f.is_open()) {
                 std::stringstream buffer;
                 buffer << f.rdbuf();
                 res.set_content(buffer.str(), "text/html");
+                spdlog::info("✅ Dashboard served successfully.");
             } else {
-                res.set_content("<h1>Dashboard file not found.</h1>", "text/html");
+                spdlog::error("❌ CRITICAL: Dashboard not found at {}", dashboard_path.string());
+                res.status = 404;
+                res.set_content("<h1>500 - Mission Control Offline</h1><p>Dashboard file missing in binary directory.</p>", "text/html");
             }
+        });
+
+        server_.Get("/api/admin/agent_trace", [this](const httplib::Request&, httplib::Response& res) {
+            auto traces = code_assistance::LogManager::instance().get_traces_json();
+            res.set_content(traces.dump(), "application/json");
         });
 
         server_.Get("/api/hello", [](const httplib::Request&, httplib::Response& res) {
@@ -231,6 +344,55 @@ private:
                 res.status = 500;
                 res.set_content(json{{"error", e.what()}}.dump(), "application/json");
             }
+        });
+
+        server_.Post("/complete", [this](const httplib::Request& req, httplib::Response& res) {
+            try {
+                auto body = json::parse(req.body);
+                std::string prefix = body["prefix"];
+                
+                // 🚀 PROMPT ENGINEERING: Demand only the continuation
+                std::string prompt = 
+                    "CONTEXT: " + prefix + "\n"
+                    "TASK: Complete the code from the cursor position.\n"
+                    "RULES:\n"
+                    "1. Return ONLY the code needed to finish the block.\n"
+                    "2. DO NOT repeat the prefix.\n"
+                    "3. NO MARKDOWN (no ```).\n"
+                    "4. NO EXPLANATIONS.";
+
+                std::string completion = embedding_service_->generate_text(prompt);
+
+                // 🚀 SURGICAL SCRUB: Force-remove backticks if Gemini ignores instructions
+                size_t first = completion.find_first_not_of(" \n\r\t`");
+                size_t last = completion.find_last_not_of(" \n\r\t` \n");
+                if (first != std::string::npos && last != std::string::npos) {
+                    completion = completion.substr(first, (last - first + 1));
+                }
+
+                spdlog::info("✅ Ghost Payload Ready: {}", completion);
+                res.set_content(json{{"completion", completion}}.dump(), "application/json");
+            } catch (...) { res.status = 500; }
+        });
+
+        server_.Post("/admin/refresh-keys", [this](const httplib::Request&, httplib::Response& res) {
+            spdlog::info("🔄 Manual Key Pool Refresh Initiated...");
+            key_manager_->refresh_key_pool();
+            res.set_content(R"({"status": "synchronized"})", "application/json");
+        });
+
+        server_.Post("/api/admin/publish_trace", [this](const httplib::Request& req, httplib::Response& res) {
+            try {
+                auto j = nlohmann::json::parse(req.body);
+                code_assistance::AgentTrace trace;
+                trace.session_id = j.value("session_id", "AGENT");
+                trace.state = j.value("state", "LOG");
+                trace.detail = j.value("detail", "");
+                trace.duration_ms = j.value("duration", 0.0);
+                
+                code_assistance::LogManager::instance().add_trace(trace);
+                res.set_content(R"({"status":"ok"})", "application/json");
+            } catch (...) { res.status = 400; }
         });
     }
 
@@ -378,67 +540,17 @@ private:
     }
 
     void handle_generate_suggestion(const httplib::Request& req, httplib::Response& res) {
-        auto start_time = std::chrono::high_resolution_clock::now();
-        std::string project_id;
-        std::string user_prompt;
-        std::string final_ai_prompt; // Unified name
-        std::string ai_response;
-
         try {
-            auto body = json::parse(req.body);
-            project_id = body["project_id"];
-            user_prompt = body["prompt"];
+            auto body = nlohmann::json::parse(req.body);
             
-            auto store = load_vector_store(project_id);
-            if (!store) throw std::runtime_error("Project not indexed.");
-            
-            // 1. Retrieval
-            auto query_emb = embedding_service_->generate_embedding(user_prompt);
-            code_assistance::RetrievalEngine engine(store);
-            auto results = engine.retrieve(user_prompt, query_emb, 80, true);
-            std::string rag_context = engine.build_hierarchical_context(results, 32000);
+            // 🚀 This call now matches the header we just fixed
+            std::string result = executor_->run_autonomous_loop_internal(body); 
 
-            // 2. Metadata Cleaning
-            std::string raw_active_path = body.value("active_file_path", "Unknown");
-            std::string active_content = body.value("active_file_content", "");
-            std::string clean_path = clean_internal_path(raw_active_path);
-
-            // 3. Prompt Construction
-            final_ai_prompt = 
-                "### ROLE\n"
-                "You are a Senior Software Architect with project-wide write access.\n"
-                "Your primary focus is: " + clean_path + ".\n\n"
-                "### INSTRUCTIONS (STRICT PROTOCOL)\n"
-                "1. If you are suggesting code changes, you MUST use triple backticks: ```language ... ```\n"
-                "2. At the VERY FIRST LINE inside the code block, you MUST specify the target file using this tag:\n"
-                "   // [TARGET: path/to/file.ext]\n"
-                "3. DO NOT include explanations OR natural language INSIDE the code block. Use comments instead.\n"
-                "4. DO NOT ramble. If the user asks to write to a file, just provide the code block for that file.\n\n"
-                "### CONTEXT\n" + rag_context + "\n\n"
-                "### USER QUESTION\n" + user_prompt + "\n\n"
-                "### ANSWER (Code First)\n";
-
-            // 4. Dispatch to Gemini
-            spdlog::info("🚀 Calling Gemini API for: {}", clean_path);
-            ai_response = embedding_service_->generate_text(final_ai_prompt);
-            
-            // 5. Transmit to Extension
-            res.set_content(json{{"suggestion", ai_response}}.dump(), "application/json");
-
+            res.set_content(nlohmann::json{{"suggestion", result}}.dump(), "application/json");
         } catch (const std::exception& e) {
-            spdlog::error("❌ Generation error: {}", e.what());
             res.status = 500;
-            res.set_content(json{{"error", e.what()}}.dump(), "application/json");
+            res.set_content(nlohmann::json{{"error", e.what()}}.dump(), "application/json");
         }
-
-        // Telemetry
-        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::high_resolution_clock::now() - start_time).count();
-        
-        code_assistance::LogManager::instance().add_log({
-            std::time(nullptr), project_id, user_prompt, user_prompt, 
-            final_ai_prompt, ai_response, 0, (double)duration
-        });
     }
 
     void handle_retrieve_candidates(const httplib::Request& req, httplib::Response& res) {
@@ -525,7 +637,24 @@ private:
     }
 };
 
+void pre_flight_check() {
+    namespace fs = std::filesystem;
+    std::vector<std::string> required_assets = {"dashboard.html", "keys.json"};
+    
+    for (const auto& asset : required_assets) {
+        if (!fs::exists(asset)) {
+            spdlog::critical("🚨 PRE-FLIGHT FAILURE: Missing asset: {}", asset);
+            spdlog::info("💡 Ensure you are running from the 'build/Release' directory.");
+            std::exit(EXIT_FAILURE); // Stop the launch
+        }
+    }
+    spdlog::info("🚀 All systems nominal. Assets verified.");
+}
+
 int main(int argc, char* argv[]) {
+    
+    pre_flight_check();
+
     spdlog::set_pattern("[%H:%M:%S] [%^%l%$] %v");
     spdlog::set_level(spdlog::level::info);
     

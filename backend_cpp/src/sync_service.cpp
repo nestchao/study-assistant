@@ -13,6 +13,7 @@
 #include "code_graph.hpp"
 #include "embedding_service.hpp"
 #include <map>
+#include <sstream> 
 
 namespace code_assistance {
 
@@ -83,6 +84,22 @@ bool is_inside(const fs::path& child, const fs::path& parent) {
 
 SyncService::SyncService(std::shared_ptr<EmbeddingService> embedding_service)
     : embedding_service_(embedding_service) {}
+
+bool SyncService::should_index(const fs::path& rel_path, const FilterConfig& cfg) {
+    std::string p_str = rel_path.generic_string();
+
+    for (const auto& white : cfg.whitelist) {
+        if (p_str == white) return true; 
+    }
+
+    for (const auto& black : cfg.blacklist) {
+        if (p_str.find(black) == 0) return false; 
+    }
+
+    std::string ext = rel_path.extension().string();
+    if (!ext.empty() && ext[0] == '.') ext = ext.substr(1);
+    return cfg.allowed_extensions.count(ext) > 0;
+}
 
 std::unordered_map<std::string, std::shared_ptr<CodeNode>> 
 SyncService::load_existing_nodes(const std::string& storage_path) {
@@ -262,6 +279,56 @@ void SyncService::save_manifest(const std::string& project_id, const std::unorde
     std::ofstream f(p); json j = m; f << j.dump(2);
 }
 
+void SyncService::recursive_scan(
+    const fs::path& current_dir,
+    const fs::path& root_dir,
+    const fs::path& storage_dir,
+    const FilterConfig& cfg,
+    std::vector<fs::path>& results
+) {
+    try {
+        for (const auto& entry : fs::directory_iterator(current_dir)) {
+            const auto& path = entry.path();
+            
+            // Critical Safety: Don't scan our own metadata folder
+            if (fs::exists(storage_dir) && fs::equivalent(path, storage_dir)) continue;
+
+            fs::path rel_path = fs::relative(path, root_dir);
+
+            if (entry.is_directory()) {
+                // DECISION: Enter if not ignored OR if it contains a whitelisted item
+                bool explicitly_ignored = false;
+                for (const auto& ign : cfg.blacklist) {
+                    if (rel_path.generic_string().find(ign) == 0) { 
+                        explicitly_ignored = true; 
+                        break; 
+                    }
+                }
+
+                bool is_bridge = false;
+                for (const auto& inc : cfg.whitelist) {
+                    if (inc.find(rel_path.generic_string()) == 0) { 
+                        is_bridge = true; 
+                        break; 
+                    }
+                }
+
+                if (!explicitly_ignored || is_bridge) {
+                    recursive_scan(path, root_dir, storage_dir, cfg, results);
+                }
+            } 
+            else if (entry.is_regular_file()) {
+                // 🚀 CALLING VIA THIS
+                if (this->should_index(rel_path, cfg)) {
+                    results.push_back(path);
+                }
+            }
+        }
+    } catch (const std::exception& e) {
+        spdlog::error("Scanner stall: {}", e.what());
+    }
+}
+
 SyncResult SyncService::perform_sync(
     const std::string& project_id,
     const std::string& source_dir_str,
@@ -270,10 +337,8 @@ SyncResult SyncService::perform_sync(
     const std::vector<std::string>& ignored_paths,
     const std::vector<std::string>& included_paths
 ) {
-    fs::path source_dir(source_dir_str);
-    fs::path storage_dir(storage_path_str);
-    fs::path storage_dir_abs = fs::absolute(storage_dir); // Crucial for preventing recursion
-    
+    fs::path source_dir = fs::absolute(source_dir_str);
+    fs::path storage_dir = fs::absolute(storage_path_str);
     fs::path converted_files_dir = storage_dir / "converted_files";
     fs::create_directories(converted_files_dir);
 
@@ -281,76 +346,46 @@ SyncResult SyncService::perform_sync(
     auto manifest = load_manifest(project_id);
     auto existing_nodes_map = load_existing_nodes(storage_path_str);
 
-    // 🚀 PHASE 1: ATOMIC SANITATION (Fixes C2086 and Filter Logic)
-    
-    // 1. Sanitize Extensions (Always dot-free and lowercase)
-    std::unordered_set<std::string> ext_set;
-    for (std::string ext : allowed_extensions) {
+    // 🚀 PHASE 1: PRE-FLIGHT SANITATION
+    FilterConfig cfg;
+    cfg.blacklist = ignored_paths;
+    cfg.whitelist = included_paths;
+    for (auto ext : allowed_extensions) {
         if (!ext.empty() && ext[0] == '.') ext = ext.substr(1);
-        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-        ext_set.insert(ext);
+        std::string clean_ext = ext;
+        std::transform(clean_ext.begin(), clean_ext.end(), clean_ext.begin(), ::tolower);
+        cfg.allowed_extensions.insert(clean_ext);
     }
 
-    // 2. Sanitize Paths (Remove trailing slashes and normalize)
-    std::vector<std::string> clean_ignored;
-    for (const auto& p : ignored_paths) {
-        if (p.empty()) continue;
-        clean_ignored.push_back(fs::path(p).lexically_normal().string());
-    }
+    spdlog::info("🔍 Mission Start: {} | Filters: [E:{} I:{} W:{}]", 
+                 project_id, cfg.allowed_extensions.size(), cfg.blacklist.size(), cfg.whitelist.size());
 
-    std::vector<std::string> clean_included;
-    for (const auto& p : included_paths) {
-        if (p.empty()) continue;
-        clean_included.push_back(fs::path(p).lexically_normal().string());
-    }
+    // 🚀 PHASE 2: PRUNING RECURSIVE SCAN
+    std::vector<fs::path> files_to_process;
+    // We call the specialized recursive scan that uses should_index internally
+    this->recursive_scan(source_dir, source_dir, storage_dir, cfg, files_to_process);
 
-    spdlog::info("🔍 Scanning {} | Ignore: {} | Include: {}", source_dir_str, clean_ignored.size(), clean_included.size());
-
-    // 🚀 PHASE 2: RECURSIVE SCAN
-    std::vector<fs::path> files;
-    if (fs::exists(source_dir)) {
-        scan_directory_recursive(
-            source_dir, 
-            source_dir, 
-            storage_dir_abs, 
-            ext_set, 
-            clean_ignored, 
-            clean_included, 
-            files
-        );
-    }
-
-    // 🚀 PHASE 3: FILE PROCESSING
+    // 🚀 PHASE 3: DIFFERENTIAL PROCESSING
     std::unordered_map<std::string, std::string> new_manifest;
-    std::unordered_set<std::string> processed_paths;
     std::vector<std::shared_ptr<CodeNode>> nodes_to_embed;
-    
     std::ofstream full_context_file(storage_dir / "_full_context.txt");
 
-    for (const auto& file_path : files) {
-        std::string rel_path_str = fs::relative(file_path, source_dir).generic_string(); // Always use '/'
-        processed_paths.insert(rel_path_str);
-        
+    for (const auto& file_path : files_to_process) {
+        std::string rel_path_str = fs::relative(file_path, source_dir).generic_string();
         std::string current_hash = calculate_file_hash(file_path);
         std::string old_hash = manifest.count(rel_path_str) ? manifest.at(rel_path_str) : "";
         
         bool is_changed = (current_hash != old_hash);
-        
-        std::ifstream file(file_path);
-        std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+        new_manifest[rel_path_str] = current_hash;
 
-        // Store converted .txt
-        try {
-            fs::path target_file = converted_files_dir / (rel_path_str + ".txt");
-            fs::create_directories(target_file.parent_path());
-            std::ofstream out_file(target_file);
-            out_file << content;
-        } catch (...) {}
-        
+        // 1. Context Reassembly (Always update full context for the agent)
+        std::ifstream file_in(file_path);
+        std::string content((std::istreambuf_iterator<char>(file_in)), std::istreambuf_iterator<char>());
         full_context_file << "\n\n--- FILE: " << rel_path_str << " ---\n" << content << "\n";
 
+        // 2. Node Generation
         if (is_changed) {
-            spdlog::info("UPDATE: {}", rel_path_str);
+            spdlog::info("🔼 UPDATE: {}", rel_path_str);
             result.logs.push_back("UPDATE: " + rel_path_str);
             auto new_nodes = CodeParser::extract_nodes_from_file(rel_path_str, content);
             for (auto& n : new_nodes) {
@@ -360,40 +395,22 @@ SyncResult SyncService::perform_sync(
             }
             result.updated_count++;
         } else {
-            // Check memory cache first
-            bool recovered = false;
-            for (const auto& pair : existing_nodes_map) {
-                if (pair.second->file_path == rel_path_str) {
-                    result.nodes.push_back(pair.second);
-                    recovered = true;
-                }
-            }
-            if (!recovered) {
-                auto new_nodes = CodeParser::extract_nodes_from_file(rel_path_str, content);
-                for (auto& n : new_nodes) {
-                    auto ptr = std::make_shared<CodeNode>(n);
-                    result.nodes.push_back(ptr);
-                    nodes_to_embed.push_back(ptr);
-                }
+            // Recover from existing map to avoid re-embedding
+            for (const auto& [id, node] : existing_nodes_map) {
+                if (node->file_path == rel_path_str) result.nodes.push_back(node);
             }
         }
-        new_manifest[rel_path_str] = current_hash;
     }
-    
-    // Finalize Metadata and Tree
-    generate_tree_file(source_dir, files, storage_dir / "tree.txt");
 
+    // 🚀 PHASE 4: VECTOR & METADATA FINALIZATION
     if (!nodes_to_embed.empty()) {
         generate_embeddings_batch(nodes_to_embed, 50);
     }
     
-    if (!result.nodes.empty()){
-        CodeGraph graph;
-        for (const auto& node : result.nodes) graph.add_node(node);
-        graph.calculate_static_weights();
-    }
-    
+    generate_tree_file(source_dir, files_to_process, storage_dir / "tree.txt");
     save_manifest(project_id, new_manifest);
+
+    spdlog::info("✅ Mission Success: {} nodes indexed.", result.nodes.size());
     return result;
 }
 

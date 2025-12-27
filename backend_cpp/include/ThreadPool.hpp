@@ -8,6 +8,7 @@
 #include <future>
 #include <functional>
 #include <stdexcept>
+#include <type_traits> 
 
 class ThreadPool {
 public:
@@ -28,11 +29,11 @@ public:
                 }
             });
     }
-
+    
     template<class F, class... Args>
     auto enqueue(F&& f, Args&&... args) 
-        -> std::future<typename std::result_of<F(Args...)>::type> {
-        using return_type = typename std::result_of<F(Args...)>::type;
+        -> std::future<std::invoke_result_t<F, Args...>> { // 🚀 FIXED: use invoke_result_t
+        using return_type = std::invoke_result_t<F, Args...>;
 
         auto task = std::make_shared<std::packaged_task<return_type()>>(
             std::bind(std::forward<F>(f), std::forward<Args>(args)...)

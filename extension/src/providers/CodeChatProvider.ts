@@ -75,60 +75,157 @@ export class CodeChatProvider implements vscode.WebviewViewProvider {
                 case 'applyCode': {
                     const rawCode = data.value;
                     const blockId = data.id;
-                    
-                    // 1. Extract Target using Regex from the [TARGET: path] tag
-                    const targetMatch = rawCode.match(/(?:\/\/|#|--)\s*\[TARGET:\s*([^\]\s]+)\]/i);
-                    const workspaceFolders = vscode.workspace.workspaceFolders;
 
-                    if (!workspaceFolders) {
-                        vscode.window.showErrorMessage("No active workspace found.");
-                        return;
-                    }
+                    const workspaceFolders = vscode.workspace.workspaceFolders;
+                    if (!workspaceFolders) return;
 
                     try {
-                        let targetUri: vscode.Uri;
-                        
-                        if (targetMatch) {
-                            const relativePath = targetMatch[1].trim();
-                            targetUri = vscode.Uri.joinPath(workspaceFolders[0].uri, relativePath);
-                        } else {
-                            // Fallback: Apply to currently active editor if no tag found
+                        const headerMatch = rawCode.match(/(?:\/\/|#|--)\s*\[TARGET:\s*([^:\]\s]+):?([^:\]\s]+)?:?([\s\S]*?)\]/i);
+                        if (!headerMatch) throw new Error("Metadata Header Missing");
+
+                        const relativePathRaw = headerMatch[1].trim();
+                        let relativePath = relativePathRaw;
+
+                        const targetUriInitial = vscode.Uri.joinPath(workspaceFolders[0].uri, relativePath);
+
+                        try {
+                            // Check if the file the AI suggested actually exists
+                            await vscode.workspace.fs.stat(targetUriInitial);
+                        } catch (e) {
+                            // If it doesn't exist, and the AI hallucinated (e.g., 'data.json' or 'file'), 
+                            // fallback to the active editor
                             const activeEditor = vscode.window.activeTextEditor;
-                            if (!activeEditor) throw new Error("No target file specified and no active editor.");
-                            targetUri = activeEditor.document.uri;
+                            if (activeEditor) {
+                                const activePath = vscode.workspace.asRelativePath(activeEditor.document.uri);
+                                console.warn(`⚠️ [SpaceX] Target Mismatch: AI suggested '${relativePath}', but it doesn't exist. Re-routing to Active Editor: '${activePath}'`);
+                                relativePath = activePath;
+                            } else {
+                                throw new Error(`The file '${relativePath}' does not exist and no active editor is open.`);
+                            }
                         }
 
-                        // 2. Clean the code (remove the TARGET tag line)
-                        const cleanCode = rawCode.replace(/(?:\/\/|#|--)\s*\[TARGET:.*?\]\s*\n?/, "").trim();
+                        // 🚀 HALLUCINATION GUARD: Auto-correct 'file' to active editor path
+                        if (relativePath.toLowerCase() === 'file') {
+                            const activeEditor = vscode.window.activeTextEditor;
+                            if (activeEditor) {
+                                relativePath = vscode.workspace.asRelativePath(activeEditor.document.uri);
+                                console.warn(`⚠️ [SpaceX] Hallucination Detected: AI sent 'file' instead of '${relativePath}'. Auto-correcting.`);
+                            } else {
+                                throw new Error("AI used 'file' placeholder but no active editor is open.");
+                            }
+                        }
 
-                        // 3. SpaceX Integrity Check: Create file if it doesn't exist
+                        const action = (headerMatch[2] || "INSERT").toUpperCase();
+                        const searchKey = headerMatch[3] ? headerMatch[3].trim() : "";  
+
+                        // 🚀 PLACEHOLDER GUARD
+                        if (action === "ACTION" || searchKey === "ANCHOR") {
+                            throw new Error("AI hallucinated the template placeholders. Please tell the AI: 'Use REPLACE:ALL for this change'.");
+                        }
+                        
+                        // Use the first workspace folder as root (Standard behavior)
+                        const targetUri = vscode.Uri.joinPath(workspaceFolders[0].uri, relativePath);
+                        
+                        // Ensure we strip the tag accurately
+                        const headerEndIndex = rawCode.indexOf(']');
+                        const cleanCode = rawCode.substring(headerEndIndex + 1).trim();
+
+                        const document = await vscode.workspace.openTextDocument(targetUri);
+                        const fullText = document.getText();
                         const edit = new vscode.WorkspaceEdit();
-                        
-                        // Create or Overwrite logic
-                        const documentExists = await vscode.workspace.fs.stat(targetUri).then(() => true, () => false);
-                        
-                        if (!documentExists) {
-                            edit.createFile(targetUri, { ignoreIfExists: true });
+
+                        // Helper for Full Document Range (Safer than lineAt)
+                        const getFullDocumentRange = (doc: vscode.TextDocument) => {
+                            const firstLine = doc.lineAt(0);
+                            const lastLine = doc.lineAt(doc.lineCount - 1);
+                            return new vscode.Range(firstLine.range.start, lastLine.rangeIncludingLineBreak.end);
+                        };
+
+                        if (cleanCode.length === 0 && action !== "DELETE") {
+                            throw new Error("AI provided the instruction tag but forgot to include the actual code below it. Please ask the AI to 'Try again with the full code block'.");
                         }
 
-                        // Select the whole range to replace or append
-                        // For this implementation, we overwrite (High Authority Mode)
-                        const fullRange = new vscode.Range(
-                            new vscode.Position(0, 0),
-                            new vscode.Position(10000, 0) // Overly large range to ensure overwrite
-                        );
+                        // 🚀 SEARCH KEY VALIDATION
+                        if (action === "INSERT" || action === "REPLACE") {
+                            if (searchKey === cleanCode || searchKey === relativePath) {
+                                throw new Error("AI is confusing the Anchor with the Content. Advise the AI: 'Use REPLACE:ALL instead'.");
+                            }
+                        }
 
-                        edit.replace(targetUri, fullRange, cleanCode);
-                        
-                        await vscode.workspace.applyEdit(edit);
-                        await vscode.workspace.openTextDocument(targetUri).then(doc => doc.save());
+                        // 🚀 SURGICAL ENGINE 2.1
+                        if (action === "REPLACE" && searchKey) {
+                            let rangeToReplace: vscode.Range;
 
-                        // 4. Notify UI of success
-                        webviewView.webview.postMessage({ type: 'applySuccess', id: blockId });
-                        vscode.window.setStatusBarMessage(`$(check) Applied AI changes to ${path.basename(targetUri.fsPath)}`, 3000);
+                            // 🚀 SURGICAL UPGRADE: Case-insensitive 'starts with' check for ALL
+                            // This handles "ALL", "ALL:file", "ALL:test04.json", etc.
+                            const isFullReplace = searchKey.toUpperCase() === "ALL" || 
+                                                searchKey.toUpperCase().startsWith("ALL:");
+
+                            if (isFullReplace) {
+                                console.log("📂 [SpaceX] Full file replacement initiated via fuzzy ALL match:", searchKey);
+                                rangeToReplace = getFullDocumentRange(document);
+                            } else {
+                                // Standard surgical logic with newline normalization
+                                const normalizedSearch = searchKey.replace(/\r\n/g, '\n');
+                                const normalizedFullText = fullText.replace(/\r\n/g, '\n');
+
+                                let index = normalizedFullText.indexOf(normalizedSearch);
+                                
+                                // ... (rest of your existing structural match/error handling) ...
+                                
+                                if (index === -1) {
+                                    throw new Error(`Anchor text not found in ${relativePath}. Ensure the 'search_string' matches a unique block in your file.`);
+                                }
+                                
+                                rangeToReplace = new vscode.Range(
+                                    document.positionAt(index),
+                                    document.positionAt(index + searchKey.length)
+                                );
+                            }
+                            
+                            edit.replace(targetUri, rangeToReplace, cleanCode);
+                        }
+                        else if (action === "INSERT" && searchKey) {
+                            // Newline normalization for robust matching
+                            const cleanSearchKey = searchKey.replace(/\r/g, "");
+                            const cleanFullText = fullText.replace(/\r/g, "");
+                            const index = cleanFullText.indexOf(cleanSearchKey);
+                            
+                            if (index === -1) {
+                                throw new Error(`Anchor not found: "${searchKey}"`);
+                            }
+
+                            const startPos = document.positionAt(fullText.indexOf(searchKey));
+                            const line = document.lineAt(startPos.line);
+                            const lineEnd = line.range.end;
+
+                            // 🚀 SURGICAL REFINEMENT: Ensure code is on a new line
+                            edit.insert(targetUri, lineEnd, `\n${cleanCode}`);
+                        }
+                        else if (action === "APPEND") {
+                            const lastLine = document.lineAt(document.lineCount - 1);
+                            edit.insert(targetUri, lastLine.range.end, `\n\n${cleanCode}`);
+                        }
+                        else if (action === "OVERWRITE") {
+                            edit.replace(targetUri, getFullDocumentRange(document), cleanCode);
+                        }
+                        else {
+                            throw new Error(`Action '${action}' is not supported or requires a valid search key.`);
+                        }
+
+                        const success = await vscode.workspace.applyEdit(edit);
+                        if (success) {
+                            await document.save();
+                            // Show the document if it's not visible
+                            await vscode.window.showTextDocument(document, { preview: false, preserveFocus: true });
+                            
+                            this._view?.webview.postMessage({ type: 'applySuccess', id: blockId });
+                            vscode.window.setStatusBarMessage(`$(check) AI applied changes to ${relativePath}`, 3000);
+                        }
 
                     } catch (err: any) {
-                        vscode.window.showErrorMessage(`Docking failed: ${err.message}`);
+                        vscode.window.showErrorMessage(`Edit Failed: ${err.message}`);
+                        console.error("ApplyCode Error:", err);
                     }
                     break;
                 }
