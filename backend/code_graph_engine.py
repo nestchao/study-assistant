@@ -9,7 +9,9 @@ from sentence_transformers import CrossEncoder
 import google.generativeai as genai
 from collections import deque
 import tiktoken
-from services import HyDE_generation_model
+
+# --- MODIFIED: Import Browser Bridge ---
+from browser_bridge import browser_bridge 
 
 # --- 从配置文件导入 ---
 from config import (
@@ -118,8 +120,6 @@ class FaissVectorStore:
 # E-BASED: Exponential Decay Graph Traversal
 # ============================================================================
 
-# ==================== code_graph_engine.py ====================
-
 def exponential_graph_expansion(vector_store, seed_nodes, max_nodes=150, max_hops=4, alpha=0.05):
     print(f"START exponential_graph_expansion (Seed count: {len(seed_nodes)})")
     
@@ -137,7 +137,6 @@ def exponential_graph_expansion(vector_store, seed_nodes, max_nodes=150, max_hop
             queue.append((node, 0, score))
 
     # 2. Build SMART Map (Simple Name -> [Nodes])
-    # This fixes the "1922 -> 94" issue by allowing 1-to-many mapping
     all_nodes = vector_store.get_all_nodes()
     smart_map = {}
 
@@ -150,10 +149,6 @@ def exponential_graph_expansion(vector_store, seed_nodes, max_nodes=150, max_hop
         if '.' in n['name']:
             simple_name = n['name'].split('.')[-1]
             smart_map.setdefault(simple_name, []).append(n)
-
-    # 🚀 PRINT SAMPLE KEYS TO VERIFY FIX 🚀
-    print(f" Mapped {len(all_nodes)} nodes → {len(unique_names)} unique qualified names.")
-    print(f" Sample Keys: {list(unique_names)[:5]}")
 
     # 3. Traverse
     while queue and len(visited) < max_nodes:
@@ -190,7 +185,6 @@ def exponential_graph_expansion(vector_store, seed_nodes, max_nodes=150, max_hop
                 visited[uid] = {'node': node, 'distance': 0, 'graph_score': seed.get('faiss_score', 0.5)}
 
     results = sorted(visited.values(), key=lambda x: x['graph_score'], reverse=True)
-    print(f"  ✅ Graph expansion: {len(results)} nodes selected.")
     return results
 
 # ============================================================================
@@ -204,10 +198,8 @@ def softmax(x, temperature=SOFTMAX_TEMPERATURE):
     return exp_x / np.sum(exp_x)
 
 def multi_dimensional_scoring(candidates, intent):
-    # Simplified logic: trust the graph score mostly, but boost structurally important nodes
     for c in candidates:
         s_weight = c['node']['weights'].get('structural', 0.5)
-        # Graph score dominates, structural weight adds 20% influence
         c['final_score'] = c['graph_score'] * (0.8 + (s_weight * 0.2))
     
     return sorted(candidates, key=lambda x: x['final_score'], reverse=True)
@@ -269,8 +261,6 @@ class CrossEncoderReranker:
 # ============================================================================
 
 def entropy_diversity_filter(candidates, max_nodes=80):
-    # Simply deduplicate by ID, keep top 80. 
-    # We disabled the vector entropy filter to ensure MAX TOKENS are reached.
     selected = []
     seen = set()
     for c in candidates:
@@ -284,26 +274,22 @@ def entropy_diversity_filter(candidates, max_nodes=80):
 # HYBRID: Hierarchical Context Assembly
 # ============================================================================
 
-# --- 🚀 GREEDY CONTEXT ASSEMBLY ---
 def build_hierarchical_context(candidates, max_tokens=MAX_CONTEXT_TOKENS):
     print(f"  📝 Assembling context with limit: {max_tokens} tokens...")
     try:
         enc = tiktoken.get_encoding("cl100k_base")
     except:
-        enc = None # Fallback
+        enc = None 
 
     context_parts = []
     current_tokens = 0
     
-    # Greedy packing: Take the highest scored nodes and add their FULL content
     for i, cand in enumerate(candidates):
         node = cand['node']
         
-        # Formatting for the LLM
         entry = f"\n\n# FILE: {node['file_path']} | NODE: {node['name']} (Type: {node['type']})\n"
         entry += f"{'-'*50}\n{node['content']}\n{'-'*50}\n"
         
-        # Token counting
         count = len(enc.encode(entry)) if enc else len(entry) // 4
         
         if current_tokens + count > max_tokens:
@@ -318,53 +304,29 @@ def build_hierarchical_context(candidates, max_tokens=MAX_CONTEXT_TOKENS):
     return final_ctx
 
 # ============================================================================
-# UTILITY FUNCTIONS
-# ============================================================================
-
-def analyze_query_intent(query):
-    query_lower = query.lower()
-    if any(kw in query_lower for kw in ['fix', 'bug', 'error', 'crash', 'issue']): return 'debug'
-    elif any(kw in query_lower for kw in ['add', 'implement', 'create', 'new', 'feature']): return 'feature'
-    elif any(kw in query_lower for kw in ['optimize', 'improve', 'refactor']): return 'refactor'
-    else: return 'explain'
-
-def remove_comments(code):
-    lines = []
-    in_multiline = False
-    for line in code.split('\n'):
-        stripped = line.strip()
-        if '"""' in stripped or "'''" in stripped:
-            in_multiline = not in_multiline
-            continue
-        if in_multiline or stripped.startswith('#'):
-            continue
-        lines.append(line)
-    return '\n'.join(lines)
-
-def extract_function_signature(code):
-    for line in code.split('\n'):
-        stripped = line.strip()
-        if stripped and (stripped.startswith('def ') or stripped.startswith('class ') or stripped.startswith('async def')):
-            if ':' in stripped: return stripped
-            else: return stripped + " ..."
-    return code.split('\n')[0][:100] + "..."
-
-# ============================================================================
 # MAIN RETRIEVAL PIPELINE
 # ============================================================================
 
-# Pipeline Wrapper
 def hybrid_retrieval_pipeline(project_id, user_query, db_instance, vector_store, cross_encoder, use_hyde=True, return_nodes_only=False):
     print(f"🚀 Starting Hybrid Retrieval for: {user_query}")
     
-    # 1. HyDE
+    # 1. HyDE via BROWSER BRIDGE (Updated)
     search_query = user_query
     if use_hyde:
         try:
-            hyde = HyDE_generation_model.generate_content(f"Write python code for: {user_query}").text
+            print("  🧠 Generating HyDE via Browser Bridge...")
+            # Make sure bridge is started
+            browser_bridge.start()
+            
+            # Send prompt to generate hypothetical code
+            # Note: This will result in code being typed in the browser window
+            hyde = browser_bridge.send_prompt(f"Write a short, high-level python pseudo-code implementation for: {user_query}")
+            
+            # Use the result to augment the search
             search_query += "\n" + hyde
             print("  ✅ HyDE generated.")
-        except: pass
+        except Exception as e:
+            print(f"  ⚠️ HyDE failed: {e}")
 
     # 2. Search (Get many seeds)
     query_emb = genai.embed_content(model=EMBEDDING_MODEL, content=search_query, task_type="retrieval_query")['embedding']
@@ -379,7 +341,6 @@ def hybrid_retrieval_pipeline(project_id, user_query, db_instance, vector_store,
     # 5. Filter (Keep lots)
     final_nodes = entropy_diversity_filter(scored, max_nodes=80)
     
-    # --- NEW LOGIC START ---
     if return_nodes_only:
         print(f"  🔙 Returning {len(final_nodes)} candidate nodes for user review.")
         sanitized_nodes = []
@@ -391,11 +352,9 @@ def hybrid_retrieval_pipeline(project_id, user_query, db_instance, vector_store,
                 'file_path': node['file_path'],
                 'type': node['type'],
                 'score': item.get('final_score', 0.0),
-                # Safely get ai_summary using .get() in case it doesn't exist on older nodes
                 'ai_summary': node.get('ai_summary', '') 
             })
         return sanitized_nodes
-    # --- NEW LOGIC END ---
 
     # 6. Context
     context = build_hierarchical_context(final_nodes)
