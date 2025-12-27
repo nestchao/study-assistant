@@ -97,33 +97,34 @@ def extract_text_from_pptx(pptx_stream):
 
 def preprocess_for_ocr(image: Image.Image) -> Image.Image:
     """
-    Prepares an image for OCR by applying a standard set of cleaning filters.
-    
-    Args:
-        image: A PIL Image object.
-
-    Returns:
-        A cleaned-up PIL Image object, ready for Tesseract.
+    Prepares an image for OCR by applying adaptive thresholding to preserve 
+    colored text (like orange) that might be lost with global thresholding.
     """
-    print("    - Pre-processing image for OCR...")
-    # 1. Convert PIL Image to an OpenCV format (numpy array)
-    #    Make sure it's in a color format that OpenCV expects (BGR)
+    print("    - Pre-processing image for OCR (Adaptive Mode)...")
+    # 1. Convert PIL Image to OpenCV format
     open_cv_image = np.array(image.convert('RGB'))
     open_cv_image = open_cv_image[:, :, ::-1].copy() # Convert RGB to BGR
 
-    # 2. Grayscale: Simplifies the image, removing color noise.
+    # 2. Grayscale
     gray = cv2.cvtColor(open_cv_image, cv2.COLOR_BGR2GRAY)
 
-    # 3. Binarization (Thresholding): Converts the image to pure black and white.
-    #    This is CRUCIAL for Tesseract. Otsu's thresholding is great because it
-    #    automatically determines the best threshold value.
-    _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
+    # 3. Adaptive Thresholding
+    # Instead of one global value, this calculates thresholds for small pixel areas.
+    # This prevents light-colored text (orange) from being 'erased'.
+    processed_image = cv2.adaptiveThreshold(
+        gray, 
+        255, 
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+        cv2.THRESH_BINARY, 
+        11, # Block size (size of the local area)
+        2   # Constant subtracted from the mean
+    )
 
-    # 4. Denoising (Optional but often helpful)
-    #    Removes small dots/speckles from the image.
-    denoised = cv2.medianBlur(thresh, 3)
+    # 4. Denoising (Optional)
+    # Using a smaller kernel to avoid blurring thin text
+    denoised = cv2.medianBlur(processed_image, 3)
 
-    # 5. Convert back to PIL Image format to pass to Pytesseract
+    # 5. Convert back to PIL Image
     final_image = Image.fromarray(denoised)
     print("    - Pre-processing complete.")
     return final_image
@@ -224,42 +225,33 @@ def extract_text(pdf_stream):
 
 def extract_text_from_image(image_stream):
     """
-    Extracts text from an image file stream using OCR, utilizing OpenCV for image processing.
+    Extracts text from an image file stream using OCR.
     """
-    print("  🖼️ Extracting text from image via OCR (using OpenCV preprocessing)...")
+    print("  🖼️ Extracting text from image via OCR...")
     try:
-        # 1. Open the image stream using PIL
+        # 1. Open the image
         pil_image = Image.open(image_stream)
         
-        # 2. Convert the PIL Image to an OpenCV (numpy) array
-        # This converts the image to the format OpenCV works with (BGR by default)
-        opencv_image = np.array(pil_image)
+        # 2. Run our improved preprocessor
+        processed_img = preprocess_for_ocr(pil_image)
         
-        # 3. OpenCV Preprocessing (Optional but recommended for better OCR)
+        # 3. Perform OCR
+        # --psm 3 tells Tesseract to look for blocks of text automatically
+        custom_config = r'--oem 3 --psm 3'
+        text = pytesseract.image_to_string(processed_img, config=custom_config)
         
-        # Convert to grayscale
-        gray_image = cv2.cvtColor(opencv_image, cv2.COLOR_BGR2GRAY)
-        
-        # Apply a binary threshold (useful for text on simple backgrounds)
-        # Adjusting the threshold values (e.g., 128 and 255) might be necessary 
-        # based on the image type.
-        _, processed_image = cv2.threshold(gray_image, 150, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
-        
-        # 4. Convert the processed OpenCV array back to a PIL Image 
-        # This is because pytesseract.image_to_string often works best 
-        # when passing a PIL Image object or a file path.
-        pil_processed_image = Image.fromarray(processed_image)
-        
-        # 5. Perform OCR using pytesseract
-        text = pytesseract.image_to_string(pil_processed_image)
-        
-        print(f"  ✅ OCR extracted {len(text)} characters from image.")
+        # 4. Fallback: If text is very short, try the raw grayscale version
+        # (Sometimes colors are better read without thresholding)
+        if len(text.strip()) < 10:
+            print("    - Low text yield, trying grayscale fallback...")
+            gray_img = pil_image.convert('L')
+            text = pytesseract.image_to_string(gray_img, config=custom_config)
+
+        print(f"  ✅ OCR extracted {len(text)} characters.")
         return text
         
     except Exception as e:
         print(f"  ❌ Image OCR failed: {e}")    
-        # If the error is related to stream reading, ensure the stream is rewinded 
-        # or properly handled before passing it to Image.open
         return ""
 
 def split_chunks(text):

@@ -33,7 +33,7 @@ class AIStudioBridge:
                     headless=False,
                     
                     # --- RAM & CPU OPTIMIZATIONS ---
-                    viewport={'width': 1000, 'height': 600},
+                    viewport={'width': 1100, 'height': 600},
                     ignore_default_args=["--enable-automation"],
                     args=[
                         "--start-maximized", 
