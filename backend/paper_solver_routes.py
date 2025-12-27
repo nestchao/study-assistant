@@ -4,7 +4,11 @@ from flask import Blueprint, request, jsonify
 from firebase_admin import firestore
 from utils import extract_text_from_image, extract_text
 import google.generativeai as genai
-from services import db, paper_solver_model, cache_manager
+from services import db, paper_solver_model, cache_manager, ai_client
+import os
+from browser_bridge import browser_bridge
+import tempfile
+import re
 
 # --- BLUEPRINT SETUP ---
 paper_solver_bp = Blueprint('paper_solver_bp', __name__)
@@ -36,45 +40,55 @@ def get_project_context(project_id):
     print(f"  📚 Retrieved context of {len(context)} characters")
     return context
 
-def solve_paper_with_file(file_stream, filename, context):
+def solve_paper_with_file(file, filename, context):
     """
-    Uploads a file directly to the Gemini API and asks it to solve the paper.
+    Saves file to a temp location to allow Gemini API to upload it correctly.
     """
     print("  🧠 Solving paper using direct file (multimodal) method...")
-    print("    - Uploading file to Gemini API...")
-    file_stream.seek(0)
-    mime_type, _ = mimetypes.guess_type(filename)
-    if mime_type is None:
-        mime_type = "application/octet-stream"
-    print(f"    - Inferred MIME type for upload: {mime_type}")
-    uploaded_file = genai.upload_file(
-        path=file_stream,
-        display_name=filename,
-        mime_type=mime_type
+    
+    # Create a temporary file because genai.upload_file needs a PATH, not a stream
+    with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(filename)[1]) as tmp:
+        file.save(tmp.name)
+        tmp_path = tmp.name
+
+    try:
+        print(f"    - Uploading {filename} to Gemini API...")
+        mime_type, _ = mimetypes.guess_type(filename)
+        if mime_type is None:
+            mime_type = "application/octet-stream"
+
+        uploaded_file = genai.upload_file(path=tmp_path, display_name=filename, mime_type=mime_type)
+        
+        prompt = f"""
+        You are an expert exam solver. Based ONLY on the provided CONTEXT and the attached FILE, answer the questions from the file.
+        CONTEXT:
+        ---
+        {context}
+        ---
+        Format your entire output as a valid JSON array of objects: [{{"question": "...", "answer": "..."}}].
+        """
+        
+        response = ai_client.models.generate_content(
+        model=paper_solver_model,
+        contents=[prompt, uploaded_file]
     )
-    print(f"    - File uploaded successfully. URI: {uploaded_file.uri}")
-    prompt = f"""
-    You are an expert exam solver. Based ONLY on the provided CONTEXT and the attached FILE, answer the questions from the file.
-    The file contains a past exam paper which may include images, diagrams, and complex layouts.
-    For each question you can identify, provide a clear, concise, and accurate answer in markdown format.
-    Format your entire output as a valid JSON array of objects, where each object has a "question" and "answer" key. Do not include any other text or explanations outside of the JSON array.
     
-    CONTEXT:
-    ---
-    {context}
-    ---
+        # Cleanup
+        genai.delete_file(uploaded_file.name)
+        
+        # --- FIX: Apply Regex Extraction here too ---
+        raw_text = response.text
+        match = re.search(r'\[.*\]', raw_text, re.DOTALL)
+        if match:
+            return json.loads(match.group(0))
+        else:
+            # Fallback cleaning
+            cleaned_json_string = raw_text.strip().replace('```json', '').replace('```', '')
+            return json.loads(cleaned_json_string)
     
-    FILE:
-    (See attached file: {filename})
-    
-    JSON OUTPUT:
-    """
-    print("    - Generating content from file and context...")
-    response = paper_solver_model.generate_content([prompt, uploaded_file])
-    print(f"    - Deleting temporary file: {uploaded_file.name}")
-    genai.delete_file(uploaded_file.name)
-    cleaned_json_string = response.text.strip().replace('```json', '').replace('```', '')
-    return json.loads(cleaned_json_string)
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
 
 def solve_paper_with_text(file_stream, filename, context):
     """
@@ -102,9 +116,12 @@ def solve_paper_with_text(file_stream, filename, context):
     ---
     JSON OUTPUT:
     """
-    response = paper_solver_model.generate_content(prompt)
-    cleaned_json_string = response.text.strip().replace('```json', '').replace('```', '')
-    return json.loads(cleaned_json_string)
+    response = ai_client.models.generate_content(
+        model=paper_solver_model,
+        contents=prompt
+    )
+    cleaned = response.text.strip().replace('```json', '').replace('```', '')
+    return json.loads(cleaned)
 
 
 @paper_solver_bp.route('/get-papers/<project_id>')
@@ -138,24 +155,32 @@ def get_papers(project_id):
 
 @paper_solver_bp.route('/upload-paper/<project_id>', methods=['POST'])
 def upload_paper(project_id):
-    print(f"📄 UPLOAD PAST PAPER request for project: {project_id}")
-    
     if 'paper' not in request.files:
-        return jsonify({"error": "No 'paper' file provided"}), 400
+        return jsonify({"error": "No paper file found"}), 400
     
-    analysis_mode = request.form.get('analysis_mode', 'text_only')
     file = request.files['paper']
     filename = file.filename
-    print(f"  Processing file: {filename} with mode: {analysis_mode}")
+    analysis_mode = request.form.get('analysis_mode', 'text_only')
 
     try:
         context = get_project_context(project_id)
-        
-        qa_pairs = []
+        file.stream.seek(0) # IMPORTANT: Always seek to 0 before reading
+
         if analysis_mode == 'multimodal':
-            qa_pairs = solve_paper_with_file(file.stream, filename, context)
+            # This uses the tempfile fix I provided in the previous message
+            qa_pairs = solve_paper_with_file(file, filename, context)
         else:
-            qa_pairs = solve_paper_with_text(file.stream, filename, context)
+            ext = filename.split('.')[-1].lower()
+            if ext == 'pdf':
+                paper_text = extract_text(file.stream)
+            elif ext == 'pptx':
+                from utils import extract_text_from_pptx
+                paper_text = extract_text_from_pptx(file.stream)
+            else:
+                # Handle images
+                paper_text = extract_text_from_image(file.stream)
+            
+            qa_pairs = solve_paper_with_text_logic(paper_text, context)
 
         paper_ref = db.collection('projects').document(project_id).collection('past_papers').document()
         
@@ -202,3 +227,65 @@ def delete_paper(project_id, paper_id):
         print(f"❌ Error deleting past paper {paper_id}: {e}")
         print(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
+    
+def solve_paper_with_text_logic(paper_text, context):
+    """
+    Core logic to solve papers using the Browser Bridge (API Key Free).
+    """
+    if not paper_text.strip():
+        raise ValueError("Could not extract any text from the file.")
+
+    print("  🤖 Sending Paper Solver prompt via Browser Bridge...")
+
+    prompt = f"""
+    You are an expert exam solver. Based ONLY on the provided CONTEXT, answer the questions from the PAST PAPER TEXT.
+    
+    1. Answer every question found in the paper text.
+    2. Be concise but accurate.
+    3. Format your ENTIRE output as a valid JSON array of objects.
+    4. Each object must have "question" and "answer" keys.
+    5. Do NOT output markdown code blocks (```json). Just the raw JSON array.
+    
+    CONTEXT:
+    ---
+    {context[:30000]} 
+    ---
+    
+    PAST PAPER TEXT:
+    ---
+    {paper_text}
+    ---
+    
+    JSON OUTPUT (Example: [{{"question": "...", "answer": "..."}}]):
+    """
+    
+    # --- USE BROWSER BRIDGE ---
+    browser_bridge.start()
+    raw_response = browser_bridge.send_prompt(prompt)
+    
+    print("  🧹 Cleaning AI Response...")
+
+    # --- 🛠️ FIX START: Robust JSON Extraction ---
+    try:
+        # 1. Use Regex to find the JSON array (starts with [ and ends with ])
+        #    re.DOTALL allows the dot (.) to match newlines
+        match = re.search(r'\[.*\]', raw_response, re.DOTALL)
+        
+        if match:
+            json_str = match.group(0)
+            return json.loads(json_str)
+        else:
+            # Fallback: Try standard cleaning if regex fails
+            cleaned = raw_response.strip()
+            if cleaned.startswith("```json"):
+                cleaned = cleaned.replace("```json", "", 1)
+            if cleaned.startswith("```"):
+                cleaned = cleaned.replace("```", "", 1)
+            if cleaned.endswith("```"):
+                cleaned = cleaned[:-3]
+            return json.loads(cleaned.strip())
+
+    except json.JSONDecodeError as e:
+        print(f"  ⚠️ JSON Parse Error: {e}")
+        # Only fallback to error message if we truly can't parse it
+        return [{"question": "Parsing Error", "answer": f"Could not parse AI response. Raw output:\n\n{raw_response}"}]

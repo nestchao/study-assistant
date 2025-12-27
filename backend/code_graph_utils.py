@@ -5,6 +5,7 @@ import google.generativeai as genai
 import time
 import re
 import json
+from browser_bridge import browser_bridge 
 
 # Configure your embedding model
 embedding_model = "models/text-embedding-004"
@@ -336,18 +337,20 @@ def gaussian_retrieval(project_id, user_query, db_instance):
 
     return "\n".join(context_parts)
 
-def enrich_nodes_with_critic(nodes, model_instance, max_nodes_to_process=50):
+def enrich_nodes_with_critic(nodes, max_nodes_to_process=50):
     """
-    Uses Gemini to analyze the purpose and quality of nodes.
-    Limit max_nodes_to_process to prevent timeouts/high costs.
+    Uses Browser Bridge (Google AI Studio) to analyze the purpose and quality of nodes.
+    Removes the dependency on 'model_instance'.
     """
-    print(f"  🕵️‍♂️ AI Critic starting analysis on {min(len(nodes), max_nodes_to_process)} nodes...")
+    print(f"  🕵️‍♂️ AI Critic (Browser Bridge) starting analysis on {min(len(nodes), max_nodes_to_process)} nodes...")
     
+    # Ensure bridge is running
+    browser_bridge.start()
+
     count = 0
     for node in nodes:
-        # Skip simple nodes or if we hit the limit
         if count >= max_nodes_to_process: break
-        if len(node.code) < 50: continue # Skip tiny helpers
+        if len(node.code) < 50: continue 
         
         try:
             prompt = f"""
@@ -369,19 +372,12 @@ def enrich_nodes_with_critic(nodes, model_instance, max_nodes_to_process=50):
             {{ "summary": "...", "dependencies": ["dep1", "dep2"], "quality": 0.9 }}
             """
             
-            response = model_instance.generate_content(prompt)
+            # --- USE BRIDGE ---
+            response_text = browser_bridge.send_prompt(prompt)
             
             # Clean markdown json blocks if present
-            raw_text = response.text.strip()
-
-            # 情况1：空响应
-            if not raw_text:
-                print(f"警告: Critic 返回空响应，使用兜底值")
-                data = {"summary": "AI returned empty response", "dependencies": [], "quality": 0.6}
-            # 情况2：带代码块的
-            elif raw_text.startswith("```"):
-                # 提取代码块内容，兼容 ```json 和 ```
-                import re
+            raw_text = response_text.strip()
+            if raw_text.startswith("```"):
                 match = re.search(r"```[a-zA-Z]*\n?(.*?)```", raw_text, re.DOTALL)
                 if match:
                     raw_text = match.group(1).strip()
@@ -391,9 +387,8 @@ def enrich_nodes_with_critic(nodes, model_instance, max_nodes_to_process=50):
             try:
                 data = json.loads(raw_text)
             except json.JSONDecodeError as e:
-                print(f"警告: Critic JSON 解析失败，使用兜底值: {e}")
-                print(f"原始返回前500字符: {raw_text[:500]}")
-                data = {"summary": f"Parse error: {str(e)}", "dependencies": [], "quality": 0.5}
+                print(f"警告: Critic JSON 解析失败: {e}")
+                data = {"summary": f"Parse error from bridge", "dependencies": [], "quality": 0.5}
                         
             # Update Node
             node.ai_summary = data.get("summary", "")
