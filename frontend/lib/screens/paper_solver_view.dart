@@ -5,6 +5,7 @@ import 'package:study_assistance/provider/project_provider.dart';
 import 'package:flutter_html/flutter_html.dart';
 import 'package:study_assistance/models/past_paper.dart';
 import 'package:markdown/markdown.dart' as md;
+import 'package:super_clipboard/super_clipboard.dart'; // Import for Rich Text Copy
 
 class PaperSolverView extends StatefulWidget {
   const PaperSolverView({super.key});
@@ -127,6 +128,65 @@ class _PaperSolverViewState extends State<PaperSolverView> {
     );
   }
 
+  // --- COPY FUNCTIONALITY ---
+  Future<void> _copyPaperToClipboard(PastPaper paper) async {
+    final StringBuffer htmlBuffer = StringBuffer();
+    final StringBuffer textBuffer = StringBuffer();
+
+    // Header
+    htmlBuffer.write("<h1>${paper.filename} - AI Solutions</h1><hr>");
+    textBuffer.writeln("${paper.filename} - AI Solutions\n" + ("=" * 30));
+
+    // Iterate through QA pairs
+    for (int i = 0; i < paper.qaPairs.length; i++) {
+      final qa = paper.qaPairs[i];
+      
+      // HTML Format (Good for Google Docs)
+      htmlBuffer.write("<h3>Q${i + 1}: ${qa.question}</h3>");
+      htmlBuffer.write(markdownToHtml(qa.answer)); // Convert markdown answer to HTML
+      htmlBuffer.write("<br><hr><br>");
+
+      // Plain Text Format (Fallback)
+      textBuffer.writeln("\nQ${i + 1}: ${qa.question}");
+      textBuffer.writeln("A:\n${qa.answer}\n");
+      textBuffer.writeln("-" * 30);
+    }
+
+    final item = DataWriterItem();
+    item.add(Formats.htmlText(htmlBuffer.toString()));
+    item.add(Formats.plainText(textBuffer.toString()));
+    
+    await SystemClipboard.instance?.write([item]);
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Copied to clipboard! Ready to paste into Google Docs."),
+          backgroundColor: Colors.green,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
+
+  Future<void> _copySingleAnswer(String question, String answer) async {
+    final StringBuffer htmlBuffer = StringBuffer();
+    htmlBuffer.write("<h3>Q: $question</h3>");
+    htmlBuffer.write(markdownToHtml(answer));
+
+    final item = DataWriterItem();
+    item.add(Formats.htmlText(htmlBuffer.toString()));
+    item.add(Formats.plainText("Q: $question\n\nA:\n$answer"));
+    
+    await SystemClipboard.instance?.write([item]);
+    
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Answer copied."), duration: Duration(seconds: 1)),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final p = context.watch<ProjectProvider>();
@@ -210,7 +270,7 @@ class _PaperSolverViewState extends State<PaperSolverView> {
           ),
           const SizedBox(height: 20),
           ElevatedButton.icon(
-            onPressed: () => _showUploadOptionsDialog(context), // FIX: This now correctly calls the dialog
+            onPressed: () => _showUploadOptionsDialog(context),
             icon: const Icon(Icons.add),
             label: const Text("Upload First Paper"),
             style: ElevatedButton.styleFrom(
@@ -261,6 +321,14 @@ class _PaperSolverViewState extends State<PaperSolverView> {
             icon: const Icon(Icons.arrow_back),
             onPressed: () => setState(() => _selectedPaper = null),
           ),
+          // ADDED: Copy button in Mobile AppBar
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.copy),
+              tooltip: "Copy All to Google Docs",
+              onPressed: () => _copyPaperToClipboard(_selectedPaper!),
+            )
+          ],
         ),
         body: _buildQAPanel(_selectedPaper!),
       );
@@ -334,32 +402,75 @@ class _PaperSolverViewState extends State<PaperSolverView> {
   }
 
   /// The panel that displays the questions and answers for the selected paper.
+  /// UPDATED: Added Header with "Copy All" button.
   Widget _buildQAPanel(PastPaper paper) {
-    return ListView.builder(
-      padding: const EdgeInsets.all(16),
-      itemCount: paper.qaPairs.length,
-      itemBuilder: (context, index) {
-        final qa = paper.qaPairs[index];
-        return Card(
-          margin: const EdgeInsets.only(bottom: 16),
-          elevation: 2,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          child: ExpansionTile(
-            leading: CircleAvatar(child: Text('${index + 1}')),
-            title: Text(qa.question, style: const TextStyle(fontWeight: FontWeight.w600)),
+    return Column(
+      children: [
+        // --- ADDED: Header with Copy Action ---
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+          color: Colors.white,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                child: SelectionArea(
-                  child: Html(
-                    data: markdownToHtml(qa.answer),
-                  ),
+              Text(
+                "${paper.qaPairs.length} Solutions Found",
+                style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.grey),
+              ),
+              ElevatedButton.icon(
+                onPressed: () => _copyPaperToClipboard(paper),
+                icon: const Icon(Icons.copy, size: 18),
+                label: const Text("Copy All to Docs"),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.indigo.shade50,
+                  foregroundColor: Colors.indigo,
+                  elevation: 0,
                 ),
               ),
             ],
           ),
-        );
-      },
+        ),
+        const Divider(height: 1),
+        
+        // --- QA List ---
+        Expanded(
+          child: ListView.builder(
+            padding: const EdgeInsets.all(16),
+            itemCount: paper.qaPairs.length,
+            itemBuilder: (context, index) {
+              final qa = paper.qaPairs[index];
+              return Card(
+                margin: const EdgeInsets.only(bottom: 16),
+                elevation: 2,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                child: ExpansionTile(
+                  leading: CircleAvatar(child: Text('${index + 1}')),
+                  title: Text(qa.question, style: const TextStyle(fontWeight: FontWeight.w600)),
+                  // Added trailing copy button for individual answer
+                  trailing: IconButton(
+                    icon: const Icon(Icons.copy, size: 18, color: Colors.grey),
+                    tooltip: "Copy this answer",
+                    onPressed: () => _copySingleAnswer(qa.question, qa.answer),
+                  ),
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                      child: SelectionArea(
+                        child: Html(
+                          data: markdownToHtml(qa.answer),
+                          style: {
+                            "body": Style(fontSize: FontSize(15)),
+                          },
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+        ),
+      ],
     );
   }
 }
