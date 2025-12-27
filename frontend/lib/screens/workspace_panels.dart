@@ -236,7 +236,9 @@ class AiChatPanel extends StatelessWidget {
       color: Colors.white,
       child: Column(
         children: [
-          const PanelHeader(title: "AI Chat", icon: Icons.auto_awesome_outlined, iconColor: Colors.purple),
+          // --- CUSTOM HEADER WITH DROPDOWN ---
+          _buildChatHeader(context, p),
+          
           Expanded(
             child: ListView.builder(
               padding: const EdgeInsets.all(20),
@@ -254,13 +256,73 @@ class AiChatPanel extends StatelessWidget {
     );
   }
 
+  Widget _buildChatHeader(BuildContext context, ProjectProvider p) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(20, 12, 20, 12),
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        border: Border(bottom: BorderSide(color: Color(0xFFE0E0E0), width: 0.5)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.auto_awesome_outlined, color: Colors.purple, size: 22),
+          const SizedBox(width: 12),
+          const Text(
+            "AI Chat",
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: kSecondaryText),
+          ),
+          const Spacer(),
+          
+          // --- MODEL SELECTOR ---
+          if (p.isLoadingModels)
+            const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+          else if (p.availableModels.isNotEmpty)
+            Container(
+              height: 32,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              decoration: BoxDecoration(
+                color: Colors.purple.shade50,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: Colors.purple.shade100),
+              ),
+              child: DropdownButtonHideUnderline(
+                child: DropdownButton<String>(
+                  value: p.currentModel,
+                  icon: const Icon(Icons.arrow_drop_down, color: Colors.purple, size: 18),
+                  style: TextStyle(fontSize: 12, color: Colors.purple.shade900, fontWeight: FontWeight.bold),
+                  isDense: true,
+                  onChanged: (String? newValue) {
+                    if (newValue != null) {
+                      p.changeModel(newValue);
+                    }
+                  },
+                  items: p.availableModels.map<DropdownMenuItem<String>>((String value) {
+                    return DropdownMenuItem<String>(
+                      value: value,
+                      child: Text(value),
+                    );
+                  }).toList(),
+                ),
+              ),
+            )
+          else
+            IconButton(
+              icon: const Icon(Icons.refresh, size: 18, color: Colors.grey),
+              tooltip: "Load Models",
+              onPressed: () => p.fetchAvailableModels(),
+            ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildChatBubble(BuildContext context, String text, bool isUser) {
     return Align(
       alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
         margin: const EdgeInsets.only(bottom: 16),
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.7), // Improved width constraint
+        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.7),
         decoration: BoxDecoration(
           color: isUser ? kNotebookBg : Colors.white,
           borderRadius: BorderRadius.only(
@@ -274,7 +336,6 @@ class AiChatPanel extends StatelessWidget {
             BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 5, offset: const Offset(0, 2))
           ],
         ),
-        // 2. UPDATED CHILD WIDGET LOGIC
         child: isUser 
           ? Text(text, style: const TextStyle(color: Colors.black87, fontSize: 14)) 
           : MarkdownBody(

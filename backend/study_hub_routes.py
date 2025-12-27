@@ -726,3 +726,30 @@ def generate_answer_from_context():
         
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+@study_hub_bp.route('/bridge/get-models', methods=['GET'])
+def get_bridge_models():
+    """Fetches available Gemini models from AI Studio via Bridge."""
+    try:
+        models = browser_bridge.get_available_models()
+        if isinstance(models, str) and models.startswith("Bridge Error"):
+             return jsonify({"error": models, "models": []}), 500
+        return jsonify({"models": models})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@study_hub_bp.route('/bridge/set-model', methods=['POST'])
+def set_bridge_model():
+    """Switches the active model in the Bridge."""
+    model_name = request.json.get('model_name')
+    if not model_name:
+        return jsonify({"error": "No model name provided"}), 400
+    
+    try:
+        success = browser_bridge.set_model(model_name)
+        if success is True:
+            return jsonify({"success": True, "message": f"Switched to {model_name}"})
+        else:
+            return jsonify({"success": False, "error": str(success)}), 500
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
