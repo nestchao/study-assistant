@@ -30,23 +30,22 @@ class AIStudioBridge:
                     user_data_dir=self.bot_profile_path,
                     executable_path=r"C:\Program Files\Google\Chrome\Application\chrome.exe",
                     channel="chrome",
-                    headless=False,  # Keep False to avoid bot detection, but optimized
+                    headless=False,
                     
                     # --- RAM & CPU OPTIMIZATIONS ---
-                    viewport={'width': 800, 'height': 600}, # Smaller viewport = less RAM
+                    viewport={'width': 1000, 'height': 600},
                     ignore_default_args=["--enable-automation"],
                     args=[
                         "--start-maximized", 
                         "--disable-blink-features=AutomationControlled",
-                        "--disable-gpu",              # 1. Disable GPU (huge RAM saver)
-                        "--disable-dev-shm-usage",     # 2. Prevent crashes in low memory
-                        "--no-sandbox",                # 3. Stability
-                        "--js-flags='--max-old-space-size=512'" # 4. Limit JS memory usage
+                        "--disable-gpu",
+                        "--disable-dev-shm-usage",
+                        "--no-sandbox",
+                        "--js-flags='--max-old-space-size=512'"
                     ]
                 )
                 
                 page = context.pages[0]
-                # Disable background images/animations to save more RAM
                 page.route("**/*.{png,jpg,jpeg,gif,webp}", lambda route: route.abort()) 
                 
                 print("✅ [Thread] Browser Ready.")
@@ -63,6 +62,12 @@ class AIStudioBridge:
                         elif cmd_type == "reset":
                             page.goto("https://aistudio.google.com/app/prompts/new_chat", wait_until="networkidle")
                             result_queue.put(True)
+                        elif cmd_type == "get_models":
+                            models = self._internal_get_models(page)
+                            result_queue.put(models)
+                        elif cmd_type == "set_model":
+                            success = self._internal_set_model(page, data)
+                            result_queue.put(success)
                     except Exception as e:
                         result_queue.put(f"Bridge Error: {str(e)}")
                     finally:
@@ -73,36 +78,19 @@ class AIStudioBridge:
     def _internal_send_prompt(self, page, message):
         """Logic executed strictly inside the worker thread."""
         try:
-            # 1. Navigating with a longer timeout for heavy loads
             print(f"   [Thread] Navigating to New Chat...")
             page.goto("https://aistudio.google.com/app/prompts/new_chat", wait_until="networkidle", timeout=90000)
             
             prompt_box = page.get_by_placeholder("Start typing a prompt")
             prompt_box.wait_for(state="visible", timeout=30000)
-            time.sleep(2) # Extra buffer for scripts to stabilize
+            time.sleep(2)
 
-            # 2. Inject large prompt via JS (avoids UI hang)
             print(f"   [Thread] Injecting prompt ({len(message)} chars)...")
-            # page.evaluate("""
-            #     (text) => {
-            #         const el = document.querySelector('textarea, [placeholder*="Start typing"]');
-            #         if (el) {
-            #             el.focus();
-            #             el.value = text;
-            #             el.dispatchEvent(new Event('input', { bubbles: true }));
-            #         }
-            #     }
-            # """, message)
-
-             # --- THE "NO-FREEZE" INJECTION ---
-            # print(f"   [Thread] Injecting Large Data...")
             page.evaluate("""
                 (text) => {
                     const el = document.querySelector('textarea, [placeholder*="Start typing"]');
                     if (el) {
-                        // Set value directly (instant, doesn't lag the UI)
                         el.value = text;
-                        // Tell AI Studio that text has changed so it enables the "Run" button
                         el.dispatchEvent(new Event('input', { bubbles: true }));
                         el.dispatchEvent(new Event('change', { bubbles: true }));
                     }
@@ -113,32 +101,24 @@ class AIStudioBridge:
             page.keyboard.press("Enter")
             print("   [Thread] Waiting for AI response...", end="", flush=True)
 
-            # 3. Enhanced Wait & Scroll Loop
             start_time = time.time()
             last_len = 0
             stable_count = 0
 
             while True:
-                if time.time() - start_time > 180: # Extended for huge responses
+                if time.time() - start_time > 180:
                     return "Error: Timeout waiting for response."
 
-                # Get bubbles
                 current_chunks = page.locator('ms-text-chunk').all()
                 current_count = len(current_chunks)
                 
                 if current_count > 0:
-                    # --- NUCLEAR SCROLL SCRIPT ---
-                    # This script targets the last message and forces all scrollable parents to the bottom
                     page.evaluate("""
                         () => {
                             const chunks = document.querySelectorAll('ms-text-chunk');
                             if (chunks.length > 0) {
                                 const lastChunk = chunks[chunks.length - 1];
-                                
-                                // 1. Standard scroll
                                 lastChunk.scrollIntoView({ block: 'end', behavior: 'instant' });
-                                
-                                // 2. Force all scrollable parents to the bottom
                                 let parent = lastChunk.parentElement;
                                 while (parent) {
                                     if (parent.scrollHeight > parent.clientHeight) {
@@ -146,20 +126,14 @@ class AIStudioBridge:
                                     }
                                     parent = parent.parentElement;
                                 }
-                                
-                                // 3. Target the specific AI Studio editor container if it exists
                                 const editor = document.querySelector('ms-prompt-editor');
                                 if (editor) editor.scrollTop = editor.scrollHeight;
                             }
                         }
                     """)
 
-                # Check if AI is finished
                 run_btn = page.locator('ms-run-button button[aria-label="Run"]')
                 is_run_visible = run_btn.is_visible()
-
-                # It's busy if the Run button is hidden (Stop button is showing)
-                # Or if we don't have the AI response bubble yet (min count 2)
                 is_busy = not is_run_visible or current_count < 2
 
                 current_text = current_chunks[-1].inner_text().strip() if current_chunks else ""
@@ -167,11 +141,10 @@ class AIStudioBridge:
 
                 print(".", end="", flush=True)
 
-                # Stability Check
                 if not is_busy and current_len > 0:
                     if current_len == last_len:
                         stable_count += 1
-                        if stable_count >= 3: # Wait 3 seconds of no change
+                        if stable_count >= 3:
                             break
                     else:
                         stable_count = 0
@@ -183,48 +156,142 @@ class AIStudioBridge:
 
             print("\n   [Thread] Captured.")
 
-            # 4. Extraction
             final_chunks = page.locator('ms-text-chunk').all()
             raw_answer = final_chunks[-1].inner_text()
 
-# 5. Cleaning Logic
             clean_answer = raw_answer
-            
-            # A. Remove "Model Thoughts" if present
             if "Expand to view model thoughts" in clean_answer:
                 clean_answer = clean_answer.split("Expand to view model thoughts")[-1]
 
-            # B. NEW: Remove the "code Markdown" UI labels and separator lines
-            # This handles "code", "Markdown", and "code Markdown" labels
             ui_labels = [r'code\s+Markdown', r'^code$', r'^Markdown$', r'^-{3,}']
             for pattern in ui_labels:
                 clean_answer = re.sub(pattern, '', clean_answer, flags=re.MULTILINE | re.IGNORECASE)
 
-            # C. Remove Code Markdown Syntax (Triple Backticks)
             clean_answer = re.sub(r'```[a-zA-Z]*\n?', '', clean_answer)
             clean_answer = clean_answer.replace('`', '')
 
-            # D. Remove UI junk icons
             ui_keywords = ["expand_more", "expand_less", "content_copy", "share", "edit", "thumb_up", "thumb_down", "more_vert", "download"]
             junk_pattern = r'\s*(' + '|'.join(ui_keywords) + r')\s*'
             for _ in range(3):
                 clean_answer = re.sub(junk_pattern + r'$', '', clean_answer).strip()
                 clean_answer = re.sub(junk_pattern, '\n', clean_answer).strip()
             
-            # Final trim and whitespace normalization
             return re.sub(r'\n\s*\n', '\n\n', clean_answer).strip()
 
         except Exception as e:
             return f"Browser Error: {str(e)}"
+
+    def _internal_get_models(self, page):
+        """Scrapes available Gemini models from the UI."""
+        print("   [Thread] Fetching models...")
+        
+        # --- FIX: Ensure Navigation ---
+        if "aistudio.google.com" not in page.url:
+             print("   [Thread] Page is blank or external. Navigating to AI Studio...")
+             try:
+                page.goto("https://aistudio.google.com/app/prompts/new_chat", wait_until="networkidle", timeout=60000)
+             except Exception as e:
+                print(f"   [Thread] Navigation failed: {e}")
+                raise e
+
+        try:
+            # Wait for UI load
+            page.locator("ms-model-selector button").wait_for(state="visible", timeout=30000)
+
+            # 1. Open Menu
+            model_btn = page.locator("ms-model-selector button")
+            if not model_btn.is_visible():
+                page.get_by_label("Run settings").click()
+                time.sleep(0.5)
+            
+            model_btn.click()
+            time.sleep(1.0)
+
+            # 2. Click "Gemini" Filter
+            try:
+                gemini_filter = page.locator("button.ms-button-filter-chip").filter(has_text="Gemini").first
+                if gemini_filter.is_visible():
+                    gemini_filter.click()
+                    time.sleep(0.5)
+            except:
+                pass 
+
+            # 3. Scrape
+            page.locator(".model-title-text").first.wait_for(timeout=3000)
+            elements = page.locator(".model-title-text").all()
+            models = list(dict.fromkeys([t.inner_text().strip() for t in elements if t.inner_text().strip()]))
+            
+            page.keyboard.press("Escape")
+            return models
+        except Exception as e:
+            page.keyboard.press("Escape")
+            raise e
+
+    def _internal_set_model(self, page, model_name):
+        """Selects a specific model."""
+        print(f"   [Thread] Switching to model: {model_name}...")
+        
+        # --- FIX: Ensure Navigation ---
+        if "aistudio.google.com" not in page.url:
+             print("   [Thread] Page is blank or external. Navigating to AI Studio...")
+             page.goto("https://aistudio.google.com/app/prompts/new_chat", wait_until="networkidle", timeout=60000)
+
+        try:
+            page.locator("ms-model-selector button").wait_for(state="visible", timeout=30000)
+
+            # 1. Open Menu
+            model_btn = page.locator("ms-model-selector button")
+            if not model_btn.is_visible():
+                page.get_by_label("Run settings").click()
+                time.sleep(0.5)
+            
+            model_btn.click()
+            time.sleep(1.0)
+
+            # 2. Click "Gemini" Filter
+            try:
+                gemini_filter = page.locator("button.ms-button-filter-chip").filter(has_text="Gemini").first
+                if gemini_filter.is_visible():
+                    gemini_filter.click()
+                    time.sleep(0.5)
+            except: pass
+
+            # 3. Click the model
+            target = page.locator(".model-title-text").get_by_text(model_name, exact=True).first
+            target.click()
+            
+            time.sleep(1.0)
+            return True
+        except Exception as e:
+            page.keyboard.press("Escape")
+            raise e
 
     def send_prompt(self, message):
         self.start()
         result_queue = queue.Queue()
         self.cmd_queue.put(("prompt", message, result_queue))
         try:
-            return result_queue.get(timeout=160) # Increased timeout
+            return result_queue.get(timeout=160)
         except queue.Empty:
             return "Error: Browser bridge timed out."
+
+    def get_available_models(self):
+        self.start()
+        result_queue = queue.Queue()
+        self.cmd_queue.put(("get_models", None, result_queue))
+        try:
+            return result_queue.get(timeout=60) # Increased timeout for initial nav
+        except queue.Empty:
+            return "Bridge Error: Timeout fetching models."
+
+    def set_model(self, model_name):
+        self.start()
+        result_queue = queue.Queue()
+        self.cmd_queue.put(("set_model", model_name, result_queue))
+        try:
+            return result_queue.get(timeout=60)
+        except queue.Empty:
+            return "Bridge Error: Timeout setting model."
 
     def reset(self):
         self.start()

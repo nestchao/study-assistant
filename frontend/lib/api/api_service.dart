@@ -536,4 +536,24 @@ class ApiService {
     }
     throw Exception("Failed to load graph");
   }
+
+   Future<List<String>> getAvailableModels() async {
+    final response = await http.get(Uri.parse('$baseUrl/bridge/get-models'));
+    if (response.statusCode == 200) {
+      final data = json.decode(response.body);
+      return List<String>.from(data['models'] ?? []);
+    }
+    // Return empty list on error instead of throwing to avoid UI crash
+    print("Failed to load models: ${response.body}");
+    return [];
+  }
+
+  Future<bool> setModel(String modelName) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/bridge/set-model'),
+      headers: {'Content-Type': 'application/json'},
+      body: json.encode({'model_name': modelName}),
+    );
+    return response.statusCode == 200;
+  }
 }
