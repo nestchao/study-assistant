@@ -15,6 +15,8 @@ import io
 import re
 import cv2
 import numpy as np
+from pptx import Presentation
+from pptx.enum.shapes import MSO_SHAPE_TYPE
 
 TXT_OUTPUT_DIR = Path("converted_txt_projects") # Main output directory
 STRUCTURE_FILE_NAME = "file_structure.json"
@@ -26,6 +28,72 @@ try:
     pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 except Exception:
     print("Warning: Tesseract path not found. OCR will fail if needed.")
+
+def extract_text_from_pptx(pptx_stream):
+    """
+    Extracts text from a PowerPoint file using a MAXIMUM COMPLETENESS approach.
+    1. Extracts native text from text boxes.
+    2. Extracts images embedded in the slide, preprocesses them, and runs OCR.
+    """
+    print("  📽️ Starting PPTX text extraction (Native + OCR)...")
+    all_slide_content = []
+    
+    try:
+        # Presentation can take a file-like object (stream)
+        prs = Presentation(pptx_stream)
+        
+        for i, slide in enumerate(prs.slides):
+            print(f"  - Processing Slide {i+1}...")
+            slide_text_parts = [f"--- Slide {i+1} ---"]
+            
+            # --- Part 1: Native Text Extraction ---
+            native_text = []
+            for shape in slide.shapes:
+                if hasattr(shape, "text") and shape.text.strip():
+                    native_text.append(shape.text)
+            
+            if native_text:
+                joined_native = "\n".join(native_text)
+                slide_text_parts.append(joined_native)
+                print(f"    - Native text found: {len(joined_native)} chars.")
+
+            # --- Part 2: OCR on Embedded Images ---
+            ocr_text_list = []
+            for shape in slide.shapes:
+                # Check if the shape is a picture
+                if shape.shape_type == MSO_SHAPE_TYPE.PICTURE:
+                    try:
+                        # Extract image bytes
+                        image_blob = shape.image.blob
+                        img = Image.open(io.BytesIO(image_blob))
+                        
+                        # --- USE EXISTING PREPROCESSING ---
+                        processed_img = preprocess_for_ocr(img)
+                        
+                        # Run Tesseract
+                        text = pytesseract.image_to_string(processed_img)
+                        
+                        if text.strip():
+                            ocr_text_list.append(text.strip())
+                            
+                    except Exception as ocr_err:
+                        print(f"    - ⚠️ OCR warning on slide {i+1} image: {ocr_err}")
+
+            if ocr_text_list:
+                joined_ocr = "\n".join(ocr_text_list)
+                print(f"    - OCR text found: {len(joined_ocr)} chars.")
+                slide_text_parts.append("\n--- OCR Additions (Images) ---\n" + joined_ocr)
+
+            # Combine all parts for this slide
+            all_slide_content.append("\n".join(slide_text_parts))
+        
+        full_text = "\n\n".join(all_slide_content)
+        print(f"  ✅ PPTX extraction complete. Total characters: {len(full_text)}")
+        return full_text
+
+    except Exception as e:
+        print(f"  ❌ Error extracting PPTX: {e}")
+        return ""
 
 def preprocess_for_ocr(image: Image.Image) -> Image.Image:
     """
