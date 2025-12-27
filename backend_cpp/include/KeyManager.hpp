@@ -1,132 +1,97 @@
 #pragma once
 #include <vector>
 #include <string>
-#include <sstream>
-#include <iostream>
+#include <shared_mutex>
+#include <nlohmann/json.hpp>
 #include <fstream>
-#include <atomic>
-#include <mutex>
-#include <algorithm>
-#include <map>
 #include <spdlog/spdlog.h>
 
-class KeyManager {
+namespace code_assistance {
+
+class KeyManager { // Standardized name
 private:
-    std::vector<std::string> api_keys;
+    struct ApiKey {
+        std::string key;
+        bool is_active = true;
+        int fail_count = 0;
+    };
+
+    std::vector<ApiKey> key_pool;
+    mutable std::shared_mutex pool_mutex;
+    size_t current_index = 0;
     std::string primary_model;
     std::string secondary_model;
-    
-    std::atomic<size_t> current_key_index{0};
-    std::atomic<bool> using_secondary_model{false};
-    std::mutex rotation_mutex;
-
-    // --- INTERNAL .ENV PARSER ---
-    // Why use a library when 20 lines of C++ does it faster and breaks less?
-    std::map<std::string, std::string> load_env_file(const std::string& path = ".env") {
-        std::map<std::string, std::string> env_map;
-        std::ifstream file(path);
-        
-        if (!file.is_open()) {
-            spdlog::warn("⚠️ .env file not found at '{}'. Relying on system environment variables.", path);
-            return env_map;
-        }
-
-        std::string line;
-        while (std::getline(file, line)) {
-            // Trim whitespace
-            line.erase(0, line.find_first_not_of(" \t\r\n"));
-            line.erase(line.find_last_not_of(" \t\r\n") + 1);
-
-            // Skip comments and empty lines
-            if (line.empty() || line[0] == '#') continue;
-
-            auto delimiterPos = line.find('=');
-            if (delimiterPos != std::string::npos) {
-                std::string key = line.substr(0, delimiterPos);
-                std::string value = line.substr(delimiterPos + 1);
-                
-                // Remove quotes if present
-                if (value.size() >= 2 && value.front() == '"' && value.back() == '"') {
-                    value = value.substr(1, value.size() - 2);
-                }
-                
-                env_map[key] = value;
-            }
-        }
-        return env_map;
-    }
-
-    std::string get_env(const std::string& key, const std::map<std::string, std::string>& file_env, const std::string& default_val = "") {
-        // 1. Try real Environment Variable (OS level)
-        const char* val = std::getenv(key.c_str());
-        if (val) return std::string(val);
-
-        // 2. Try .env file content
-        if (file_env.count(key)) return file_env.at(key);
-
-        return default_val;
-    }
 
 public:
     KeyManager() {
-        auto env_map = load_env_file();
+        refresh_key_pool();
+    }
 
-        // Load Keys
-        std::string keys_raw = get_env("GEMINI_API_KEYS", env_map);
-        
-        if (keys_raw.empty()) {
-            // Fallback for legacy single key
-            std::string single = get_env("GEMINI_API_KEY", env_map);
-            if (!single.empty()) keys_raw = single;
-            else {
-                spdlog::error("❌ CRITICAL: No API Keys found. Please set GEMINI_API_KEYS in .env");
-                throw std::runtime_error("Missing API Keys");
+    void refresh_key_pool() {
+        std::unique_lock lock(pool_mutex);
+
+        std::vector<std::string> search_paths = {
+            "keys.json",                // 1. Current Working Directory
+            "../keys.json",             // 2. Parent Directory (common in build/Release)
+            "build/keys.json",          // 3. Build Directory
+            "Release/keys.json",        // 4. Release Directory
+            "../../keys.json"           // 5. Project Root (from build/Release)
+        };
+
+        std::ifstream f;
+        std::string found_path = "";
+
+        for (const auto& path : search_paths) {
+            f.open(path);
+            if (f.is_open()) {
+                found_path = path;
+                break;
             }
         }
 
-        std::stringstream ss(keys_raw);
-        std::string segment;
-        while (std::getline(ss, segment, ',')) {
-            // Trim spaces from keys just in case user added spaces
-            segment.erase(0, segment.find_first_not_of(" \t"));
-            segment.erase(segment.find_last_not_of(" \t") + 1);
-            if(!segment.empty()) api_keys.push_back(segment);
+        if (found_path.empty()) {
+            spdlog::error("🚨 CRITICAL: Key Pool (keys.json) not found in any standard path!");
+            return;
         }
 
-        // Load Models
-        primary_model = get_env("PRIMARY_MODEL", env_map, "gemini-2.5-flash-lite");
-        secondary_model = get_env("SECONDARY_MODEL", env_map, "gemini-2.5-flash");
+        try {
+            spdlog::info("🛰️ Key Pool found at: {}", found_path);
+            auto j = nlohmann::json::parse(f);
+            key_pool.clear();
+            for (auto& k : j["keys"]) {
+                key_pool.push_back({k.get<std::string>(), true, 0});
+            }
 
-        spdlog::info("🔑 KeyManager Initialized | Keys: {} | Model: {}", api_keys.size(), primary_model);
+            primary_model = j.value("primary", "gemini-2.5-flash");
+            secondary_model = j.value("secondary", "gemini-2.5-flash-lite");
+            spdlog::info("🛰️ Key Pool Synchronized: {} active keys", key_pool.size());
+        } catch (const std::exception& e) {
+            spdlog::error("💥 Failed to parse Key Pool JSON: {}", e.what());
+        }
     }
 
-    std::string get_current_key() const {
-        if (api_keys.empty()) return "";
-        // Thread-safe access to the rotated index
-        return api_keys[current_key_index.load() % api_keys.size()];
+    std::string get_current_key() const { 
+        std::shared_lock lock(pool_mutex);
+        if (key_pool.empty()) return "";
+        return key_pool[current_index % key_pool.size()].key;
     }
 
     std::string get_current_model() const {
-        return using_secondary_model.load() ? secondary_model : primary_model;
+        return primary_model; // Or logic to switch to secondary
     }
 
     void report_rate_limit() {
-        std::lock_guard<std::mutex> lock(rotation_mutex);
+        std::unique_lock lock(pool_mutex);
+        if (key_pool.empty()) return;
         
-        size_t next_index = current_key_index.load() + 1;
-        
-        if (next_index >= api_keys.size()) {
-            if (!using_secondary_model.load()) {
-                spdlog::warn("⚠️ All keys exhausted for Primary Model. Downgrading to Secondary: {}", secondary_model);
-                using_secondary_model.store(true);
-                current_key_index.store(0);
-            } else {
-                spdlog::error("❌ CRITICAL: System Throttled. All keys/models exhausted.");
-                current_key_index.store(0); 
-            }
-        } else {
-            current_key_index.store(next_index);
-            spdlog::warn("🔄 Switched to API Key #{}", next_index);
+        auto& current = key_pool[current_index % key_pool.size()];
+        current.fail_count++;
+        if (current.fail_count > 2) {
+            current.is_active = false;
+            spdlog::warn("⚠️ Key #{} Decommissioned", current_index);
         }
+        current_index = (current_index + 1) % key_pool.size();
     }
 };
+
+} // namespace code_assistance

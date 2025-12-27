@@ -1,114 +1,103 @@
 cmake_minimum_required(VERSION 3.21)
-project(CodeAssistanceBackend CXX)
+project(CodeAssistanceSystem CXX)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# 1. Dependencies (REMOVED dotenv)
+# 1. Dependency Discovery (vcpkg manifest mode)
 find_package(cpr REQUIRED)
 find_package(spdlog REQUIRED)
 find_package(nlohmann_json REQUIRED)
 find_package(OpenMP REQUIRED)
+find_package(faiss CONFIG REQUIRED)
+find_package(gRPC CONFIG REQUIRED)
+find_package(Protobuf CONFIG REQUIRED)
 
-# 2. FAISS Setup
-find_path(FAISS_INCLUDE_DIR NAMES faiss/index_io.h HINTS "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/include")
-find_library(FAISS_LIBRARY NAMES faiss HINTS "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/lib")
-find_library(OPENBLAS_LIBRARY NAMES openblas HINTS "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/lib")
+# 2. Proto & gRPC Code Generation
+find_program(PROTOC_EXECUTABLE NAMES protoc HINTS ${_PROTOBUF_PROTOC_EXECUTABLE})
+find_program(GRPC_CPP_PLUGIN_EXECUTABLE NAMES grpc_cpp_plugin)
 
-include_directories(
-    ${CMAKE_CURRENT_SOURCE_DIR}/third_party
-    ${FAISS_INCLUDE_DIR}
+set(PROTO_SRC "${CMAKE_CURRENT_SOURCE_DIR}/proto/agent.proto")
+set(PROTO_OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
+file(MAKE_DIRECTORY ${PROTO_OUT_DIR})
+
+set(GEN_PB_SRC "${PROTO_OUT_DIR}/agent.pb.cc")
+set(GEN_PB_HDR "${PROTO_OUT_DIR}/agent.pb.h")
+set(GEN_GRPC_SRC "${PROTO_OUT_DIR}/agent.grpc.pb.cc")
+set(GEN_GRPC_HDR "${PROTO_OUT_DIR}/agent.grpc.pb.h")
+
+set_source_files_properties(${GEN_PB_SRC} ${GEN_GRPC_SRC} PROPERTIES GENERATED TRUE)
+
+add_custom_command(
+    OUTPUT ${GEN_PB_SRC} ${GEN_PB_HDR} ${GEN_GRPC_SRC} ${GEN_GRPC_HDR}
+    COMMAND ${PROTOC_EXECUTABLE}
+    ARGS --cpp_out=${PROTO_OUT_DIR}
+         --grpc_out=${PROTO_OUT_DIR}
+         --plugin=protoc-gen-grpc=${GRPC_CPP_PLUGIN_EXECUTABLE}
+         -I${CMAKE_CURRENT_SOURCE_DIR}/proto
+         ${PROTO_SRC}
+    DEPENDS ${PROTO_SRC}
+    COMMENT "🛠️ Generating gRPC code from agent.proto..."
 )
 
-add_executable(code_assistance_server
-    src/main.cpp
+# 3. The Core Intelligence Library (Shared Logic)
+add_library(core_engine STATIC
     src/embedding_service.cpp
     src/code_graph.cpp
     src/retrieval_engine.cpp
     src/faiss_vector_store.cpp
-    src/sync_service.cpp      
-    src/cache_manager.cpp 
+    src/sync_service.cpp
+    src/cache_manager.cpp
+    src/agent/SubAgent.cpp
+    src/agent/AgentExecutor.cpp    # 🚀 Moved from executable to library
+    src/tools/WebSearchTool.cpp    # 🚀 Moved from executable to library
+    ${GEN_PB_SRC}
+    ${GEN_GRPC_SRC}
 )
 
-# 3. Linking (REMOVED dotenv::dotenv)
-target_link_libraries(code_assistance_server PRIVATE
+# Ensure protos generate before engine compiles
+add_custom_target(generate_protos DEPENDS ${GEN_PB_SRC} ${GEN_GRPC_SRC})
+add_dependencies(core_engine generate_protos)
+
+target_include_directories(core_engine PUBLIC 
+    include 
+    ${PROTO_OUT_DIR} # 🚀 This allows #include "agent.pb.h"
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party
+)
+
+target_link_libraries(core_engine PUBLIC
     cpr::cpr
     spdlog::spdlog
     nlohmann_json::nlohmann_json
     OpenMP::OpenMP_CXX
-    ${FAISS_LIBRARY}
-    ${OPENBLAS_LIBRARY}
+    faiss
+    gRPC::grpc++
+    protobuf::libprotobuf
     pdh
 )
 
-target_include_directories(code_assistance_server PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
-)
+# 4. The Executables (Entry Points)
+# REST Server (Mission Control Dashboard)
+add_executable(code_assistance_server src/main.cpp)
+target_link_libraries(code_assistance_server PRIVATE core_engine)
 
-# --- Set compiler flags for performance ---
-if(CMAKE_BUILD_TYPE STREQUAL "Release")
-    message(STATUS "Release build: Enabling optimizations")
-    target_compile_options(code_assistance_server PRIVATE /O2)
+# gRPC Agent (The Cognitive Brain)
+# 🚀 FIXED: Removed AgentExecutor.cpp from here (it's now in core_engine)
+add_executable(agent_service src/agent_main.cpp)
+target_link_libraries(agent_service PRIVATE core_engine)
+
+# 5. Build Optimizations (Windows/MSVC)
+if(MSVC)
+    target_compile_options(core_engine PRIVATE /O2 /Oi /Ot /openmp)
+    target_compile_definitions(core_engine PUBLIC _CRT_SECURE_NO_WARNINGS)
 endif()
 
-# --- Installation (Optional) ---
-install(TARGETS code_assistance_server DESTINATION bin)
+# 6. Deployment Automation (SpaceX Precision)
+set(DEPLOY_DIR "$<TARGET_FILE_DIR:code_assistance_server>")
 
-# 1. Find Python so we can run the script
-find_package(Python3 COMPONENTS Interpreter QUIET)
-
-# 2. AUTOMATIC COPY: Copy read_logs.py next to the executable after every build
 add_custom_command(TARGET code_assistance_server POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy
-    "${CMAKE_CURRENT_SOURCE_DIR}/test/read_logs.py"
-    "$<TARGET_FILE_DIR:code_assistance_server>/read_logs.py"
-    COMMENT "📂 Copying read_logs.py to executable directory..."
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/dashboard.html" "${DEPLOY_DIR}/dashboard.html"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/keys.json" "${DEPLOY_DIR}/keys.json"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/test/test_quality.py" "${DEPLOY_DIR}/test_quality.py"
+    COMMENT "🚀 Deploying Dashboard, Keys, and Tests to binary folder..."
 )
-
-# 3. RUN TARGET: Create a custom command to run the script easily
-if (Python3_FOUND)
-    add_custom_target(read_logs
-        COMMAND ${Python3_EXECUTABLE} "read_logs.py"
-        WORKING_DIRECTORY "$<TARGET_FILE_DIR:code_assistance_server>"
-        COMMENT "📜 Reading latest interaction logs..."
-        USES_TERMINAL
-    )
-    message(STATUS "✅ Log reader integrated. You can run: cmake --build . --target read_logs")
-else()
-    message(WARNING "⚠️ Python3 not found. The 'read_logs' target will not be available.")
-endif()
-
-# ==============================================================================
-# INTEGRATION: FLIGHT CERTIFICATION (Quality Tests)
-# ==============================================================================
-
-# 1. AUTOMATIC COPY: Copy test_quality.py to executable directory
-add_custom_command(TARGET code_assistance_server POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy
-    "${CMAKE_CURRENT_SOURCE_DIR}/test/test_quality.py"
-    "$<TARGET_FILE_DIR:code_assistance_server>/test_quality.py"
-    COMMENT "📂 Copying test_quality.py to executable directory..."
-)
-
-# 2. RUN TARGET: Create 'check_quality' command
-if (Python3_FOUND)
-    add_custom_target(check_quality
-        COMMAND ${Python3_EXECUTABLE} "test_quality.py"
-        WORKING_DIRECTORY "$<TARGET_FILE_DIR:code_assistance_server>"
-        COMMENT "🧪 Running Flight Certification Suite..."
-        USES_TERMINAL
-    )
-    message(STATUS "✅ Quality Suite integrated. You can run: cmake --build . --target check_quality")
-endif()
-
-# 3. AUTOMATIC COPY: Deploy .env to the Release folder
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.env")
-    add_custom_command(TARGET code_assistance_server POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${CMAKE_CURRENT_SOURCE_DIR}/.env"
-        "$<TARGET_FILE_DIR:code_assistance_server>/.env"
-        COMMENT "🔑 Deploying .env configuration to binary directory..."
-    )
-else()
-    message(WARNING "⚠️ .env file not found in source root. You must create it manually in the bin folder.")
-endif()
