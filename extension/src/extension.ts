@@ -11,7 +11,6 @@ let currentProjectId: string | null = null;
 
 export async function activate(context: vscode.ExtensionContext) {
     console.log('Study Assistant Extension Activating...');
-
     const backendClient = getBackendClient();
 
     // Check backend status
@@ -94,13 +93,16 @@ export async function activate(context: vscode.ExtensionContext) {
     );
 
     // 4. Ghost Text Completion Provider
-    const config = vscode.workspace.getConfiguration('studyAssistant');
-    if (config.get('enableAutoCompletion')) {
-        const completionProvider = vscode.languages.registerInlineCompletionItemProvider(
+    console.log("🛠️ [Host] ATTEMPTING GHOST PROV REGISTRATION...");
+    try {
+        const ghostProvider = vscode.languages.registerInlineCompletionItemProvider(
             { pattern: '**' },
-            new GhostTextProvider(backendClient, currentProjectId)
+            new GhostTextProvider(backendClient, () => currentProjectId)
         );
-        context.subscriptions.push(completionProvider);
+        context.subscriptions.push(ghostProvider);
+        console.log("✅ [Host] GHOST PROV DOCKED SUCCESSFULLY");
+    } catch (err) {
+        console.error("❌ [Host] GHOST PROV REGISTRATION CRASHED:", err);
     }
 
     // ==================== Register Commands ====================

@@ -3,29 +3,48 @@ import * as vscode from 'vscode';
 export class CodeConfigProvider implements vscode.WebviewViewProvider {
     _view?: vscode.WebviewView;
 
-    constructor(private readonly _extensionUri: vscode.Uri) {}
+    constructor(
+        private readonly _extensionUri: vscode.Uri,
+        private readonly _backendClient: any
+    ) {}
+
+    private async syncFilterManifest(projectId: string) {
+        const config = vscode.workspace.getConfiguration('studyAssistant');
+        
+        const payload = {
+            project_id: projectId,
+            allowed_extensions: config.get<string>('allowedExtensions')?.split(',').map(s => s.trim()) || [],
+            ignored_paths: config.get<string>('ignoredPaths')?.split(',').map(s => s.trim()) || [],
+            included_paths: config.get<string>('includedPaths')?.split(',').map(s => s.trim()) || []
+        };
+
+        try {
+            await this._backendClient.post('/sync/update_manifest', payload);
+            vscode.window.showInformationMessage("🛰️ AI Flight Manifest Synchronized.");
+        } catch (e) {
+            console.error("Manifest sync failed", e);
+        }
+    }
 
     public resolveWebviewView(webviewView: vscode.WebviewView) {
         this._view = webviewView;
         webviewView.webview.options = { enableScripts: true };
-        
         this.updateView();
-
-        vscode.workspace.onDidChangeConfiguration(e => {
-            if (e.affectsConfiguration('studyAssistant')) {
-                this.updateView();
-            }
-        });
 
         webviewView.webview.onDidReceiveMessage(async (data) => {
             switch (data.type) {
                 case 'saveAndSync': {
                     try {
+                        // 1. Commit to VS Code Settings
                         await this.saveSettings(data.extensions, data.ignored, data.included);
-                        // Only trigger sync if save was successful
-                        vscode.commands.executeCommand('studyAssistant.registerProject', { silent: true });
+                        
+                        // 2. Trigger Project Registration (Atomic)
+                        await vscode.commands.executeCommand('studyAssistant.registerProject', { silent: true });
+                        
+                        // 3. Update the UI
+                        vscode.window.showInformationMessage("✅ Configuration committed to Engine.");
                     } catch (e: any) {
-                        vscode.window.showErrorMessage(`Config Save Failed: ${e.message}`);
+                        vscode.window.showErrorMessage(`Config Sync Failed: ${e.message}`);
                     }
                     break;
                 }

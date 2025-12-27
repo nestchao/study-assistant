@@ -9,6 +9,14 @@ using json = nlohmann::json;
 
 namespace code_assistance {
 
+struct AgentTrace {
+    std::string session_id;
+    std::string timestamp;
+    std::string state;    // "RETRIEVING", "REFLECTING", etc.
+    std::string detail;   // "E-Graph found 84 nodes", "Critic says context missing"
+    double duration_ms;
+};
+
 struct InteractionLog {
     long long timestamp;
     std::string project_id;
@@ -53,9 +61,30 @@ public:
         return j_list;
     }
 
+    void add_trace(const AgentTrace& trace) {
+        std::lock_guard<std::mutex> lock(mtx_);
+        agent_traces_.push_back(trace);
+        if (agent_traces_.size() > 100) agent_traces_.pop_front();
+    }
+
+    nlohmann::json get_traces_json() {
+        std::lock_guard<std::mutex> lock(mtx_);
+        nlohmann::json j = nlohmann::json::array();
+        for (const auto& t : agent_traces_) {
+            j.push_back({
+                {"session_id", t.session_id},
+                {"state", t.state},
+                {"detail", t.detail},
+                {"duration", t.duration_ms}
+            });
+        }
+        return j;
+    }
+
 private:
     LogManager() {} // Private constructor
     std::deque<InteractionLog> logs_;
+    std::deque<AgentTrace> agent_traces_;
     std::mutex mtx_;
 };
 

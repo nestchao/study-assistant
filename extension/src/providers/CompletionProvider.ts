@@ -1,13 +1,14 @@
+// extension/src/providers/CompletionProvider.ts
+
 import * as vscode from 'vscode';
 import { BackendClient } from '../services/BackendClient';
-import { GoogleGenerativeAI } from "@google/generative-ai";
 
 export class GhostTextProvider implements vscode.InlineCompletionItemProvider {
     
-    // --- THIS CONSTRUCTOR WAS MISSING ---
+    // 🚀 ARCHITECTURE FIX: Change 'string | null' to '() => string | null'
     constructor(
         private readonly _backendClient: BackendClient,
-        private readonly _projectId: string | null
+        private readonly _getProjectId: () => string | null 
     ) {}
 
     async provideInlineCompletionItems(
@@ -17,40 +18,36 @@ export class GhostTextProvider implements vscode.InlineCompletionItemProvider {
         token: vscode.CancellationToken
     ): Promise<vscode.InlineCompletionItem[]> {
 
-        // 1. Get API Key
-        const config = vscode.workspace.getConfiguration('studyAssistant'); // Ensure this matches package.json ID
-        const apiKey = config.get('apiKey') as string;
-        
-        if (!apiKey) return [];
+        // 📡 TELEMETRY
+        console.log(`📡 [GhostText] VS Code requested completion at Line ${position.line}`);
 
-        // 2. Init Gemini
-        const genAI = new GoogleGenerativeAI(apiKey);
-        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
+        await new Promise(resolve => setTimeout(resolve, 200));
+        if (token.isCancellationRequested) return [];
 
-        // 3. Get Context
-        const codeBefore = document.getText(new vscode.Range(new vscode.Position(0, 0), position));
-        const codeAfter = document.getText(new vscode.Range(position, new vscode.Position(document.lineCount, 0)));
+        // 🚀 DYNAMIC FETCH: Call the function to get the LATEST ID
+        const projectId = this._getProjectId(); 
 
-        // 4. Prompt
-        const prompt = `
-        You are an autocomplete coding assistant. 
-        PREDICT only the code that follows the cursor. DO NOT wrap in markdown.
-        
-        [CODE BEFORE CURSOR]
-        ${codeBefore.slice(-1000)} 
-        
-        [CODE AFTER CURSOR]
-        ${codeAfter.slice(0, 500)}
-        
-        [YOUR PREDICTION]
-        `;
+        if (!projectId) {
+            console.log("❌ [GhostText] Aborted: No Project ID yet.");
+            return [];
+        }
+
+        const prefix = document.getText(new vscode.Range(new vscode.Position(Math.max(0, position.line - 10), 0), position));
 
         try {
-            const result = await model.generateContent(prompt);
-            const prediction = result.response.text();
+            const result = await this._backendClient.getAutocomplete(prefix, "");
             
-            // 5. Return result
-            return [new vscode.InlineCompletionItem(prediction, new vscode.Range(position, position))];
+            // 📡 DEBUG: Check exactly what the engine returned
+            console.log(`🔍 [GhostText] Raw Engine Payload: [${result}]`);
+
+            if (!result || result.trim() === "") return [];
+
+            // 🚀 SURGICAL ALIGNMENT: 
+            // We tell VS Code the text starts EXACTLY at the cursor.
+            const item = new vscode.InlineCompletionItem(result);
+            item.range = new vscode.Range(position, position); 
+            
+            return [item];
         } catch (e) {
             return [];
         }

@@ -18,6 +18,7 @@ public:
     std::vector<float> generate_embedding(const std::string& text);
     std::vector<std::vector<float>> generate_embeddings_batch(const std::vector<std::string>& texts);
     std::string generate_text(const std::string& prompt);
+    std::string generate_autocomplete(const std::string& prefix);
 
 private:
     std::shared_ptr<KeyManager> key_manager_;
