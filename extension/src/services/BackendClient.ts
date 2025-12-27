@@ -2,6 +2,7 @@ import axios, { AxiosInstance } from 'axios';
 import * as fs from 'fs';
 import FormData from 'form-data'; 
 import * as path from 'path';
+import * as vscode from 'vscode';
 
 // Define the ports for your local servers
 const CPP_BACKEND_URL = 'http://localhost:5002';
@@ -31,33 +32,32 @@ export class BackendClient {
         return { cpp: cppStatus, python: pythonStatus };
     }
 
-    async registerCodeProject(
-        projectId: string, 
-        workspacePath: string, 
-        extensions: string[], 
-        ignoredPaths: string[],
-        includedPaths: string[] = [] 
-    ): Promise<void> {
-        
-        const storagePath = path.join(workspacePath, '.study_assistant');
-        if (!fs.existsSync(storagePath)) {
-            fs.mkdirSync(storagePath, { recursive: true });
+    async getAutocomplete(prefix: string, suffix: string): Promise<string> {
+        try {
+            const response = await cppClient.post('/complete', { prefix, suffix });
+            // Extract the 'completion' field from the C++ JSON response
+            return response.data.completion || "";
+        } catch (error) {
+            console.error("Autocomplete Engine Stall:", error);
+            return "";
         }
+    }
 
-        console.log("Sending Register Config to C++:", { 
-            extensions, 
-            ignored_paths: ignoredPaths // This log helps debugging
-        });
-
-        // --- CRITICAL FIX: Map 'ignoredPaths' to 'ignored_paths' ---
-        await cppClient.post(`/sync/register/${projectId}`, {
+    async registerCodeProject(projectId: string, workspacePath: string) {
+        const config = vscode.workspace.getConfiguration('studyAssistant');
+        
+        // We don't just send a list; we send a structured FilterConfig
+        const filterConfig = {
             local_path: workspacePath,
-            storage_path: storagePath,
-            allowed_extensions: extensions,
-            ignored_paths: ignoredPaths,    // <--- THIS KEY NAME MUST MATCH C++
-            included_paths: includedPaths,
-            sync_mode: 'hybrid'
-        });
+            allowed_extensions: config.get('allowedExtensions'),
+            // 🔥 ELITE LOGIC: Support for "Implicit Ignores" but "Explicit Exceptions"
+            ignore_logic: {
+                blacklist: config.get('ignoredPaths'), // e.g. ["node_modules", ".git"]
+                whitelist: config.get('includedPaths')  // e.g. ["node_modules/special-lib"]
+            }
+        };
+
+        await cppClient.post(`/sync/register/${projectId}`, filterConfig);
     }
 
     async syncCodeProject(projectId: string, workspacePath: string): Promise<any> {
