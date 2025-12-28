@@ -70,6 +70,12 @@ class AIStudioBridge:
                         elif cmd_type == "reset":
                             page.goto("https://aistudio.google.com/app/prompts/new_chat", wait_until="networkidle")
                             result_queue.put(True)
+
+                        elif cmd_type == "get_state":
+                            models = self._internal_get_models(page)
+                            active = self._internal_get_active_model_name(page)
+                            result_queue.put({"models": models, "active": active})
+                            
                         elif cmd_type == "get_models":
                             models = self._internal_get_models(page)
                             result_queue.put(models)
@@ -163,7 +169,7 @@ class AIStudioBridge:
             # Ensure prompt box is ready
             prompt_box = page.get_by_placeholder("Start typing a prompt")
             prompt_box.wait_for(state="visible", timeout=30000)
-            time.sleep(0.5)
+            time.sleep(1.5)
 
             # Inject text
             page.evaluate("""
@@ -194,12 +200,18 @@ class AIStudioBridge:
 
             print("   [Thread] Waiting for AI response...", end="", flush=True)
 
+            try:
+                # Wait up to 120 seconds (2 mins) for the text bubble to appear
+                page.locator('ms-text-chunk').last.wait_for(state="visible", timeout=120000)
+            except:
+                return "Error: AI took too long to start generating text."
+
             start_time = time.time()
             last_len = 0
             stable_count = 0
 
             while True:
-                if time.time() - start_time > 240: # Extended timeout
+                if time.time() - start_time > 300: # Extended timeout
                     return "Error: Timeout waiting for response."
 
                 # Keep scrolling to trigger lazy load if needed
@@ -330,6 +342,20 @@ class AIStudioBridge:
             return result_queue.get(timeout=300) 
         except queue.Empty:
             return "Error: Browser bridge timed out during extraction."
+    
+    def _internal_get_active_model_name(self, page):
+        """Scrapes the name of the model currently selected in the dropdown."""
+        try:
+            # Look for the model selector button text
+            selector = page.locator("ms-model-selector button .mat-mdc-button-touch-target").first
+            # If that fails, look for the title text in the settings side panel
+            model_text_el = page.locator("ms-model-selector .mdc-button__label").first
+            
+            if model_text_el.is_visible():
+                return model_text_el.inner_text().strip()
+            return None
+        except:
+            return None
 
     def get_available_models(self):
         self.start()
@@ -348,6 +374,17 @@ class AIStudioBridge:
             return result_queue.get(timeout=60)
         except queue.Empty:
             return "Timeout"
+
+    def get_bridge_state(self):
+        """Returns the list of models AND the currently active one."""
+        self.start()
+        result_queue = queue.Queue()
+        # We'll create a new task type for this
+        self.cmd_queue.put(("get_state", None, result_queue))
+        try:
+            return result_queue.get(timeout=60)
+        except queue.Empty:
+            return {"models": [], "active": None}
 
     def reset(self):
         self.start()

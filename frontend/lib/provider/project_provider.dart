@@ -1148,21 +1148,30 @@ class ProjectProvider with ChangeNotifier {
   }
 
   Future<void> fetchAvailableModels() async {
-    _isLoadingModels = true;
-    notifyListeners();
-    try {
-      _availableModels = await _api.getAvailableModels();
-      if (_availableModels.isNotEmpty && _currentModel == null) {
-        // Default to the first one (usually the best/newest in the list)
-        _currentModel = _availableModels.first; 
-      }
-    } catch (e) {
-      print("Error fetching models: $e");
-    } finally {
-      _isLoadingModels = false;
-      notifyListeners();
+  _isLoadingModels = true;
+  notifyListeners();
+  try {
+    // This now works because we defined it in ApiService
+    final response = await _api.getAvailableModelsWithState(); 
+    
+    _availableModels = List<String>.from(response['models'] ?? []);
+    
+    // Logic: If the bridge reports a model is already selected, use that.
+    // Otherwise, and only if we don't have a model yet, pick the first one.
+    if (response['current_active'] != null) {
+      _currentModel = response['current_active'];
+    } else if (_availableModels.isNotEmpty && _currentModel == null) {
+      _currentModel = _availableModels.first;
     }
+    
+    print("Model Synced: $_currentModel");
+  } catch (e) {
+    print("Error: $e");
+  } finally {
+    _isLoadingModels = false;
+    notifyListeners();
   }
+}
 
   Future<void> changeModel(String newModel) async {
     if (newModel == _currentModel) return;
