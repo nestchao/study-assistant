@@ -13,6 +13,8 @@ import 'package:study_assistance/models/code_project.dart';
 import 'dart:async';
 import 'package:study_assistance/widgets/tracking_mind_map.dart';
 import 'package:study_assistance/models/dependency_graph.dart';
+import 'package:pdf/pdf.dart';
+import 'package:printing/printing.dart';
 
 class Source {
   final String id;
@@ -1183,4 +1185,67 @@ class ProjectProvider with ChangeNotifier {
       notifyListeners();
     }
   }
+
+  Future<void> exportCurrentNoteToPdf(BuildContext context) async {
+  // 1. Validation: Ensure a project is selected
+  if (_currentProject == null) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("No project selected.")),
+    );
+    return;
+  }
+
+  // 2. Loading State
+  _isLoadingNote = true;
+  notifyListeners();
+
+  try {
+    // 3. Get the HTML with images resolved to Base64 (reuses your existing logic)
+    // This grabs whatever is currently in the scratchpad (Selected Source OR Topic Note)
+    String richHtml = await getNoteAsRichHtml();
+
+    // 4. Create a filename based on source or timestamp
+    String filename = _selectedSource != null 
+        ? "${_selectedSource!.filename}_Note" 
+        : "Custom_Topic_Note";
+
+    // 5. Wrap in a clean HTML template for printing
+    String fullHtml = """
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <style>
+          body { font-family: sans-serif; font-size: 12pt; line-height: 1.5; }
+          h1 { color: #2c3e50; border-bottom: 1px solid #ddd; padding-bottom: 10px; }
+          h2 { color: #34495e; margin-top: 20px; }
+          img { max-width: 100%; margin: 10px 0; }
+          p { margin-bottom: 10px; }
+        </style>
+      </head>
+      <body>
+        <h1>Study Note: $filename</h1>
+        $richHtml
+      </body>
+      </html>
+    """;
+
+    // 6. Generate PDF
+    await Printing.layoutPdf(
+      onLayout: (PdfPageFormat format) async => await Printing.convertHtml(
+        format: format,
+        html: fullHtml,
+      ),
+      name: '$filename.pdf',
+    );
+
+  } catch (e) {
+    print("Error exporting PDF: $e");
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text("Failed to export PDF: $e")),
+    );
+  } finally {
+    _isLoadingNote = false;
+    notifyListeners();
+  }
+}
 }
