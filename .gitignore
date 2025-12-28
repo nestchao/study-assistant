@@ -6,6 +6,7 @@
 .env.*
 !.env.example
 firebase-credentials.json
+keys.json
 
 
 # ===================================================================
@@ -88,3 +89,4 @@ desktop.ini
 npm-debug.log*
 yarn-error.log
 # ... other log files
+
