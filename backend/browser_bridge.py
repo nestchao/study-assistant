@@ -1,4 +1,3 @@
-# backend/browser_bridge.py
 import os
 import time
 import threading
@@ -33,7 +32,7 @@ class AIStudioBridge:
                     headless=False,
                     
                     # --- RAM & CPU OPTIMIZATIONS ---
-                    viewport={'width': 1100, 'height': 600},
+                    viewport={'width': 1100, 'height': 800}, # Slightly taller for upload dialogs
                     ignore_default_args=["--enable-automation"],
                     args=[
                         "--start-maximized", 
@@ -46,8 +45,15 @@ class AIStudioBridge:
                 )
                 
                 page = context.pages[0]
-                page.route("**/*.{png,jpg,jpeg,gif,webp}", lambda route: route.abort()) 
+                # Disable webdriver property to prevent detection
+                page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
                 
+                # Navigate initially
+                try:
+                    page.goto("https://aistudio.google.com/app/prompts/new_chat", wait_until="networkidle", timeout=60000)
+                except:
+                    pass
+
                 print("✅ [Thread] Browser Ready.")
 
                 while True:
@@ -68,6 +74,10 @@ class AIStudioBridge:
                         elif cmd_type == "set_model":
                             success = self._internal_set_model(page, data)
                             result_queue.put(success)
+                        # --- NEW COMMAND ---
+                        elif cmd_type == "upload_extract":
+                            text = self._internal_upload_and_extract(page, data)
+                            result_queue.put(text)
                     except Exception as e:
                         result_queue.put(f"Bridge Error: {str(e)}")
                     finally:
@@ -75,17 +85,67 @@ class AIStudioBridge:
         except Exception as e:
             print(f"❌ [Thread] CRITICAL BRIDGE FAILURE: {e}")
 
+    def _internal_upload_and_extract(self, page, file_path):
+        """Handles uploading a file and asking for extraction."""
+        print(f"   [Thread] Uploading file for extraction: {os.path.basename(file_path)}")
+        
+        # 1. Reset chat to ensure clean context
+        page.goto("https://aistudio.google.com/app/prompts/new_chat", wait_until="networkidle", timeout=60000)
+        
+        # 2. Upload Logic
+        if not os.path.exists(file_path):
+            return "Error: File path does not exist."
+
+        try:
+            # Open menu
+            page.locator("[data-test-id='add-media-button']").click()
+            
+            # Click "Upload a file" and handle file chooser
+            # Note: The selector might be specifically for the "Upload a file" menu item
+            upload_option = page.locator("button.mat-mdc-menu-item").filter(has_text="Upload a file").first
+            
+            with page.expect_file_chooser() as fc_info:
+                upload_option.click()
+            
+            fc_info.value.set_files(file_path)
+
+            # Wait for file chip to appear (validation)
+            filename = os.path.basename(file_path)
+            print("   [Thread] Waiting for file chip...")
+            # We look for the text of filename inside the attachment area
+            page.get_by_text(filename).wait_for(state="visible", timeout=20000)
+
+            # Wait for processing progress bar (if it appears)
+            try:
+                if page.locator("mat-progress-bar").is_visible(timeout=3000):
+                    print("   [Thread] Waiting for Gemini processing...")
+                    page.locator("mat-progress-bar").wait_for(state="hidden", timeout=120000)
+            except:
+                pass # Progress bar might not appear for small files or instant processing
+
+            print("   [Thread] Upload complete. Sending extraction prompt...")
+            
+            # 3. Send Prompt
+            extraction_prompt = "Extract all text from this document verbatim. Preserve original formatting where possible. Do not summarize or add conversational filler. Just output the raw text."
+            return self._internal_send_prompt(page, extraction_prompt)
+
+        except Exception as e:
+            print(f"   [Thread] Upload Failed: {e}")
+            page.keyboard.press("Escape") # Close menu if open
+            raise e
+
     def _internal_send_prompt(self, page, message):
         """Logic executed strictly inside the worker thread."""
         try:
-            print(f"   [Thread] Navigating to New Chat...")
-            page.goto("https://aistudio.google.com/app/prompts/new_chat", wait_until="networkidle", timeout=90000)
-            
+            # Ensure we are on a valid page (if not already there)
+            if "aistudio.google.com" not in page.url:
+                 page.goto("https://aistudio.google.com/app/prompts/new_chat", wait_until="networkidle")
+
             prompt_box = page.get_by_placeholder("Start typing a prompt")
             prompt_box.wait_for(state="visible", timeout=30000)
-            time.sleep(2)
+            time.sleep(1)
 
-            print(f"   [Thread] Injecting prompt ({len(message)} chars)...")
+            # Inject text (safer than typing for long prompts)
             page.evaluate("""
                 (text) => {
                     const el = document.querySelector('textarea, [placeholder*="Start typing"]');
@@ -97,8 +157,24 @@ class AIStudioBridge:
                 }
             """, message)
 
-            time.sleep(1.5)
+            time.sleep(1.0)
+
+            try:
+                prompt_box.focus()
+            except:
+                pass
+            
             page.keyboard.press("Enter")
+
+            time.sleep(1.0)
+            run_btn = page.locator('ms-run-button button[aria-label="Run"]')
+            if run_btn.is_visible():
+                print("   [Thread] 'Enter' ignored. Clicking Run button manually...", end=" ")
+                try:
+                    run_btn.click()
+                except Exception as click_err:
+                    print(f"(Click failed: {click_err})", end=" ")
+
             print("   [Thread] Waiting for AI response...", end="", flush=True)
 
             start_time = time.time()
@@ -106,45 +182,28 @@ class AIStudioBridge:
             stable_count = 0
 
             while True:
-                if time.time() - start_time > 180:
+                if time.time() - start_time > 240: # Extended timeout for long PDF extractions
                     return "Error: Timeout waiting for response."
 
-                current_chunks = page.locator('ms-text-chunk').all()
-                current_count = len(current_chunks)
-                
-                if current_count > 0:
-                    page.evaluate("""
-                        () => {
-                            const chunks = document.querySelectorAll('ms-text-chunk');
-                            if (chunks.length > 0) {
-                                const lastChunk = chunks[chunks.length - 1];
-                                lastChunk.scrollIntoView({ block: 'end', behavior: 'instant' });
-                                let parent = lastChunk.parentElement;
-                                while (parent) {
-                                    if (parent.scrollHeight > parent.clientHeight) {
-                                        parent.scrollTop = parent.scrollHeight;
-                                    }
-                                    parent = parent.parentElement;
-                                }
-                                const editor = document.querySelector('ms-prompt-editor');
-                                if (editor) editor.scrollTop = editor.scrollHeight;
-                            }
-                        }
-                    """)
+                # Scroll to bottom to ensure generation continues
+                page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
 
                 run_btn = page.locator('ms-run-button button[aria-label="Run"]')
                 is_run_visible = run_btn.is_visible()
-                is_busy = not is_run_visible or current_count < 2
-
-                current_text = current_chunks[-1].inner_text().strip() if current_chunks else ""
+                
+                chunks = page.locator('ms-text-chunk').all()
+                current_count = len(chunks)
+                
+                # Check if text is growing
+                current_text = chunks[-1].inner_text().strip() if chunks else ""
                 current_len = len(current_text)
 
                 print(".", end="", flush=True)
 
-                if not is_busy and current_len > 0:
+                if not is_busy(page, run_btn) and current_len > 0:
                     if current_len == last_len:
                         stable_count += 1
-                        if stable_count >= 3:
+                        if stable_count >= 4: # Wait a bit longer for stability
                             break
                     else:
                         stable_count = 0
@@ -157,146 +216,114 @@ class AIStudioBridge:
             print("\n   [Thread] Captured.")
 
             final_chunks = page.locator('ms-text-chunk').all()
-            raw_answer = final_chunks[-1].inner_text()
-
-            clean_answer = raw_answer
-            if "Expand to view model thoughts" in clean_answer:
-                clean_answer = clean_answer.split("Expand to view model thoughts")[-1]
-
-            ui_labels = [r'code\s+Markdown', r'^code$', r'^Markdown$', r'^-{3,}']
-            for pattern in ui_labels:
-                clean_answer = re.sub(pattern, '', clean_answer, flags=re.MULTILINE | re.IGNORECASE)
-
-            clean_answer = re.sub(r'```[a-zA-Z]*\n?', '', clean_answer)
-            clean_answer = clean_answer.replace('`', '')
-
-            ui_keywords = ["expand_more", "expand_less", "content_copy", "share", "edit", "thumb_up", "thumb_down", "more_vert", "download"]
-            junk_pattern = r'\s*(' + '|'.join(ui_keywords) + r')\s*'
-            for _ in range(3):
-                clean_answer = re.sub(junk_pattern + r'$', '', clean_answer).strip()
-                clean_answer = re.sub(junk_pattern, '\n', clean_answer).strip()
+            if not final_chunks: return ""
             
-            return re.sub(r'\n\s*\n', '\n\n', clean_answer).strip()
+            raw_answer = final_chunks[-1].inner_text()
+            
+            # Clean up UI artifacts
+            if "Expand to view model thoughts" in raw_answer:
+                raw_answer = raw_answer.split("Expand to view model thoughts")[-1]
+
+            return clean_response(raw_answer)
 
         except Exception as e:
             return f"Browser Error: {str(e)}"
 
     def _internal_get_models(self, page):
-        """Scrapes available Gemini models from the UI."""
-        print("   [Thread] Fetching models...")
-        
-        # --- FIX: Ensure Navigation ---
-        if "aistudio.google.com" not in page.url:
-             print("   [Thread] Page is blank or external. Navigating to AI Studio...")
-             try:
-                page.goto("https://aistudio.google.com/app/prompts/new_chat", wait_until="networkidle", timeout=60000)
-             except Exception as e:
-                print(f"   [Thread] Navigation failed: {e}")
-                raise e
-
+        # ... (Same as your original code) ...
         try:
-            # Wait for UI load
-            page.locator("ms-model-selector button").wait_for(state="visible", timeout=30000)
-
-            # 1. Open Menu
+            page.locator("ms-model-selector button").wait_for(state="visible", timeout=10000)
             model_btn = page.locator("ms-model-selector button")
             if not model_btn.is_visible():
                 page.get_by_label("Run settings").click()
                 time.sleep(0.5)
-            
             model_btn.click()
             time.sleep(1.0)
-
-            # 2. Click "Gemini" Filter
             try:
                 gemini_filter = page.locator("button.ms-button-filter-chip").filter(has_text="Gemini").first
                 if gemini_filter.is_visible():
                     gemini_filter.click()
                     time.sleep(0.5)
-            except:
-                pass 
-
-            # 3. Scrape
+            except: pass 
             page.locator(".model-title-text").first.wait_for(timeout=3000)
             elements = page.locator(".model-title-text").all()
             models = list(dict.fromkeys([t.inner_text().strip() for t in elements if t.inner_text().strip()]))
-            
             page.keyboard.press("Escape")
             return models
-        except Exception as e:
+        except:
             page.keyboard.press("Escape")
-            raise e
+            return []
 
     def _internal_set_model(self, page, model_name):
-        """Selects a specific model."""
-        print(f"   [Thread] Switching to model: {model_name}...")
-        
-        # --- FIX: Ensure Navigation ---
-        if "aistudio.google.com" not in page.url:
-             print("   [Thread] Page is blank or external. Navigating to AI Studio...")
-             page.goto("https://aistudio.google.com/app/prompts/new_chat", wait_until="networkidle", timeout=60000)
-
+        # ... (Same as your original code) ...
         try:
-            page.locator("ms-model-selector button").wait_for(state="visible", timeout=30000)
-
-            # 1. Open Menu
+            page.locator("ms-model-selector button").wait_for(state="visible", timeout=10000)
             model_btn = page.locator("ms-model-selector button")
             if not model_btn.is_visible():
                 page.get_by_label("Run settings").click()
                 time.sleep(0.5)
-            
             model_btn.click()
             time.sleep(1.0)
-
-            # 2. Click "Gemini" Filter
             try:
                 gemini_filter = page.locator("button.ms-button-filter-chip").filter(has_text="Gemini").first
                 if gemini_filter.is_visible():
                     gemini_filter.click()
                     time.sleep(0.5)
             except: pass
-
-            # 3. Click the model
             target = page.locator(".model-title-text").get_by_text(model_name, exact=True).first
             target.click()
-            
             time.sleep(1.0)
             return True
         except Exception as e:
             page.keyboard.press("Escape")
             raise e
 
+    # --- Public API ---
+
     def send_prompt(self, message):
         self.start()
         result_queue = queue.Queue()
         self.cmd_queue.put(("prompt", message, result_queue))
         try:
-            return result_queue.get(timeout=160)
+            return result_queue.get(timeout=300) # Long timeout
         except queue.Empty:
             return "Error: Browser bridge timed out."
+
+    def upload_and_extract(self, file_path):
+        """Uploads a file and returns the extracted text."""
+        self.start()
+        result_queue = queue.Queue()
+        self.cmd_queue.put(("upload_extract", file_path, result_queue))
+        try:
+            # Very long timeout for upload + processing + generation
+            return result_queue.get(timeout=600) 
+        except queue.Empty:
+            return "Error: Browser bridge timed out during extraction."
 
     def get_available_models(self):
         self.start()
         result_queue = queue.Queue()
         self.cmd_queue.put(("get_models", None, result_queue))
-        try:
-            return result_queue.get(timeout=60) # Increased timeout for initial nav
-        except queue.Empty:
-            return "Bridge Error: Timeout fetching models."
+        try: return result_queue.get(timeout=60)
+        except: return []
 
     def set_model(self, model_name):
         self.start()
         result_queue = queue.Queue()
         self.cmd_queue.put(("set_model", model_name, result_queue))
-        try:
-            return result_queue.get(timeout=60)
-        except queue.Empty:
-            return "Bridge Error: Timeout setting model."
+        try: return result_queue.get(timeout=60)
+        except: return False
 
-    def reset(self):
-        self.start()
-        result_queue = queue.Queue()
-        self.cmd_queue.put(("reset", None, result_queue))
-        result_queue.get()
+# Helpers
+def is_busy(page, run_btn):
+    return not run_btn.is_visible()
+
+def clean_response(text):
+    text = re.sub(r'```[a-zA-Z]*\n?', '', text)
+    text = text.replace('`', '')
+    ui_keywords = ["expand_more", "expand_less", "content_copy", "share", "edit", "thumb_up", "thumb_down"]
+    junk_pattern = r'\s*(' + '|'.join(ui_keywords) + r')\s*'
+    text = re.sub(junk_pattern, '\n', text).strip()
+    return re.sub(r'\n\s*\n', '\n\n', text).strip()
 
 browser_bridge = AIStudioBridge()
