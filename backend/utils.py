@@ -17,9 +17,10 @@ import cv2
 import numpy as np
 import os
 import tempfile
+
+# --- NEW IMPORTS FOR WINDOWS COM ---
 import comtypes.client
 import pythoncom
-from browser_bridge import browser_bridge
 
 TXT_OUTPUT_DIR = Path("converted_txt_projects") 
 STRUCTURE_FILE_NAME = "file_structure.json"
@@ -140,7 +141,6 @@ def extract_text_from_pptx(pptx_stream):
 # -------------------------------------------------------------------------
 
 def preprocess_for_ocr(image: Image.Image) -> Image.Image:
-    # (Kept for extract_text_from_image, though unused by PDF now)
     print("    - Pre-processing image for OCR...")
     open_cv_image = np.array(image.convert('RGB'))
     open_cv_image = open_cv_image[:, :, ::-1].copy() 
@@ -148,6 +148,7 @@ def preprocess_for_ocr(image: Image.Image) -> Image.Image:
     _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
     denoised = cv2.medianBlur(thresh, 3)
     final_image = Image.fromarray(denoised)
+    print("    - Pre-processing complete.")
     return final_image
 
 def simplify_text(text):
@@ -155,45 +156,92 @@ def simplify_text(text):
 
 def extract_text(pdf_stream):
     """
-    Extracts text from a PDF stream by uploading it to Google AI Studio via Browser Bridge.
-    This replaces the previous PyMuPDF/OCR implementation.
-    """
-    print("  🤖 Starting Cloud-Based PDF Extraction (via Browser Bridge)...")
-    
-    # 1. Create a temporary file
-    # We need a physical file path for the browser file chooser
-    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as temp_pdf:
-        # Write stream to file
-        pdf_stream.seek(0)
-        temp_pdf.write(pdf_stream.read())
-        temp_pdf_path = temp_pdf.name
+    Extracts text from a PDF stream using a MAXIMUM COMPLETENESS approach.
+    For each page, it extracts native text and performs OCR, then intelligently
+    merges the results to capture all possible content.
 
+    Args:
+        pdf_stream: A file-like object representing the PDF file.
+
+    Returns:
+        A string containing all extracted text from the PDF.
+    """
+    print("  🔎 Starting Maximum Completeness text extraction...")
+    all_page_texts = []
+    
     try:
-        # 2. Ensure bridge is running
-        browser_bridge.start()
-        
-        # 3. Request upload and extraction
-        extracted_text = browser_bridge.upload_and_extract(temp_pdf_path)
-        
-        if not extracted_text or extracted_text.startswith("Error"):
-            print(f"  ❌ Extraction failed: {extracted_text}")
-            return "" 
+        doc = fitz.open(stream=pdf_stream.read(), filetype="pdf")
+
+        for page_num, page in enumerate(doc):
+            print(f"  - Processing Page {page_num + 1}/{len(doc)}...")
+
+            # --- Step 1: Get Native Text (The High-Quality Base) ---
+            native_text = page.get_text("text")
+            print(f"    - Native text found: {len(native_text)} chars.")
+
+            # --- Step 2: Perform OCR (The Comprehensive Source) ---
+            ocr_text = ""
+            try:
+                pix = page.get_pixmap(dpi=300)
+                img_bytes = pix.tobytes("ppm")
+                img = Image.open(io.BytesIO(img_bytes))
+
+                # --- THIS IS THE NEW LINE ---
+                processed_img = preprocess_for_ocr(img) 
+                # ---------------------------
+
+                ocr_text = pytesseract.image_to_string(processed_img) # Use the processed image
+                print(f"    - OCR text found: {len(ocr_text)} chars.")
+            except Exception as ocr_error:
+                print(f"    - ❌ OCR failed for page {page_num + 1}: {ocr_error}")
+
+            # --- Step 3: Intelligently Merge ---
+            # If there's no native text, the page is purely an image. Use OCR text directly.
+            if not native_text.strip():
+                print("    - Verdict: Image-only page. Using OCR text.")
+                all_page_texts.append(ocr_text)
+                continue
+
+            # If OCR text is negligible, the page is purely text. Use native text.
+            if not ocr_text.strip():
+                 print("    - Verdict: Text-only page. Using native text.")
+                 all_page_texts.append(native_text)
+                 continue
+
+            # The complex case: Mixed content. Merge them.
+            print("    - Verdict: Mixed content page. Merging results.")
             
-        print(f"  ✅ Extraction complete. Retrieved {len(extracted_text)} characters.")
-        return extracted_text
+            # Use the clean native text as our starting point.
+            final_page_text = native_text
+            
+            # Create a simplified version of the native text for fast searching.
+            simplified_native = simplify_text(native_text)
+
+            # Find lines in OCR text that are NOT in the native text.
+            unique_ocr_lines = []
+            for line in ocr_text.splitlines():
+                if line.strip() and simplify_text(line) not in simplified_native:
+                    unique_ocr_lines.append(line)
+            
+            if unique_ocr_lines:
+                print(f"    - Found {len(unique_ocr_lines)} unique lines from OCR. Appending them.")
+                # Append the unique findings, separated clearly.
+                unique_content = "\n".join(unique_ocr_lines)
+                final_page_text += f"\n\n--- OCR Additions ---\n{unique_content}"
+
+            all_page_texts.append(final_page_text)
 
     except Exception as e:
-        print(f"  ❌ CRITICAL ERROR during PDF extraction: {e}")
-        return ""
-        
+        print(f"  ❌ CRITICAL ERROR during PDF processing: {e}")
+        return "\n\n".join(all_page_texts)
+    
     finally:
-        # 4. Cleanup: Delete the temporary file
-        if os.path.exists(temp_pdf_path):
-            try:
-                os.remove(temp_pdf_path)
-                print("  🧹 Temp PDF file cleaned up.")
-            except Exception as e:
-                print(f"  ⚠️ Failed to delete temp file: {e}")
+        if 'doc' in locals() and doc:
+            doc.close()
+            
+    full_text = "\n\n".join(all_page_texts)
+    print(f"  ✅ Max-completeness extraction complete. Total characters: {len(full_text)}")
+    return full_text
     
 def extract_text_from_image(image_stream):
     print("  🖼️ Extracting text from image via OCR...")
