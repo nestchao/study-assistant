@@ -6,8 +6,7 @@
 .env.*
 !.env.example
 firebase-credentials.json
-keys.json
-
+backend_cpp/keys.json
 
 # ===================================================================
 # Python / Backend
