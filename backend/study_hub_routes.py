@@ -79,38 +79,21 @@ def generate_note(text):
     4.  **Dividers:** Insert a horizontal rule (`---`) between every major section to separate topics visually.
     5.  **Lists:** Use bullet points (`*` or `-`) for lists. Avoid long paragraphs.
 
-    **1. Simplification Strategy (The "How"):**
-    *   **Rewrite:** Convert dense, academic sentences into short, direct statements.
-    *   **Vocabulary:** Replace complex words (e.g., 'utilization', 'paradigm') with simple, everyday equivalents (e.g., 'use', 'model').
-    *   **Tone:** Use a friendly, teaching tone.
+    ## 1. 💡 Simplify and Shorten Content (Aggressive Simplification)
+    *   **Clarity Priority:** **REWRITE** dense, convoluted academic sentences into short, direct, simple statements. The resulting text must be immediately clear to a novice reader.
+    *   **Sentence Compression:** Aim for maximum brevity. Sentences should be **as short as possible** where grammatically possible. Keep the flow simple (Subject-Verb-Object).
+    *   **Word Replacement:** Replace complex or academic terminology (e.g., 'paradigm,' 'utilization,' 'delineate') with simpler, everyday equivalents (e.g., 'model,' 'use,' 'show').
+    *   **Keep Key Points:** Retain all essential definitions, data, and core arguments accurately.
+    *   **Exam Purpose:** The note is generate for exam purpose, so the key word can't miss. 
 
-    **2. Annotation & Language Rules (The "Style"):**
-    *   **Main Text:** Keep the main text in the **same language** as the source (e.g., if input is English, output is English).
-    *   **Inline Annotations:** You must identify **any complex word**, **academic term**, or **difficult vocabulary** (not just key concepts). Immediately follow these words with parentheses containing:
-        1.  The **Chinese translation**.
-        2.  A **relevant emoji**.
-        *   *Format:* `Word (Chinese Translation Emoji)`
-        *   *Example:* `It requires calculation (计算 🧮) and logic (逻辑 🧠).`
-
-    **3. Visual Formatting:**
+    ## 3. 🎨 Formatting and Tone
     *   Use markdown headings (`#`, `##`) that match the original text's structure. Add a relevant **emoji** to each main heading.
-    *   **Layout:** Use bullet points for lists to make them easy to scan.
-    *   **Bolding:** **Bold** the key terms that are being defined.
+    *   Use **bold text** to emphasize key simplified concepts.
+    *   Maintain a clear, direct, and helpful academic tone.
 
-    **4. 🧠 Memory Aid and Accuracy:**
+    ## 4. 🧠 Memory Aid and Accuracy
     *   Cover all major topics accurately. Do not skip sections or add new information.
     *   At the end of each major section, create a short, creative **Mnemonic Tip (记忆技巧)** to aid recall.
-
-    **Example Input:**
-    "Algorithm analysis helps us to determine which algorithm is most efficient in terms of time and space consumed."
-
-    **Example Output:**
-    🔍 **Algorithm Analysis (算法分析)**
-    Algorithm analysis helps us find which method is best in terms of:
-    *   **Time used** (时间消耗 ⏳)
-    *   **Space used** (空间消耗 💾)
-
-    ***
 
     **Please generate the Simplified Note for the following text:**
 
@@ -749,12 +732,16 @@ def generate_answer_from_context():
 
 @study_hub_bp.route('/bridge/get-models', methods=['GET'])
 def get_bridge_models():
-    """Fetches available Gemini models from AI Studio via Bridge."""
+    """Fetches available Gemini models AND the active one from AI Studio."""
     try:
-        models = browser_bridge.get_available_models()
-        if isinstance(models, str) and models.startswith("Bridge Error"):
-             return jsonify({"error": models, "models": []}), 500
-        return jsonify({"models": models})
+        # We assume you added get_bridge_state() to browser_bridge.py 
+        # as suggested in the previous step
+        state = browser_bridge.get_bridge_state() 
+        
+        return jsonify({
+            "models": state.get("models", []),
+            "current_active": state.get("active") # This is what we need!
+        })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
