@@ -1,3 +1,4 @@
+# backend/study_hub_routes.py
 import re
 import markdown
 import html2text
@@ -9,11 +10,14 @@ import time
 from pathlib import Path 
 import google.api_core.exceptions
 from browser_bridge import browser_bridge
-from utils import extract_text, delete_collection, split_chunks
+# --- FIX: Added convert_pptx_to_pdf_windows to imports ---
+from utils import extract_text, delete_collection, split_chunks, convert_pptx_to_pdf_windows
 import redis
 from google.genai import types 
+import os
+import tempfile
 
-# --- 从配置文件导入 ---
+# --- FROM CONFIG ---
 from config import (
     STUDY_PROJECTS_COLLECTION,
     CODE_PROJECTS_COLLECTION,
@@ -110,7 +114,7 @@ def generate_note(text):
 
     **Please generate the Simplified Note for the following text:**
 
-    {text}
+    {text[:25000]} 
     """
     try:
         # --- DIRECT BROWSER BRIDGE USAGE ---
@@ -225,19 +229,11 @@ def get_sources(project_id):
 def upload_source(project_id):
     print(f"\n📁 UPLOAD REQUEST for project: {project_id}")
     
-    # --- DEBUGGING PRINT ---
-    print(f"  > Request Files Keys: {list(request.files.keys())}")
-    # -----------------------
-
-    # Check if 'pdfs' exists OR if 'pdfs[]' exists (sometimes frameworks add brackets)
     if 'pdfs' not in request.files and not request.files:
-         print("  ❌ Error: No files found in request.files")
          return jsonify({"error": "No files provided", "success": False}), 400
     
-    # Get files using getlist. If 'pdfs' is missing, try getting values from the first key found
     files = request.files.getlist('pdfs')
     if not files and request.files:
-        # Fallback: grab files from whatever key was sent
         first_key = list(request.files.keys())[0]
         files = request.files.getlist(first_key)
 
@@ -245,38 +241,58 @@ def upload_source(project_id):
         return jsonify({"error": "No files selected", "success": False}), 400
     
     processed, errors = [], []
+    
+    # Ensure bridge is ready
+    browser_bridge.start()
+
     for file in files:
         filename = file.filename
-        ext = filename.split('.')[-1].lower()
-        safe_id = re.sub(r'[.#$/[\]]', '_', filename) # Make filename Firestore-safe
-        print(f"\n🔄 Processing '{filename}'...")
+        ext = "." + filename.split('.')[-1].lower()
+        safe_id = re.sub(r'[.#$/[\]]', '_', filename)
+        print(f"\n🔄 Processing '{filename}' via AI Studio Extraction...")
+
+        temp_path = None
+        pdf_path = None
+
         try:
-            file.stream.seek(0)
+            # 1. Save uploaded file to temp
+            with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+                file.stream.seek(0)
+                file.save(tmp.name)
+                temp_path = tmp.name
 
-            if ext == 'pdf':
-                text = extract_text(file.stream) # Your existing PDF function
-            elif ext == 'pptx':
-                from utils import extract_text_from_pptx
-                text = extract_text_from_pptx(file.stream)
-            else:
-                errors.append({"filename": filename, "error": f"Unsupported extension: {ext}"})
-                continue
+            target_upload_path = temp_path
 
-            if not text.strip():
-                errors.append({"filename": filename, "error": "No text could be extracted."})
-                continue
+            # 2. Handle PPTX -> PDF Conversion
+            if ext == '.pptx':
+                print("    👉 Detected PPTX. Converting to PDF for AI Studio...")
+                pdf_path = temp_path.replace(".pptx", ".pdf")
+                success = convert_pptx_to_pdf_windows(temp_path, pdf_path)
+                if success and os.path.exists(pdf_path):
+                    target_upload_path = pdf_path
+                    print("    ✅ Conversion successful.")
+                else:
+                    raise Exception("PPTX to PDF conversion failed.")
 
+            # 3. Call Browser Bridge to Extract Text
+            print(f"    🤖 Sending {os.path.basename(target_upload_path)} to AI Studio for extraction...")
+            extracted_text = browser_bridge.extract_text_from_file(target_upload_path)
+
+            if not extracted_text or "Error:" in extracted_text[:20]:
+                raise Exception(f"AI Extraction Failed: {extracted_text}")
+
+            print(f"    ✅ Text Extracted: {len(extracted_text)} characters.")
+
+            # 4. Save Metadata to Firestore
             source_ref = db.collection(STUDY_PROJECTS_COLLECTION).document(project_id).collection('sources').document(safe_id)
             source_ref.set({
                 'filename': filename, 
                 'timestamp': firestore.SERVER_TIMESTAMP, 
-                'character_count': len(text)
+                'character_count': len(extracted_text)
             })
             
-            # CRITICAL: Save original text chunks FIRST (before note generation)
-            # This ensures regeneration will work even if note generation fails
-            print(f"  💾 Saving original text chunks...")
-            text_chunks = split_chunks(text)
+            # 5. Save Original Text Chunks
+            text_chunks = split_chunks(extracted_text)
             for i in range(0, len(text_chunks), 100):
                 batch = text_chunks[i:i+100]
                 page_num = i // 100
@@ -284,13 +300,11 @@ def upload_source(project_id):
                     'chunks': batch, 
                     'order': page_num
                 })
-            print(f"  ✅ Saved {len(text_chunks)} chunks in {(len(text_chunks) + 99) // 100} pages")
             
-            # Now try to generate the note (this can fail without breaking everything)
+            # 6. Generate Note (Using the extracted text)
             try:
-                note_html = generate_note(text)
+                note_html = generate_note(extracted_text)
                 
-                # Save note in chunks to avoid Firestore document size limits
                 chunk_size = 900000 
                 for i in range(0, len(note_html), chunk_size):
                     chunk = note_html[i:i+chunk_size]
@@ -299,25 +313,31 @@ def upload_source(project_id):
                         'html': chunk, 
                         'order': page_num
                     })
-                print(f"  ✅ Generated and saved study note")
+                print(f"    ✅ Generated and saved study note")
                 
             except Exception as note_error:
-                # If note generation fails, log it but don't fail the entire upload
-                print(f"  ⚠️ Note generation failed (source still saved): {note_error}")
-                # Save a placeholder note page
+                print(f"    ⚠️ Note generation failed: {note_error}")
                 source_ref.collection('note_pages').document('page_0').set({
-                    'html': '<p>Note generation failed. Please try regenerating the note.</p>',
+                    'html': f'<p>Note generation failed: {note_error}</p>',
                     'order': 0
                 })
             
             processed.append({"filename": filename, "id": safe_id})
-            print(f"✅ SUCCESS: '{filename}' processed.")
             
         except Exception as e:
             import traceback
             print(f"❌ CRITICAL ERROR processing '{filename}': {e}")
             traceback.print_exc()
             errors.append({"filename": filename, "error": str(e)})
+        
+        finally:
+            # Cleanup Temps
+            try:
+                if temp_path and os.path.exists(temp_path):
+                    os.remove(temp_path)
+                if pdf_path and os.path.exists(pdf_path):
+                    os.remove(pdf_path)
+            except: pass
 
     return jsonify({"success": len(processed) > 0, "processed": processed, "errors": errors})
 
