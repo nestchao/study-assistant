@@ -34,3 +34,4 @@ cd D:\Projects\ali_study_assistance\study-assistant\backend_cpp\build; cmake --b
 cd Release; ./code_assistance_server.exe
 
 test test
+test test 
