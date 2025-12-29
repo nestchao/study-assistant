@@ -337,12 +337,12 @@ def gaussian_retrieval(project_id, user_query, db_instance):
 
     return "\n".join(context_parts)
 
-def enrich_nodes_with_critic(nodes, max_nodes_to_process=50):
+def enrich_nodes_with_critic(nodes, *, model_instance, max_nodes_to_process=50):
     """
     Uses Browser Bridge (Google AI Studio) to analyze the purpose and quality of nodes.
     Removes the dependency on 'model_instance'.
     """
-    print(f"  🕵️‍♂️ AI Critic (Browser Bridge) starting analysis on {min(len(nodes), max_nodes_to_process)} nodes...")
+    print(f"  🕵️‍♂️ AI Critic starting analysis on {min(len(nodes), max_nodes_to_process)} nodes...")
     
     # Ensure bridge is running
     browser_bridge.start()
