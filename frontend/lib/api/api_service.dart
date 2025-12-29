@@ -6,7 +6,6 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'dart:typed_data';
 import 'package:study_assistance/models/dependency_graph.dart';
-import 'package:http_parser/http_parser.dart';
 import 'dart:io' show Platform;
 
 class ApiService {
@@ -537,15 +536,19 @@ class ApiService {
     throw Exception("Failed to load graph");
   }
 
-   Future<List<String>> getAvailableModels() async {
-    final response = await http.get(Uri.parse('$baseUrl/bridge/get-models'));
-    if (response.statusCode == 200) {
-      final data = json.decode(response.body);
-      return List<String>.from(data['models'] ?? []);
+  Future<Map<String, dynamic>> getAvailableModelsWithState() async {
+    try {
+      final response = await http.get(Uri.parse('$baseUrl/bridge/get-models'));
+      if (response.statusCode == 200) {
+        // This returns the full Map: {"models": [...], "current_active": "..."}
+        return json.decode(response.body);
+      }
+      print("Failed to load models: ${response.body}");
+      return {"models": [], "current_active": null};
+    } catch (e) {
+      print("Error in getAvailableModelsWithState: $e");
+      return {"models": [], "current_active": null};
     }
-    // Return empty list on error instead of throwing to avoid UI crash
-    print("Failed to load models: ${response.body}");
-    return [];
   }
 
   Future<bool> setModel(String modelName) async {
