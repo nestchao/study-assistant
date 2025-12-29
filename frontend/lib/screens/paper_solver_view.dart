@@ -135,7 +135,7 @@ class _PaperSolverViewState extends State<PaperSolverView> {
 
     // Header
     htmlBuffer.write("<h1>${paper.filename} - AI Solutions</h1><hr>");
-    textBuffer.writeln("${paper.filename} - AI Solutions\n" + ("=" * 30));
+    textBuffer.writeln("${paper.filename} - AI Solutions\n${"=" * 30}");
 
     // Iterate through QA pairs
     for (int i = 0; i < paper.qaPairs.length; i++) {

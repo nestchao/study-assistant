@@ -506,7 +506,7 @@ class _SyncProjectCard extends StatelessWidget {
 
           // Action Buttons
           if (isSyncing)
-            Row(children: const [
+            const Row(children: [
               SizedBox(
                   width: 16,
                   height: 16,
@@ -662,10 +662,11 @@ class _RegisterProjectDialogState extends State<_RegisterProjectDialog> {
                 selected: {_activeView},
                 onSelectionChanged: (newSelection) {
                   setState(() {
-                    if (_activeView == 'ignore')
+                    if (_activeView == 'ignore') {
                       _tempIgnored = _pathsCtrl.text;
-                    else
+                    } else {
                       _tempIncluded = _pathsCtrl.text;
+                    }
 
                     _activeView = newSelection.first;
                     _pathsCtrl.text =
@@ -696,13 +697,15 @@ class _RegisterProjectDialogState extends State<_RegisterProjectDialog> {
                   const SizedBox(width: 8),
                   ElevatedButton(
                     onPressed: () async {
-                      if (_nameCtrl.text.isEmpty || _pathCtrl.text.isEmpty)
+                      if (_nameCtrl.text.isEmpty || _pathCtrl.text.isEmpty) {
                         return;
+                      }
                       // Save current view state
-                      if (_activeView == 'ignore')
+                      if (_activeView == 'ignore') {
                         _tempIgnored = _pathsCtrl.text;
-                      else
+                      } else {
                         _tempIncluded = _pathsCtrl.text;
+                      }
 
                       try {
                         await Provider.of<ProjectProvider>(context,
@@ -727,9 +730,10 @@ class _RegisterProjectDialogState extends State<_RegisterProjectDialog> {
                                 syncMode: 'hybrid');
                         if (mounted) Navigator.pop(context);
                       } catch (e) {
-                        if (mounted)
+                        if (mounted) {
                           ScaffoldMessenger.of(context)
                               .showSnackBar(SnackBar(content: Text("$e")));
+                        }
                       }
                     },
                     style: ElevatedButton.styleFrom(
@@ -829,10 +833,11 @@ class _EditConfigDialogState extends State<_EditConfigDialog> {
                 selected: {_activeView},
                 onSelectionChanged: (newSelection) {
                   setState(() {
-                    if (_activeView == 'ignore')
+                    if (_activeView == 'ignore') {
                       _tempIgnored = _pathsCtrl.text;
-                    else
+                    } else {
                       _tempIncluded = _pathsCtrl.text;
+                    }
 
                     _activeView = newSelection.first;
                     _pathsCtrl.text =
@@ -862,10 +867,11 @@ class _EditConfigDialogState extends State<_EditConfigDialog> {
                   const SizedBox(width: 8),
                   ElevatedButton(
                     onPressed: () async {
-                      if (_activeView == 'ignore')
+                      if (_activeView == 'ignore') {
                         _tempIgnored = _pathsCtrl.text;
-                      else
+                      } else {
                         _tempIncluded = _pathsCtrl.text;
+                      }
 
                       try {
                         await Provider.of<ProjectProvider>(context,
@@ -890,9 +896,10 @@ class _EditConfigDialogState extends State<_EditConfigDialog> {
                                 syncMode: 'hybrid');
                         if (mounted) Navigator.pop(context);
                       } catch (e) {
-                        if (mounted)
+                        if (mounted) {
                           ScaffoldMessenger.of(context)
                               .showSnackBar(SnackBar(content: Text("$e")));
+                        }
                       }
                     },
                     style: ElevatedButton.styleFrom(
