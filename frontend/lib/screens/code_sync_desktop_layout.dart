@@ -17,7 +17,6 @@ class _CodeSyncDesktopLayoutState extends State<CodeSyncDesktopLayout> {
   bool _isFileViewerVisible = true;
   
   final double _minPanelWidth = 200.0;
-  final double _collapseThreshold = 50.0;
 
   void _togglePanelVisibility(String panel) {
     setState(() {

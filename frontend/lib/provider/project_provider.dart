@@ -1,5 +1,4 @@
 // --- FILE: frontend/lib/provider/project_provider.dart ---
-import 'dart:developer';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -13,6 +12,8 @@ import 'package:study_assistance/models/code_project.dart';
 import 'dart:async';
 import 'package:study_assistance/widgets/tracking_mind_map.dart';
 import 'package:study_assistance/models/dependency_graph.dart';
+import 'package:pdf/pdf.dart';
+import 'package:printing/printing.dart';
 
 class Source {
   final String id;
@@ -1146,21 +1147,30 @@ class ProjectProvider with ChangeNotifier {
   }
 
   Future<void> fetchAvailableModels() async {
-    _isLoadingModels = true;
-    notifyListeners();
-    try {
-      _availableModels = await _api.getAvailableModels();
-      if (_availableModels.isNotEmpty && _currentModel == null) {
-        // Default to the first one (usually the best/newest in the list)
-        _currentModel = _availableModels.first; 
-      }
-    } catch (e) {
-      print("Error fetching models: $e");
-    } finally {
-      _isLoadingModels = false;
-      notifyListeners();
+  _isLoadingModels = true;
+  notifyListeners();
+  try {
+    // This now works because we defined it in ApiService
+    final response = await _api.getAvailableModelsWithState(); 
+    
+    _availableModels = List<String>.from(response['models'] ?? []);
+    
+    // Logic: If the bridge reports a model is already selected, use that.
+    // Otherwise, and only if we don't have a model yet, pick the first one.
+    if (response['current_active'] != null) {
+      _currentModel = response['current_active'];
+    } else if (_availableModels.isNotEmpty && _currentModel == null) {
+      _currentModel = _availableModels.first;
     }
+    
+    print("Model Synced: $_currentModel");
+  } catch (e) {
+    print("Error: $e");
+  } finally {
+    _isLoadingModels = false;
+    notifyListeners();
   }
+}
 
   Future<void> changeModel(String newModel) async {
     if (newModel == _currentModel) return;
@@ -1183,4 +1193,67 @@ class ProjectProvider with ChangeNotifier {
       notifyListeners();
     }
   }
+
+  Future<void> exportCurrentNoteToPdf(BuildContext context) async {
+  // 1. Validation: Ensure a project is selected
+  if (_currentProject == null) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("No project selected.")),
+    );
+    return;
+  }
+
+  // 2. Loading State
+  _isLoadingNote = true;
+  notifyListeners();
+
+  try {
+    // 3. Get the HTML with images resolved to Base64 (reuses your existing logic)
+    // This grabs whatever is currently in the scratchpad (Selected Source OR Topic Note)
+    String richHtml = await getNoteAsRichHtml();
+
+    // 4. Create a filename based on source or timestamp
+    String filename = _selectedSource != null 
+        ? "${_selectedSource!.filename}_Note" 
+        : "Custom_Topic_Note";
+
+    // 5. Wrap in a clean HTML template for printing
+    String fullHtml = """
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <style>
+          body { font-family: sans-serif; font-size: 12pt; line-height: 1.5; }
+          h1 { color: #2c3e50; border-bottom: 1px solid #ddd; padding-bottom: 10px; }
+          h2 { color: #34495e; margin-top: 20px; }
+          img { max-width: 100%; margin: 10px 0; }
+          p { margin-bottom: 10px; }
+        </style>
+      </head>
+      <body>
+        <h1>Study Note: $filename</h1>
+        $richHtml
+      </body>
+      </html>
+    """;
+
+    // 6. Generate PDF
+    await Printing.layoutPdf(
+      onLayout: (PdfPageFormat format) async => await Printing.convertHtml(
+        format: format,
+        html: fullHtml,
+      ),
+      name: '$filename.pdf',
+    );
+
+  } catch (e) {
+    print("Error exporting PDF: $e");
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text("Failed to export PDF: $e")),
+    );
+  } finally {
+    _isLoadingNote = false;
+    notifyListeners();
+  }
+}
 }
