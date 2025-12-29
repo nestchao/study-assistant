@@ -347,7 +347,11 @@ def force_reindex_project(db, project_id):
     ][:10]
 
     if important_nodes:
-        enrich_nodes_with_critic(important_nodes, HyDE_generation_model, max_nodes_to_process=10)
+        enrich_nodes_with_critic(
+            nodes=important_nodes, 
+            model_instance=HyDE_generation_model, 
+            max_nodes_to_process=10
+        )
 
     # Generate Embeddings
     print("  3. Generating embeddings...")

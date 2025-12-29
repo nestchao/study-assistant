@@ -6,6 +6,7 @@ Flask-CORS
 firebase-admin
 google-generativeai
 google-api-core
+google-genai
 
 # Caching & Background Tasks
 redis
@@ -30,9 +31,14 @@ PyPDF2
 PyMuPDF
 opencv-python
 numpy
+comtypes
+pywin32
 
 # AI Vector/Embedding logic
 faiss-cpu
 sentence-transformers
 tiktoken
 requests
+
+# browser
+playwright
