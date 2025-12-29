@@ -1,4 +1,5 @@
 // --- FILE: frontend/lib/provider/project_provider.dart ---
+import 'dart:developer';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
