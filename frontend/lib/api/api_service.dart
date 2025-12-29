@@ -6,7 +6,6 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'dart:typed_data';
 import 'package:study_assistance/models/dependency_graph.dart';
-import 'package:http_parser/http_parser.dart';
 import 'dart:io' show Platform;
 
 class ApiService {
