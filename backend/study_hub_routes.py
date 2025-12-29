@@ -477,7 +477,12 @@ def ask_chatbot(project_id):
         
         # --- CLEANING LOGIC ---
         # We strip the wrapper we asked for, leaving the raw Markdown behind.
-        clean_answer = raw_answer
+        clean_answer = raw_answer.strip()
+        clean_answer = clean_answer.replace("code Markdown download", "")
+        clean_answer = clean_answer.replace("code\nMarkdown\ndownload", "")
+        clean_answer = re.sub(r'^```[a-zA-Z]*\s*', '', clean_answer.strip())
+        if clean_answer.endswith("```"):
+            clean_answer = clean_answer[:-3].strip()
         
         # Remove the opening ```markdown or ```
         if "```markdown" in clean_answer:
