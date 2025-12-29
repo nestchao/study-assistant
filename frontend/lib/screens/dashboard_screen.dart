@@ -345,10 +345,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
       sliver: SliverList(
         delegate: SliverChildBuilderDelegate(
           (context, index) {
-            if (index == 0) return Padding(
+            if (index == 0) {
+              return Padding(
               padding: const EdgeInsets.only(bottom: 12),
               child: _buildCreateNewCard(isList: true),
             );
+            }
             final project = projects[index - 1];
             return Padding(
               padding: const EdgeInsets.only(bottom: 12),

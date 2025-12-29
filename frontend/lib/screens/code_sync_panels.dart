@@ -434,7 +434,7 @@ class FileViewerPanel extends StatelessWidget {
             child: provider.isLoadingFileContent 
               ? const Center(child: CircularProgressIndicator(color: Colors.white24)) 
               : provider.displayFileContent == null 
-                ? Center(child: Text("Select a file to view", style: TextStyle(color: Colors.white24)))
+                ? const Center(child: Text("Select a file to view", style: TextStyle(color: Colors.white24)))
                 : SingleChildScrollView(
                     padding: const EdgeInsets.all(16),
                     child: SelectableText(
