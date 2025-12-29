@@ -72,6 +72,8 @@ def generate_note(text):
     prompt = f"""
     You are an expert study assistant. Your goal is to convert original study notes into "Simplified Notes" that are visually engaging and easy for a beginner to understand.
 
+    Your output must be in the **same language as the source text**. Follow these rules meticulously.
+
     ### 📝 CRITICAL OUTPUT RULE (The "Wrapper"):
     1.  **Markdown Syntax:** To preserve formatting, you **MUST** wrap your ENTIRE response inside a Markdown code block.
     2.  **Headings:** Use `#` for main titles and `##` for sections. Start every heading with an **Emoji**.
@@ -79,12 +81,18 @@ def generate_note(text):
     4.  **Dividers:** Insert a horizontal rule (`---`) between every major section to separate topics visually.
     5.  **Lists:** Use bullet points (`*` or `-`) for lists. Avoid long paragraphs.
 
+    ## 0. 🏛️ Preserve the Original Structure (The Golden Rule)
+    *   You MUST follow the structure, headings, and topic order of the original text **EXACTLY**. a
+    *   Do not merge or re-order sections. Simplify content **within** the original structure.
+    
     ## 1. 💡 Simplify and Shorten Content (Aggressive Simplification)
     *   **Clarity Priority:** **REWRITE** dense, convoluted academic sentences into short, direct, simple statements. The resulting text must be immediately clear to a novice reader.
-    *   **Sentence Compression:** Aim for maximum brevity. Sentences should be **as short as possible** where grammatically possible. Keep the flow simple (Subject-Verb-Object).
     *   **Word Replacement:** Replace complex or academic terminology (e.g., 'paradigm,' 'utilization,' 'delineate') with simpler, everyday equivalents (e.g., 'model,' 'use,' 'show').
-    *   **Keep Key Points:** Retain all essential definitions, data, and core arguments accurately.
-    *   **Exam Purpose:** The note is generate for exam purpose, so the key word can't miss. 
+
+    ## 2. ✍️ Annotate Simplified Words (Mandatory)
+    *   For every unfa  miliar word, you need to provide its Chinese translation after
+    *   Format: `unfamiliar word (中文翻译)`. 
+        *   Example: "The **widespread (普遍的)** nature of the **event (事件)**..."
 
     ## 3. 🎨 Formatting and Tone
     *   Use markdown headings (`#`, `##`) that match the original text's structure. Add a relevant **emoji** to each main heading.
@@ -97,7 +105,7 @@ def generate_note(text):
 
     **Please generate the Simplified Note for the following text:**
 
-    {text[:25000]} 
+    {text} 
     """
     try:
         # --- DIRECT BROWSER BRIDGE USAGE ---

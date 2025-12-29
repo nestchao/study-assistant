@@ -215,7 +215,28 @@ class AIStudioBridge:
                     return "Error: Timeout waiting for response."
 
                 # Keep scrolling to trigger lazy load if needed
-                page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                current_chunks = page.locator('ms-text-chunk').all()
+                current_count = len(current_chunks)
+                
+                if current_count > 0:
+                    page.evaluate("""
+                        () => {
+                            const chunks = document.querySelectorAll('ms-text-chunk');
+                            if (chunks.length > 0) {
+                                const lastChunk = chunks[chunks.length - 1];
+                                lastChunk.scrollIntoView({ block: 'end', behavior: 'instant' });
+                                let parent = lastChunk.parentElement;
+                                while (parent) {
+                                    if (parent.scrollHeight > parent.clientHeight) {
+                                        parent.scrollTop = parent.scrollHeight;
+                                    }
+                                    parent = parent.parentElement;
+                                }
+                                const editor = document.querySelector('ms-prompt-editor');
+                                if (editor) editor.scrollTop = editor.scrollHeight;
+                            }
+                        }
+                    """)
 
                 current_chunks = page.locator('ms-text-chunk').all()
                 run_btn = page.locator('ms-run-button button[aria-label="Run"]')
