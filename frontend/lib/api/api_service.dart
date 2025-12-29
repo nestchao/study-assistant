@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'dart:typed_data';
 import 'package:study_assistance/models/dependency_graph.dart';
 import 'package:http_parser/http_parser.dart';
@@ -13,6 +14,85 @@ class ApiService {
   late final String baseUrl;
 
   ApiService() {
+    if (kIsWeb) {
+      // Browser logic
+      baseUrl = 'http://localhost:5000';
+    } else if (Platform.isWindows) {
+      // Windows Native logic: MUST use localhost or 127.0.0.1
+      baseUrl = 'http://127.0.0.1:5000';
+    } else {
+      // Android Emulator logic
+      baseUrl = dotenv.env['API_URL'] ?? 'http://10.0.2.2:5000';
+    }
+    print("API Base URL initialized as: $baseUrl");
+  }
+
+  // --- MODIFIED: SYNC SERVICE METHODS ---
+  Future<List<Map<String, dynamic>>> getSyncProjects() async {
+    final response = await http.get(Uri.parse('$baseUrl/sync/projects'));
+    if (response.statusCode == 200) {
+      return List<Map<String, dynamic>>.from(json.decode(response.body));
+    }
+    throw Exception('Failed to load sync projects');
+  }
+
+  Future<void> registerFolderToProject(
+    String projectId,
+    String path,
+    List<String> extensions,
+    List<String> ignoredPaths,
+    List<String> includedPaths, // New
+    String syncMode, // New
+  ) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/sync/register/$projectId'),
+      headers: {'Content-Type': 'application/json'},
+      body: json.encode({
+        'local_path': path,
+        'extensions': extensions,
+        'ignored_paths': ignoredPaths,
+        'included_paths': includedPaths, // New
+        'sync_mode': syncMode, // New
+      }),
+    );
+    if (response.statusCode != 200) {
+      throw Exception('Failed to register folder to project');
+    }
+  }
+
+  Future<void> updateSyncProject(
+    String projectId, {
+    String? name, // <--- 1. ADD THIS ARGUMENT
+    bool? isActive,
+    List<String>? extensions,
+    List<String>? ignoredPaths,
+    List<String>? includedPaths,
+    String? syncMode,
+  }) async {
+    final Map<String, dynamic> body = {};
+    if (name != null) body['name'] = name; // <--- 2. ADD THIS LINE
+    if (isActive != null) body['is_active'] = isActive;
+    if (extensions != null) body['allowed_extensions'] = extensions;
+    if (ignoredPaths != null) body['ignored_paths'] = ignoredPaths;
+    if (includedPaths != null) body['included_paths'] = includedPaths;
+    if (syncMode != null) body['sync_mode'] = syncMode;
+
+    final response = await http.put(
+      Uri.parse('$baseUrl/sync/project/$projectId'),
+      headers: {'Content-Type': 'application/json'},
+      body: json.encode(body),
+    );
+    if (response.statusCode != 200) {
+      throw Exception('Failed to update sync project');
+    }
+  }
+
+  Future<void> deleteSyncFromProject(String projectId) async {
+    final response =
+        await http.delete(Uri.parse('$baseUrl/sync/project/$projectId'));
+    if (response.statusCode != 200) {
+      throw Exception('Failed to delete sync from project');
+    }
     if (kIsWeb) {
       // Browser logic
       baseUrl = 'http://localhost:5000';
@@ -147,6 +227,53 @@ class ApiService {
     if (response.statusCode != 200) throw Exception('Failed to delete project');
   }
 
+  Future<String?> createStudyProjectAndGetId(String name) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/create-project'),
+      headers: {'Content-Type': 'application/json'},
+      body: json.encode({'name': name}),
+    );
+    if (response.statusCode == 200 || response.statusCode == 201) {
+      return json.decode(response.body)['id'];
+    }
+    throw Exception('Failed to create study project: ${response.statusCode}');
+  }
+
+  Future<List<Map<String, dynamic>>> getCodeProjects() async {
+    final response = await http.get(Uri.parse('$baseUrl/get-code-projects'));
+    if (response.statusCode == 200) {
+      return List<Map<String, dynamic>>.from(json.decode(response.body));
+    }
+    throw Exception('Failed to load code projects');
+  }
+
+  Future<String?> createCodeProjectAndGetId(String name) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/create-code-project'),
+      headers: {'Content-Type': 'application/json'},
+      body: json.encode({'name': name}),
+    );
+    if (response.statusCode == 200 || response.statusCode == 201) {
+      return json.decode(response.body)['id'];
+    }
+    throw Exception('Failed to create code project: ${response.statusCode}');
+  }
+
+  Future<void> renameProject(String projectId, String newName) async {
+    final response = await http.put(
+      Uri.parse('$baseUrl/rename-project/$projectId'),
+      headers: {'Content-Type': 'application/json'},
+      body: json.encode({'new_name': newName}),
+    );
+    if (response.statusCode != 200) throw Exception('Failed to rename project');
+  }
+
+  Future<void> deleteProject(String projectId) async {
+    final response =
+        await http.delete(Uri.parse('$baseUrl/delete-project/$projectId'));
+    if (response.statusCode != 200) throw Exception('Failed to delete project');
+  }
+
   Future<void> createProject(String name) async {
     await http.post(
       Uri.parse('$baseUrl/create-project'),
@@ -161,8 +288,16 @@ class ApiService {
     if (response.statusCode != 200) throw Exception('Failed to delete source');
   }
 
+  Future<void> deleteSource(String projectId, String sourceId) async {
+    final response = await http
+        .delete(Uri.parse('$baseUrl/delete-source/$projectId/$sourceId'));
+    if (response.statusCode != 200) throw Exception('Failed to delete source');
+  }
+
   // GET /api/get-sources/<project_id>
   Future<List<Map<String, dynamic>>> getSources(String projectId) async {
+    final response =
+        await http.get(Uri.parse('$baseUrl/get-sources/$projectId'));
     final response =
         await http.get(Uri.parse('$baseUrl/get-sources/$projectId'));
     return List<Map<String, dynamic>>.from(json.decode(response.body));
@@ -218,13 +353,55 @@ class ApiService {
     // Check if files were actually added
     if (request.files.isEmpty) {
       throw Exception('No files could be read. Please try again.');
+      print("  Processing file: ${file.name} (Size: ${file.size})");
+
+      // FIX: Handle both Path (Desktop/Mobile) and Bytes (Web)
+      if (kIsWeb) {
+        // Web always provides bytes
+        if (file.bytes != null) {
+          request.files.add(http.MultipartFile.fromBytes(
+            'pdfs',
+            file.bytes!,
+            filename: file.name,
+          ));
+          print("    -> Added from bytes (Web)");
+        }
+      } else {
+        // Mobile/Desktop usually provides path
+        if (file.path != null) {
+          request.files.add(await http.MultipartFile.fromPath(
+            'pdfs',
+            file.path!,
+            filename: file.name,
+          ));
+          print("    -> Added from path: ${file.path}");
+        } else if (file.bytes != null) {
+          // Fallback if path is null but bytes exist
+          request.files.add(http.MultipartFile.fromBytes(
+            'pdfs',
+            file.bytes!,
+            filename: file.name,
+          ));
+          print("    -> Added from bytes (Fallback)");
+        } else {
+          print("    ⚠️ SKIPPED: File has no path and no bytes.");
+        }
+      }
     }
 
+    // Check if files were actually added
+    if (request.files.isEmpty) {
+      throw Exception('No files could be read. Please try again.');
+    }
+
+    print("  Sending request with ${request.files.length} parts...");
     print("  Sending request with ${request.files.length} parts...");
     var response = await request.send();
     var responseBody = await response.stream.bytesToString();
 
+
     print("  Response status: ${response.statusCode}");
+    // print("  Response body: $responseBody"); // Uncomment for detailed debug
     // print("  Response body: $responseBody"); // Uncomment for detailed debug
 
     if (response.statusCode != 200) {
@@ -234,6 +411,8 @@ class ApiService {
 
   // GET /api/get-note/<project_id>/<source_id>
   Future<String> getNote(String projectId, String sourceId) async {
+    final response =
+        await http.get(Uri.parse('$baseUrl/get-note/$projectId/$sourceId'));
     final response =
         await http.get(Uri.parse('$baseUrl/get-note/$projectId/$sourceId'));
     return json.decode(response.body)['note_html'] ?? '<p>No note</p>';
