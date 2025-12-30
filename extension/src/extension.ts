@@ -69,7 +69,7 @@ export async function activate(context: vscode.ExtensionContext) {
     // ==================== Register Providers ====================
 
      // 1. Code Config Provider 
-    const codeConfigProvider = new CodeConfigProvider(context.extensionUri);
+    const codeConfigProvider = new CodeConfigProvider(context.extensionUri, backendClient);
     context.subscriptions.push(
         vscode.window.registerWebviewViewProvider('study-assistant-config', codeConfigProvider)
     );
