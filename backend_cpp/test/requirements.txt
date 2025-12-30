@@ -1,0 +1,5 @@
+grpcio==1.60.0
+grpcio-tools==1.60.0
+termcolor==2.4.0
+requests==2.31.0
+nlohmann-json  # If you use any json logic in python

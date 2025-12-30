@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Synapse-Flow | Mission Control</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+</head>
+<body>
+    <nav class="sidebar">
+        <div class="logo">
+            <i class="fas fa-microchip"></i>
+            <span>SYNAPSE</span>
+        </div>
+        <ul class="nav-links">
+            <li class="active" data-page="overview">
+                <i class="fas fa-chart-line"></i> <span>Overview</span>
+            </li>
+            <li data-page="trace">
+                <i class="fas fa-satellite-dish"></i> <span>Flight Trace</span>
+            </li>
+            <li data-page="history">
+                <i class="fas fa-history"></i> <span>Archive</span>
+            </li>
+            <li data-page="control">
+                <i class="fas fa-sliders-h"></i> <span>Control</span>
+            </li>
+        </ul>
+        <div class="system-status">
+            <div class="pulse"></div>
+            <span id="uptime">System Online</span>
+        </div>
+    </nav>
+
+    <main class="content">
+        <!-- PAGE: OVERVIEW -->
+        <section id="overview" class="page active">
+            <header>
+                <h1>System Vitality</h1>
+                <div class="last-updated">Last Sync: <span id="sync-time">--:--:--</span></div>
+            </header>
+            
+            <div class="stats-grid">
+                <div class="card gauge-card">
+                    <label>CPU Utilization</label>
+                    <div class="gauge-wrap">
+                        <svg class="gauge-svg" viewBox="0 0 100 100">
+                            <circle class="bg" cx="50" cy="50" r="45"></circle>
+                            <circle id="cpu-gauge" class="meter" cx="50" cy="50" r="45"></circle>
+                        </svg>
+                        <span id="cpu-text">0%</span>
+                    </div>
+                </div>
+                <div class="card gauge-card">
+                    <label>Private Memory</label>
+                    <div class="gauge-wrap">
+                        <svg class="gauge-svg" viewBox="0 0 100 100">
+                            <circle class="bg" cx="50" cy="50" r="45"></circle>
+                            <circle id="ram-gauge" class="meter" cx="50" cy="50" r="45"></circle>
+                        </svg>
+                        <span id="ram-text">0MB</span>
+                    </div>
+                </div>
+                <div class="card stat-card">
+                    <label>Vector Latency</label>
+                    <h2 id="vec-val">0ms</h2>
+                    <div class="trend positive"><i class="fas fa-bolt"></i> Low Latency</div>
+                </div>
+                <div class="card stat-card">
+                    <label>Throughput</label>
+                    <h2 id="tps-val">0 T/s</h2>
+                    <div class="trend"><i class="fas fa-wave-square"></i> Real-time</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- PAGE: FLIGHT TRACE -->
+        <section id="trace" class="page">
+            <header>
+                <h1>Live Flight Trace</h1>
+                <span id="trace-count" class="badge">0 Events Detected</span>
+            </header>
+            <div class="trace-table-container">
+                <table class="trace-table">
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <th>Phase</th>
+                            <th>Objective/Detail</th>
+                            <th>Latency</th>
+                            <th>Session</th>
+                        </tr>
+                    </thead>
+                    <tbody id="trace-list">
+                        <!-- Items injected here -->
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- PAGE: HISTORY -->
+        <section id="history" class="page">
+            <div class="split-view">
+                <div class="log-explorer">
+                    <h1>Mission Archive</h1>
+                    <div id="log-list" class="scroll-list"></div>
+                </div>
+                <div class="inspector-panel">
+                    <div id="inspector-default" class="placeholder">
+                        <i class="fas fa-search"></i>
+                        <p>Select a mission to inspect telemetry</p>
+                    </div>
+                    <div id="inspector-content" class="hidden">
+                        <!-- Detailed info here -->
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- PAGE: CONTROL -->
+        <section id="control" class="page">
+            <h1>Mission Parameters</h1>
+            <div class="control-grid">
+                <div class="card">
+                    <h3>Stress Simulation</h3>
+                    <p>Saturate ThreadPool with synthetic concurrent missions.</p>
+                    <button onclick="triggerStressTest()" id="test-btn" class="btn btn-danger">Execute High-Load Trigger</button>
+                </div>
+                <div class="card">
+                    <h3>System Maintenance</h3>
+                    <p>Purge local telemetry cache and history.</p>
+                    <button onclick="clearLogs()" class="btn btn-secondary">Clear Data Shards</button>
+                </div>
+            </div>
+        </section>
+    </main>
+</body>
+<script src="main.js"></script>
+</html>

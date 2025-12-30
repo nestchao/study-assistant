@@ -40,6 +40,9 @@ backend/vector_stores/
 backend/converted_txt_projects/
 backend/chrome_stealth_profile
 
+# C++
+backend_cpp/build/
+
 # ===================================================================
 # Node.js / Frontend
 # ===================================================================
