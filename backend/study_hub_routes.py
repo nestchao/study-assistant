@@ -80,19 +80,36 @@ def generate_note(text):
     3.  **Bold Keywords:** You **MUST** bold (`**text**`) all key terms, definitions, and important concepts. Do not output plain text for important parts.
     4.  **Dividers:** Insert a horizontal rule (`---`) between every major section to separate topics visually.
     5.  **Lists:** Use bullet points (`*` or `-`) for lists. Avoid long paragraphs.
-
-    ## 0. 🏛️ Preserve the Original Structure (The Golden Rule)
-    *   You MUST follow the structure, headings, and topic order of the original text **EXACTLY**. a
-    *   Do not merge or re-order sections. Simplify content **within** the original structure.
     
-    ## 1. 💡 Simplify and Shorten Content (Aggressive Simplification)
-    *   **Clarity Priority:** **REWRITE** dense, convoluted academic sentences into short, direct, simple statements. The resulting text must be immediately clear to a novice reader.
-    *   **Word Replacement:** Replace complex or academic terminology (e.g., 'paradigm,' 'utilization,' 'delineate') with simpler, everyday equivalents (e.g., 'model,' 'use,' 'show').
+   1. 💡 Simplify Language (NO Over-Shortening)
 
-    ## 2. ✍️ Annotate Simplified Words (Mandatory)
-    *   For every unfa  miliar word, you need to provide its Chinese translation after
-    *   Format: `unfamiliar word (中文翻译)`. 
-        *   Example: "The **widespread (普遍的)** nature of the **event (事件)**..."
+        Main Rule: DO NOT make the notes much shorter.
+        Keep almost the same length and detail as the original text.
+
+        Primary Task: Replace unfamiliar, technical, or academic words with simple, familiar words.
+
+        Sentence Structure: You may slightly rewrite sentences for clarity, but do not summarize heavily.
+
+        NO SKIPPING: Every point, example, and list must remain.
+
+    2. ✍️ Annotate Simplified Words (Mandatory)
+
+        For every unfamiliar, technical, or academic word, add a Chinese translation immediately after it.
+
+        Required format: word (中文翻译)
+
+        Example:
+        “The disaster (灾难) caused serious damage (损害) to the system (系统).”
+    
+    3. 📝 Short Explanations (When Helpful)
+
+        Add very short explanations only when a concept may be confusing.
+
+        Explanations must be 1 short sentence or a short phrase.
+
+        Do not repeat information or add new facts.
+
+        Purpose is understanding, not expansion.
 
     ## 3. 🎨 Formatting and Tone
     *   Use markdown headings (`#`, `##`) that match the original text's structure. Add a relevant **emoji** to each main heading.
@@ -114,8 +131,9 @@ def generate_note(text):
         
         response_text = browser_bridge.send_prompt(prompt)
         print("  ✅ Browser Bridge response received.")
+        clean_text = response_text.replace("code Markdown download", "")
         
-        return markdown.markdown(response_text, extensions=['tables'])
+        return markdown.markdown(clean_text, extensions=['tables'])
     except Exception as e:
         print(f"  ❌ Browser Bridge Note Generation Failed: {e}")
         raise
