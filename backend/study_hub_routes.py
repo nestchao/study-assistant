@@ -1,3 +1,4 @@
+# backend/study_hub_routes.py
 import re
 import markdown
 import html2text
@@ -9,11 +10,14 @@ import time
 from pathlib import Path 
 import google.api_core.exceptions
 from browser_bridge import browser_bridge
-from utils import extract_text, delete_collection, split_chunks
+# --- FIX: Added convert_pptx_to_pdf_windows to imports ---
+from utils import extract_text, delete_collection, split_chunks, convert_pptx_to_pdf_windows
 import redis
 from google.genai import types 
+import os
+import tempfile
 
-# --- 从配置文件导入 ---
+# --- FROM CONFIG ---
 from config import (
     STUDY_PROJECTS_COLLECTION,
     CODE_PROJECTS_COLLECTION,
@@ -68,49 +72,57 @@ def generate_note(text):
     prompt = f"""
     You are an expert study assistant. Your goal is to convert original study notes into "Simplified Notes" that are visually engaging and easy for a beginner to understand.
 
+    Your output must be in the **same language as the source text**. Follow these rules meticulously.
+
     ### 📝 CRITICAL OUTPUT RULE (The "Wrapper"):
     1.  **Markdown Syntax:** To preserve formatting, you **MUST** wrap your ENTIRE response inside a Markdown code block.
     2.  **Headings:** Use `#` for main titles and `##` for sections. Start every heading with an **Emoji**.
     3.  **Bold Keywords:** You **MUST** bold (`**text**`) all key terms, definitions, and important concepts. Do not output plain text for important parts.
     4.  **Dividers:** Insert a horizontal rule (`---`) between every major section to separate topics visually.
     5.  **Lists:** Use bullet points (`*` or `-`) for lists. Avoid long paragraphs.
+    
+   1. 💡 Simplify Language (NO Over-Shortening)
 
-    **1. Simplification Strategy (The "How"):**
-    *   **Rewrite:** Convert dense, academic sentences into short, direct statements.
-    *   **Vocabulary:** Replace complex words (e.g., 'utilization', 'paradigm') with simple, everyday equivalents (e.g., 'use', 'model').
-    *   **Tone:** Use a friendly, teaching tone.
+        Main Rule: DO NOT make the notes much shorter.
+        Keep almost the same length and detail as the original text.
 
-    **2. Annotation & Language Rules (The "Style"):**
-    *   **Main Text:** Keep the main text in the **same language** as the source (e.g., if input is English, output is English).
-    *   **Inline Annotations:** You must identify **any complex word**, **academic term**, or **difficult vocabulary** (not just key concepts). Immediately follow these words with parentheses containing:
-        1.  The **Chinese translation**.
-        2.  A **relevant emoji**.
-        *   *Format:* `Word (Chinese Translation Emoji)`
-        *   *Example:* `It requires calculation (计算 🧮) and logic (逻辑 🧠).`
+        Primary Task: Replace unfamiliar, technical, or academic words with simple, familiar words.
 
-    **3. Visual Formatting:**
+        Sentence Structure: You may slightly rewrite sentences for clarity, but do not summarize heavily.
+
+        NO SKIPPING: Every point, example, and list must remain.
+
+    2. ✍️ Annotate Simplified Words (Mandatory)
+
+        For every unfamiliar, technical, or academic word, add a Chinese translation immediately after it.
+
+        Required format: word (中文翻译)
+
+        Example:
+        “The disaster (灾难) caused serious damage (损害) to the system (系统).”
+    
+    3. 📝 Short Explanations (When Helpful)
+
+        Add very short explanations only when a concept may be confusing.
+
+        Explanations must be 1 short sentence or a short phrase.
+
+        Do not repeat information or add new facts.
+
+        Purpose is understanding, not expansion.
+
+    ## 3. 🎨 Formatting and Tone
     *   Use markdown headings (`#`, `##`) that match the original text's structure. Add a relevant **emoji** to each main heading.
-    *   **Layout:** Use bullet points for lists to make them easy to scan.
-    *   **Bolding:** **Bold** the key terms that are being defined.
+    *   Use **bold text** to emphasize key simplified concepts.
+    *   Maintain a clear, direct, and helpful academic tone.
 
-    **4. 🧠 Memory Aid and Accuracy:**
+    ## 4. 🧠 Memory Aid and Accuracy
     *   Cover all major topics accurately. Do not skip sections or add new information.
     *   At the end of each major section, create a short, creative **Mnemonic Tip (记忆技巧)** to aid recall.
 
-    **Example Input:**
-    "Algorithm analysis helps us to determine which algorithm is most efficient in terms of time and space consumed."
-
-    **Example Output:**
-    🔍 **Algorithm Analysis (算法分析)**
-    Algorithm analysis helps us find which method is best in terms of:
-    *   **Time used** (时间消耗 ⏳)
-    *   **Space used** (空间消耗 💾)
-
-    ***
-
     **Please generate the Simplified Note for the following text:**
 
-    {text}
+    {text} 
     """
     try:
         # --- DIRECT BROWSER BRIDGE USAGE ---
@@ -119,8 +131,9 @@ def generate_note(text):
         
         response_text = browser_bridge.send_prompt(prompt)
         print("  ✅ Browser Bridge response received.")
+        clean_text = response_text.replace("code Markdown download", "")
         
-        return markdown.markdown(response_text, extensions=['tables'])
+        return markdown.markdown(clean_text, extensions=['tables'])
     except Exception as e:
         print(f"  ❌ Browser Bridge Note Generation Failed: {e}")
         raise
@@ -225,19 +238,11 @@ def get_sources(project_id):
 def upload_source(project_id):
     print(f"\n📁 UPLOAD REQUEST for project: {project_id}")
     
-    # --- DEBUGGING PRINT ---
-    print(f"  > Request Files Keys: {list(request.files.keys())}")
-    # -----------------------
-
-    # Check if 'pdfs' exists OR if 'pdfs[]' exists (sometimes frameworks add brackets)
     if 'pdfs' not in request.files and not request.files:
-         print("  ❌ Error: No files found in request.files")
          return jsonify({"error": "No files provided", "success": False}), 400
     
-    # Get files using getlist. If 'pdfs' is missing, try getting values from the first key found
     files = request.files.getlist('pdfs')
     if not files and request.files:
-        # Fallback: grab files from whatever key was sent
         first_key = list(request.files.keys())[0]
         files = request.files.getlist(first_key)
 
@@ -245,38 +250,58 @@ def upload_source(project_id):
         return jsonify({"error": "No files selected", "success": False}), 400
     
     processed, errors = [], []
+    
+    # Ensure bridge is ready
+    browser_bridge.start()
+
     for file in files:
         filename = file.filename
-        ext = filename.split('.')[-1].lower()
-        safe_id = re.sub(r'[.#$/[\]]', '_', filename) # Make filename Firestore-safe
-        print(f"\n🔄 Processing '{filename}'...")
+        ext = "." + filename.split('.')[-1].lower()
+        safe_id = re.sub(r'[.#$/[\]]', '_', filename)
+        print(f"\n🔄 Processing '{filename}' via AI Studio Extraction...")
+
+        temp_path = None
+        pdf_path = None
+
         try:
-            file.stream.seek(0)
+            # 1. Save uploaded file to temp
+            with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+                file.stream.seek(0)
+                file.save(tmp.name)
+                temp_path = tmp.name
 
-            if ext == 'pdf':
-                text = extract_text(file.stream) # Your existing PDF function
-            elif ext == 'pptx':
-                from utils import extract_text_from_pptx
-                text = extract_text_from_pptx(file.stream)
-            else:
-                errors.append({"filename": filename, "error": f"Unsupported extension: {ext}"})
-                continue
+            target_upload_path = temp_path
 
-            if not text.strip():
-                errors.append({"filename": filename, "error": "No text could be extracted."})
-                continue
+            # 2. Handle PPTX -> PDF Conversion
+            if ext == '.pptx':
+                print("    👉 Detected PPTX. Converting to PDF for AI Studio...")
+                pdf_path = temp_path.replace(".pptx", ".pdf")
+                success = convert_pptx_to_pdf_windows(temp_path, pdf_path)
+                if success and os.path.exists(pdf_path):
+                    target_upload_path = pdf_path
+                    print("    ✅ Conversion successful.")
+                else:
+                    raise Exception("PPTX to PDF conversion failed.")
 
+            # 3. Call Browser Bridge to Extract Text
+            print(f"    🤖 Sending {os.path.basename(target_upload_path)} to AI Studio for extraction...")
+            extracted_text = browser_bridge.extract_text_from_file(target_upload_path)
+
+            if not extracted_text or "Error:" in extracted_text[:20]:
+                raise Exception(f"AI Extraction Failed: {extracted_text}")
+
+            print(f"    ✅ Text Extracted: {len(extracted_text)} characters.")
+
+            # 4. Save Metadata to Firestore
             source_ref = db.collection(STUDY_PROJECTS_COLLECTION).document(project_id).collection('sources').document(safe_id)
             source_ref.set({
                 'filename': filename, 
                 'timestamp': firestore.SERVER_TIMESTAMP, 
-                'character_count': len(text)
+                'character_count': len(extracted_text)
             })
             
-            # CRITICAL: Save original text chunks FIRST (before note generation)
-            # This ensures regeneration will work even if note generation fails
-            print(f"  💾 Saving original text chunks...")
-            text_chunks = split_chunks(text)
+            # 5. Save Original Text Chunks
+            text_chunks = split_chunks(extracted_text)
             for i in range(0, len(text_chunks), 100):
                 batch = text_chunks[i:i+100]
                 page_num = i // 100
@@ -284,13 +309,11 @@ def upload_source(project_id):
                     'chunks': batch, 
                     'order': page_num
                 })
-            print(f"  ✅ Saved {len(text_chunks)} chunks in {(len(text_chunks) + 99) // 100} pages")
             
-            # Now try to generate the note (this can fail without breaking everything)
+            # 6. Generate Note (Using the extracted text)
             try:
-                note_html = generate_note(text)
+                note_html = generate_note(extracted_text)
                 
-                # Save note in chunks to avoid Firestore document size limits
                 chunk_size = 900000 
                 for i in range(0, len(note_html), chunk_size):
                     chunk = note_html[i:i+chunk_size]
@@ -299,25 +322,31 @@ def upload_source(project_id):
                         'html': chunk, 
                         'order': page_num
                     })
-                print(f"  ✅ Generated and saved study note")
+                print(f"    ✅ Generated and saved study note")
                 
             except Exception as note_error:
-                # If note generation fails, log it but don't fail the entire upload
-                print(f"  ⚠️ Note generation failed (source still saved): {note_error}")
-                # Save a placeholder note page
+                print(f"    ⚠️ Note generation failed: {note_error}")
                 source_ref.collection('note_pages').document('page_0').set({
-                    'html': '<p>Note generation failed. Please try regenerating the note.</p>',
+                    'html': f'<p>Note generation failed: {note_error}</p>',
                     'order': 0
                 })
             
             processed.append({"filename": filename, "id": safe_id})
-            print(f"✅ SUCCESS: '{filename}' processed.")
             
         except Exception as e:
             import traceback
             print(f"❌ CRITICAL ERROR processing '{filename}': {e}")
             traceback.print_exc()
             errors.append({"filename": filename, "error": str(e)})
+        
+        finally:
+            # Cleanup Temps
+            try:
+                if temp_path and os.path.exists(temp_path):
+                    os.remove(temp_path)
+                if pdf_path and os.path.exists(pdf_path):
+                    os.remove(pdf_path)
+            except: pass
 
     return jsonify({"success": len(processed) > 0, "processed": processed, "errors": errors})
 
@@ -466,7 +495,12 @@ def ask_chatbot(project_id):
         
         # --- CLEANING LOGIC ---
         # We strip the wrapper we asked for, leaving the raw Markdown behind.
-        clean_answer = raw_answer
+        clean_answer = raw_answer.strip()
+        clean_answer = clean_answer.replace("code Markdown download", "")
+        clean_answer = clean_answer.replace("code\nMarkdown\ndownload", "")
+        clean_answer = re.sub(r'^```[a-zA-Z]*\s*', '', clean_answer.strip())
+        if clean_answer.endswith("```"):
+            clean_answer = clean_answer[:-3].strip()
         
         # Remove the opening ```markdown or ```
         if "```markdown" in clean_answer:
@@ -729,12 +763,16 @@ def generate_answer_from_context():
 
 @study_hub_bp.route('/bridge/get-models', methods=['GET'])
 def get_bridge_models():
-    """Fetches available Gemini models from AI Studio via Bridge."""
+    """Fetches available Gemini models AND the active one from AI Studio."""
     try:
-        models = browser_bridge.get_available_models()
-        if isinstance(models, str) and models.startswith("Bridge Error"):
-             return jsonify({"error": models, "models": []}), 500
-        return jsonify({"models": models})
+        # We assume you added get_bridge_state() to browser_bridge.py 
+        # as suggested in the previous step
+        state = browser_bridge.get_bridge_state() 
+        
+        return jsonify({
+            "models": state.get("models", []),
+            "current_active": state.get("active") # This is what we need!
+        })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

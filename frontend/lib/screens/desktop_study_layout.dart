@@ -256,6 +256,17 @@ class _DesktopStudyLayoutState extends State<DesktopStudyLayout> {
                   label: const Text("Copy Note"),
                 ),
               ),
+              const SizedBox(width: 8),
+
+              // 3. NEW: PDF Export Button
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () => p.exportCurrentNoteToPdf(ctx),
+                  icon: const Icon(Icons.picture_as_pdf, size: 18),
+                  label: const Text("PDF", style: TextStyle(fontSize: 12)),
+                  style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8)),
+                ),
+              ),
             ],
           ),
 
