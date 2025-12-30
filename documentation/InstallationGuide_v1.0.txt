@@ -1,0 +1,139 @@
+Synapse-Flow Project Setup Guide
+================================
+
+1. INFRASTRUCTURE: THE HULL (Docker, Redis, RabbitMQ)
+----------------------------------------------------
+The system uses high-speed messaging and caching. Docker ensures consistent environments ("Zero Drift").
+
+Prerequisites
+- Docker Desktop (with WSL2 backend enabled on Windows)
+- Git (for cloning submodules)
+
+Deployment
+Create a file named "docker-compose.yml" in the project root with the following content:
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+    restart: always
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports:
+      - "5672:5672"   # Messaging port
+      - "15672:15672" # Management UI
+    restart: always
+
+Launch Command:
+docker-compose up -d
+
+
+2. C++ ENGINE: THE BOOSTER (AI & Vector Retrieval)
+-------------------------------------------------
+High-precision C++20 engine using HNSW and Tree-sitter.
+
+Prerequisites
+- Visual Studio 2022 (with Desktop C++ workload)
+- vcpkg (installed at D:/vcpkg)
+- CMake 3.21 or newer
+
+Build Protocol (PowerShell)
+cd backend_cpp
+
+# 1. Remove old build cache
+if (Test-Path build) { Remove-Item -Recurse -Force build }
+
+# 2. Configure with vcpkg toolchain
+cmake -B build -S . -DCMAKE_TOOLCHAIN_FILE="D:/vcpkg/scripts/buildsystems/vcpkg.cmake" -DCMAKE_BUILD_TYPE=Release
+
+# 3. Build the executables
+cmake --build build --config Release
+
+# 4. Verify output
+ls build/Release/*.exe
+# Expected files: agent_service.exe, code_assistance_server.exe
+
+
+3. PYTHON BACKEND: THE AVIONICS (Flask, Celery, OCR)
+---------------------------------------------------
+Handles multimodal parsing, PDF processing, and async tasks.
+
+Prerequisites
+- Python 3.11 or newer
+- Tesseract OCR (installed at C:\Program Files\Tesseract-OCR)
+
+Installation (Command Prompt or PowerShell)
+cd backend
+python -m venv venv
+.\venv\Scripts\activate
+
+# Install dependencies
+pip install -r requirements.txt
+# Key packages: flask, celery, redis, firebase-admin, google-genai, playwright
+
+Execution
+Terminal 1 - API Server:
+python app.py
+
+Terminal 2 - Worker:
+celery -A tasks worker --loglevel=info -P solo
+
+
+4. FLUTTER FRONTEND: COMMAND CENTER (UI/UX)
+------------------------------------------
+Cross-platform interface for mobile and desktop.
+
+Prerequisites
+- Flutter SDK (stable channel)
+- Android Studio or VS Code with Flutter plugins
+
+Installation
+cd frontend
+flutter pub get
+
+Execution
+Windows Desktop:
+flutter run -d windows
+
+Web (for testing):
+flutter run -d chrome --web-renderer canvaskit
+
+
+5. TESTING SUITE: THE PROBE (gRPC & Logic Verification)
+-------------------------------------------------------
+Python scripts to verify the C++ engine's capabilities.
+
+Installation
+cd backend_cpp/test
+python -m venv venv
+.\venv\Scripts\activate
+pip install grpcio grpcio-tools termcolor requests
+
+Calibration Sequence
+1. Rebuild protobuf stubs:
+   python rebuild_protos.py
+
+2. Verify connection to C++ service:
+   python probe_sync.py
+
+3. Run full test suite:
+   python flight_test_suite.py
+
+
+6. GLOBAL ASSET CONFIGURATION
+-----------------------------
+Critical configuration files required for operation.
+
+File: backend_cpp/keys.json
+Location: Must be placed in build/Release/ (CMake copies it automatically during build).
+
+Example content:
+{
+  "keys": ["AIzaSy...your_gemini_key_here..."],
+  "primary": "gemini-1.5-flash",
+  "serper_key": "your_serper_api_key"
+}
+
+Folder: backend_cpp/www/
+Contains dashboard web assets. CMake automatically copies this folder to the deployment directory during build.

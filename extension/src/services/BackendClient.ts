@@ -43,21 +43,22 @@ export class BackendClient {
         }
     }
 
-    async registerCodeProject(projectId: string, workspacePath: string) {
-        const config = vscode.workspace.getConfiguration('studyAssistant');
-        
-        // We don't just send a list; we send a structured FilterConfig
+    async registerCodeProject(
+        projectId: string, 
+        workspacePath: string, 
+        extensions: string[], 
+        ignoredPaths: string[], 
+        includedPaths: string[]
+    ) {
         const filterConfig = {
             local_path: workspacePath,
-            allowed_extensions: config.get('allowedExtensions'),
-            // 🔥 ELITE LOGIC: Support for "Implicit Ignores" but "Explicit Exceptions"
-            ignore_logic: {
-                blacklist: config.get('ignoredPaths'), // e.g. ["node_modules", ".git"]
-                whitelist: config.get('includedPaths')  // e.g. ["node_modules/special-lib"]
-            }
+            allowed_extensions: extensions,
+            // Aligned with C++ SyncService FilterConfig spec
+            ignored_paths: ignoredPaths,
+            included_paths: includedPaths
         };
 
-        await cppClient.post(`/sync/register/${projectId}`, filterConfig);
+        return await cppClient.post(`/sync/register/${projectId}`, filterConfig);
     }
 
     async syncCodeProject(projectId: string, workspacePath: string): Promise<any> {

@@ -1,0 +1,198 @@
+Main Mission: The Main Direction (Revised)
+Phase 1: Stabilization & Diagnostic Orbit (Current)
+
+Objective: Zero-leak gRPC/REST bridge and reliable tool-calling baseline.
+
+Critical Tasks:
+
+Strict Schema Enforcement: Eliminate tool hallucinations via "Negative Constraint" prompting.
+
+Telemetry Stabilization: Ensure the Dashboard reports real-time latency for HNSW lookups.
+
+Thermal Cooldown Logic: Implement C++ level handling for API rate limits (429s).
+
+Continuously increase the available tools: 
+i) web searching
+ii) partial code execution and review 
+iii) web testing automation tools 
+iv) image analysing pipeline (take photo -> upload to ai -> analysis & return data like json)
+v) video recording tools (optional, not necessary) 
+
+Success Criteria: Agent completes a 5-step reasoning task with 0% tool-call syntax errors.
+
+Phase 2: Mutli-dimension expandable dashboard
+
+Objective: Build a expandable dashboard that can track 70~100 data including but not limited to CPU, memory usage, GPU, vector, and node.
+
+Critical Tasks:
+
+Ensure it is compatible, backward with future task and upgrade such as dynamic tools injection testing without reduce the system performance.
+
+Add navigation (multiple page) for different section.
+
+Provide better debugging and testing approach.  
+
+Custom benchmark setting for better UI (red-yellow-green hint)
+
+Phase 3: High-Precision Safety Engine (Acceleration & Guardrails)
+
+Objective: Moving from raw text to AST awareness with 100% write-safety.
+
+Critical Tasks:
+
+Atomic Journaling (NEW PRIORITY): Implement the .journal transaction system. Every FileSurgicalTool operation must be reversible.
+
+Tree-sitter Integration: Implement C++ parsers for Function/Class-level indexing.
+
+E-Graph Implementation: Deploy the Exponential Decay scoring for structural discovery.
+
+Transport-Agnostic Routing: Design the AI routing layer to work over HTTP now but switch to IPC later without a rewrite.
+
+Success Criteria: <1ms search latency on 10k nodes; 100% recovery after simulated crash during a file write.
+
+Phase 4: Cognitive Agency (Intelligence & Reasoning)
+
+Objective: Multi-step research missions and logical self-correction.
+
+Critical Tasks:
+
+Internal Monologue 2.0: Implement "Step-back reasoning" logs for failed tool attempts.
+
+Multi-Model Switching: Route architectural queries to Gemini Pro and simple searches to Flash Lite.
+
+Early IPC Prototyping: Launch the first local socket/pipe for telemetry data to reduce REST overhead.
+
+Success Criteria: Agent resolves "find and fix" missions with >80% success without user hints.
+
+Phase 5: Persistence & Elite UX (The SpaceX Finish)
+
+Objective: Sub-50ms "Ghost Text" feel and session-to-session memory.
+
+Critical Tasks:
+
+Full IPC Migration: Move all Extension-to-Backend traffic to Named Pipes/Unix Sockets.
+
+Experience Vault Deployment: Activate the HNSW-backed memory for accepted/rejected patterns.
+
+Speculative Ghost Text: Use prefix-caching to predict completions during network wait.
+
+Success Criteria: <50ms end-to-end latency for inline completions.
+
+Branch Missions (The Tactical Triggers)
+BM 1: Input Token Overflow (Sub-Agent Activation)
+
+Trigger: Prompt size > 80% of window OR reasoning step > 8s.
+
+Action: Split into "Searcher" and "Writer" specialized agents.
+
+BM 2: Structural Complexity (Context Manager)
+
+Trigger: E-Graph returns too much "shallow" noise (utils) vs. "deep" logic.
+
+Action: Implement Tiered Context: Full Code (Seed) → Signatures (1-hop) → Names (2-hop).
+
+BM 3: I/O Bottleneck (Binary Buffer)
+
+Trigger: Ghost Text latency > 150ms.
+
+Action: Implement custom Binary Shared Memory for direct C++ to Extension streaming.
+
+BM 4: Precision Ceiling (Cross-Encoder Re-Ranking)
+
+Trigger: HNSW + E-Graph acceptance rate < 75%.
+
+Action: Dock the Cross-Encoder (e.g., ms-marco-MiniLM) for final candidate re-ranking.
+
+BM 5: Negative Learning (Rejection Vault)
+
+Trigger: User repeatedly rejects specific AI patterns.
+
+Action: Vector-store rejected solutions; add "Negative Constraints" to prompts for similar future queries.
+
+The "Reject if Better Possible" Command Guidelines
+
+Reject Static Loops: In Phase 2, the should_index linear search must be replaced by a Prefix Trie.
+
+Reject Passive Telemetry: The Dashboard must be able to interrupt a runaway Agent loop from the UI.
+
+Reject Unsigned Payload: All gRPC messages between the Python and C++ boosters should include a simple checksum to prevent data corruption during high-concurrency syncs.
+
+Status: Revised Plan is LOCKED.
+Next Action: Stabilize Phase 1 Telemetry and prepare Phase 2 AST Parser.
+
+Optimization Mission:
+
+Synapse-AIF: The Optimization Manifest
+Layer 1: Computational Parallelism (The "Boosters")
+
+OpenMP (Multi-Core Execution):
+
+Usage: Parallelize the recursive_scan and the HNSW::add_nodes process.
+
+Elite Spec: Use #pragma omp parallel for during the initial project sync to hash and parse files across all CPU cores.
+
+SIMD / AVX-512 (Vector Math):
+
+Usage: Accelerate the Cosine Similarity math in the RetrievalEngine.
+
+Elite Spec: Ensure the FAISS index uses CPU-intrinsic optimizations (AVX2/AVX-512) to process vector distances in batches of 8 or 16 simultaneously.
+
+C++20 Coroutines (Non-blocking Orchestration):
+
+Usage: Handle the wait-time for the Gemini API and Tool I/O.
+
+Elite Spec: The AgentExecutor should co_await the Gemini response, freeing the CPU to handle background indexing while the "Brain" is thinking.
+
+Layer 2: Memory & Data Architecture (The "Airframe")
+
+PMR (Polymorphic Memory Resources):
+
+Usage: Eliminate heap-allocation overhead during Tree-sitter AST Parsing.
+
+Elite Spec: Use a std::pmr::monotonic_buffer_resource (Arena) for each file. All temporary AST nodes and string-fragments are allocated in this stack-based arena. Deallocation is 𝑂(1).
+
+DoD (Data-Oriented Design / SoA):
+
+Usage: Refactor the HNSW storage.
+
+Elite Spec: Transition from vector<CodeNode> (AoS) to a Structure of Arrays. Store embeddings in a flat, cache-aligned memory block. This ensures that when the CPU searches for a vector, it never loads irrelevant strings into the L1 cache.
+
+Path Hashing (Integer Logic):
+
+Usage: Accelerated filtering in should_index.
+
+Elite Spec: Convert all blacklist/whitelist paths into uint64_t hashes using the FNV-1a algorithm at startup. Replace O(N) string comparisons with O(1) integer checks.
+
+Layer 3: Syntax & Optimizer Hints (The "Flight Software")
+
+constexpr / consteval:
+
+Usage: Move all E-Graph scoring math (Alpha decay, complexity weights) to compile-time.
+
+string_view & noexcept:
+
+Usage: Pass file paths without copying (string_view) and ensure math functions are noexcept to skip stack-unwinding code.
+
+explicit & [[nodiscard]]:
+
+Usage: Enforce strict object creation and ensure the Agent never "ignores" a retrieval result.
+
+Layer 4: External Engine Integration (The "Payload")
+
+Gemini 2.0 API (The Brain):
+
+Integration: The C++ engine acts as the "Surgical Context Preparer." By using the optimizations above, we reduce the "Pre-Prompt" latency (the time it takes to find code) to near zero.
+
+CUDA (The Heavy Lift - Conditional):
+
+Trigger: Switch from Gemini Cloud to Local LLM (DeepSeek/Llama) or when the Cross-Encoder re-ranker is activated.
+
+Usage: Only for massive matrix multiplications that exceed CPU throughput.
+
+Implementation Plan: Tactical Execution
+Milestone	Optimization Tech	Goal
+Phase 2.1	OpenMP + Path Hashing	Parallelize the folder scan. Reduce filter time from 200ms to <10ms.
+Phase 2.2	PMR + Tree-sitter	Integrate AST parsing with Arena allocation. Index 10k functions/classes in <5s.
+Phase 2.3	SoA + SIMD	Refactor HNSW storage for cache-alignment. Hit <1ms retrieval.
+Phase 3.1	C++20 Coroutines	Move Agent tool-dispatch to async/await. Handle 100% concurrent I/O.
+Phase 4.1	CUDA + Local Model	(Branch Mission) Launch local inference booster for 100% privacy mode.

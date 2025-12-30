@@ -30,5 +30,8 @@ cd ..\..\..\
 cd backend_cpp/build; cmake --build . --config Release
 cd Release; ./code_assistance_server.exe
 
-cd D:\Projects\ali_study_assistance\study-assistant\backend_cpp\build; cmake --build . --config Release
+clear; cd D:\Projects\ali_study_assistance\Synapse-Flow\backend_cpp\build; cmake --build . --config Release
 cd Release; ./code_assistance_server.exe
+
+clear; cd D:\Projects\ali_study_assistance\Synapse-Flow\backend_cpp\build\Release; ./agent_service.exe
+

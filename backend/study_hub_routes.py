@@ -91,17 +91,8 @@ def generate_note(text):
         Sentence Structure: You may slightly rewrite sentences for clarity, but do not summarize heavily.
 
         NO SKIPPING: Every point, example, and list must remain.
-
-    2. ✍️ Annotate Simplified Words (Mandatory)
-
-        For every unfamiliar, technical, or academic word, add a Chinese translation immediately after it.
-
-        Required format: word (中文翻译)
-
-        Example:
-        “The disaster (灾难) caused serious damage (损害) to the system (系统).”
     
-    3. 📝 Short Explanations (When Helpful)
+    2 📝 Short Explanations (When Helpful)
 
         Add very short explanations only when a concept may be confusing.
 
@@ -119,6 +110,7 @@ def generate_note(text):
     ## 4. 🧠 Memory Aid and Accuracy
     *   Cover all major topics accurately. Do not skip sections or add new information.
     *   At the end of each major section, create a short, creative **Mnemonic Tip (记忆技巧)** to aid recall.
+    *   Only for **Mnemonic Tip (记忆技巧)**, add a Chinese translation immediately after it
 
     **Please generate the Simplified Note for the following text:**
 

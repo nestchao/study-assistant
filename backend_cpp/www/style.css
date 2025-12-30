@@ -1,0 +1,191 @@
+:root {
+    --bg: #0b0e14;
+    --nav-bg: #11141b;
+    --card-bg: #1c1f26;
+    --border: #2d3139;
+    --text-primary: #e6edf3;
+    --text-muted: #8b949e;
+    --accent: #58a6ff;
+    --green: #3fb950;
+    --red: #f85149;
+    --yellow: #d29922;
+}
+
+* { box-sizing: border-box; }
+body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text-primary);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    display: flex;
+    height: 100vh;
+    overflow: hidden;
+}
+
+/* Sidebar */
+.sidebar {
+    width: 240px;
+    background: var(--nav-bg);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    padding: 20px 0;
+}
+
+.logo {
+    padding: 0 25px 30px;
+    font-size: 18px;
+    font-weight: 800;
+    letter-spacing: 2px;
+    color: var(--accent);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.nav-links {
+    list-style: none;
+    padding: 0;
+    flex-grow: 1;
+}
+
+.nav-links li {
+    padding: 12px 25px;
+    cursor: pointer;
+    color: var(--text-muted);
+    transition: 0.2s;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.nav-links li:hover, .nav-links li.active {
+    background: #1f242c;
+    color: var(--text-primary);
+}
+
+.nav-links li.active {
+    border-right: 3px solid var(--accent);
+}
+
+/* Main Content */
+.content {
+    flex-grow: 1;
+    padding: 30px;
+    overflow-y: auto;
+}
+
+.page { display: none; animation: fadeIn 0.3s ease-in-out; }
+.page.active { display: block; }
+
+@keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+
+/* Cards & Stats */
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 20px;
+    margin-top: 20px;
+}
+
+.card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+}
+
+.gauge-wrap {
+    position: relative;
+    width: 120px;
+    height: 120px;
+    margin: 10px auto;
+}
+
+.gauge-svg { transform: rotate(-90deg); }
+.gauge-svg circle { fill: none; stroke-width: 8; }
+.gauge-svg .bg { stroke: #2d3139; }
+.gauge-svg .meter { 
+    stroke: var(--accent); 
+    stroke-dasharray: 283; 
+    stroke-dashoffset: 283; 
+    transition: stroke-dashoffset 1s ease-out;
+}
+
+#cpu-text, #ram-text {
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    font-weight: bold;
+}
+
+/* Table Style */
+.trace-table-container {
+    background: var(--card-bg);
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    margin-top: 20px;
+}
+
+.trace-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.trace-table th {
+    text-align: left;
+    padding: 15px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text-muted);
+    font-size: 12px;
+    text-transform: uppercase;
+}
+
+.trace-table td {
+    padding: 12px 15px;
+    border-bottom: 1px solid #2d313933;
+    font-size: 13px;
+}
+
+.phase-pill {
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: bold;
+    background: #58a6ff33;
+    color: var(--accent);
+}
+
+/* History Split View */
+.split-view { display: flex; gap: 20px; height: 70vh; }
+.log-explorer { width: 350px; }
+.inspector-panel { flex-grow: 1; background: var(--nav-bg); border-radius: 12px; border: 1px solid var(--border); padding: 20px; }
+
+.scroll-list {
+    overflow-y: auto;
+    height: calc(100% - 50px);
+}
+
+.log-item {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    padding: 12px;
+    margin-bottom: 10px;
+    border-radius: 8px;
+    cursor: pointer;
+}
+
+.placeholder { text-align: center; color: var(--text-muted); margin-top: 100px; }
+.placeholder i { font-size: 40px; margin-bottom: 10px; }
+
+.hidden { display: none; }
+
+.btn {
+    padding: 10px 20px;
+    border-radius: 6px;
+    border: none;
+    cursor: pointer;
+    font-weight: bold;
+}
+.btn-danger { background: var(--red); color: white; }
+.btn-secondary { background: #30363d; color: white; }

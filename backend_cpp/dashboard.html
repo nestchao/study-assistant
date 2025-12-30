@@ -58,6 +58,9 @@
 
         /* STATUS PULSE */
         .status-pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--green); display: inline-block; box-shadow: 0 0 8px var(--green); animation: pulse 2s infinite; }
+
+        /* Phase specific pulse for Web Search */
+        .WEB_SEARCHING { border-color: #00f2ff !important; color: #00f2ff; box-shadow: 0 0 10px #00f2ff33; }
         @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.3; } 100% { opacity: 1; } }
     </style>
 </head>
@@ -114,6 +117,21 @@
             <div id="inspector" class="detail-box">
                 <div style="text-align: center; color: #444; margin-top: 100px;">Select entry to inspect context.</div>
             </div>
+        </div>
+    </div>
+
+    <div class="panel" id="test-control">
+        <h2>Mission Control - Load Testing</h2>
+        <div style="display: flex; gap: 10px;">
+            <button onclick="triggerStressTest()" id="test-btn" style="background: var(--red); color: white; border: none; padding: 10px; border-radius: 4px; cursor: pointer;">
+                🔥 TRIGGER 10x STRESS LOAD
+            </button>
+            <button onclick="clearLogs()" style="background: #333; color: white; border: none; padding: 10px; border-radius: 4px;">
+                🧹 CLEAR TELEMETRY
+            </button>
+        </div>
+        <div id="test-results" style="margin-top: 15px; font-size: 11px; font-family: monospace;">
+            Waiting for test ignition...
         </div>
     </div>
 
@@ -190,6 +208,23 @@
                     </div>
                 </div>
             `).join('');
+        }
+
+        async function triggerStressTest() {
+            const btn = document.getElementById('test-btn');
+            btn.innerText = "🚨 SIMULATING RE-ENTRY...";
+            btn.disabled = true;
+            
+            // Calls the C++ Backend to simulate high-concurrency tool usage
+            const res = await fetch('/api/admin/stress_test', { method: 'POST' });
+            const data = await res.json();
+            
+            document.getElementById('test-results').innerHTML = 
+                `<div style="color:var(--green)">SUCCESS: ${data.passed} missions launched.</div>` +
+                `<div style="color:var(--yellow)">Jitter: ${data.jitter_ms}ms</div>`;
+            
+            btn.innerText = "🔥 TRIGGER 10x STRESS LOAD";
+            btn.disabled = false;
         }
 
         function inspect(log) {
