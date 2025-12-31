@@ -84,7 +84,7 @@ def generate_note(text):
     print("  🤖 Generating AI study note via Browser Bridge...")
     prompt = f"""
     You are given an original study note.
-    Your task is to rewrite it into a simplified version for students.
+    Your task is to rewrite it into a simplified version for students but do not skip any point or explanation from the original note.
 
     📝 CRITICAL OUTPUT RULE (The "Wrapper"):
     1. Markdown Syntax: You MUST wrap your ENTIRE output inside ONE Markdown code block.
@@ -108,19 +108,15 @@ def generate_note(text):
 
     1. Do NOT skip any point or explanation from the original note.
 
-    2. Simplify sentences and use clear, easy word.
+    2. Shorten the sentence, and change unfamiliar word to more common words, but do not skip any points or explanations.
 
-    3. Shorten the sentence, and change unfamiliar word to more common words, but do not skip any points or explanations.
+    3. The output language must be the same as the source note (do not translate the whole note).
 
-    4. The output language must be the same as the source note (do not translate the whole note).
+    4. For any unfamiliar word, add a Chinese explanation (中文解释) right after it in brackets.
 
-    5. For any unfamiliar word, add a Chinese explanation (中文解释) right after it in brackets.
+    5. Add some emojis to make the note friendly (do not overuse).
 
-    6. You may add short explanations if they help students understand.
-
-    7. Add some emojis to make the note friendly (do not overuse).
-
-    8. After each section, add a Mnemonic Tip to help students remember.
+    6. After each section, add a Mnemonic Tip to help students remember.
 
     🎯 Goal:
 
