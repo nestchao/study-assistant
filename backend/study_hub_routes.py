@@ -65,62 +65,73 @@ def get_original_text(project_id, source_id):
     except Exception as e:
         print(f"  ❌ An error occurred while fetching original text: {e}")
         return "" # Return empty on failure
+"""
+    🛑 ABSOLUTE OUTPUT RULE (MUST FOLLOW):
 
+    - Your ENTIRE response MUST be inside ONE Markdown code block.
+    - NOTHING is allowed outside the code block.
+    - No explanations, no comments, no greetings outside the code block.
+    - If any text appears outside the code block, the answer is WRONG.
+    - DO NOT use triple backticks (```) anywhere inside the note.
+    - If the original note contains code:
+        - Rewrite the code as plain text
+        - Indent it with spaces OR
+        - Put it under a bullet point
+        - Label it clearly as **Code Example (Plain Text)**
+        """
 def generate_note(text):
     """Generates a simplified study note using the Browser Bridge (Direct)."""
     print("  🤖 Generating AI study note via Browser Bridge...")
     prompt = f"""
-    You are an expert study assistant. Your goal is to convert original study notes into "Simplified Notes" that are visually engaging and easy for a beginner to understand.
+    You are given an original study note.
+    Your task is to rewrite it into a simplified version for students.
 
-    Your output must be in the **same language as the source text**. Follow these rules meticulously.
+    📝 CRITICAL OUTPUT RULE (The "Wrapper"):
+    1. Markdown Syntax: You MUST wrap your ENTIRE output inside ONE Markdown code block.
+        - If the original note contains code:
+            - Indent it with spaces
 
-    ### 📝 CRITICAL OUTPUT RULE (The "Wrapper"):
-    1.  **Markdown Syntax:** To preserve formatting, you **MUST** wrap your ENTIRE response inside a Markdown code block.
-    2.  **Headings:** Use `#` for main titles and `##` for sections. Start every heading with an **Emoji**.
-    3.  **Bold Keywords:** You **MUST** bold (`**text**`) all key terms, definitions, and important concepts. Do not output plain text for important parts.
-    4.  **Dividers:** Insert a horizontal rule (`---`) between every major section to separate topics visually.
-    5.  **Lists:** Use bullet points (`*` or `-`) for lists. Avoid long paragraphs.
+    2. Headings:
+        - Use # for main titles
+        - Use ## for sections
     
-   1. 💡 Simplify Language (NO Over-Shortening)
+    3. Bold Keywords:
+        - You MUST bold (**text**) all key terms, definitions, and important concepts
 
-        Main Rule: DO NOT make the notes much shorter.
-        Keep almost the same length and detail as the original text.
+    4. Dividers:
+        - Insert a horizontal rule (---) between every major section
 
-        Primary Task: Replace unfamiliar, technical, or academic words with simple, familiar words.
+    5. Lists:
+        - Use bullet points (*)
 
-        Sentence Structure: You may slightly rewrite sentences for clarity, but do not summarize heavily.
+    ✏️ Content Rules:
 
-        NO SKIPPING: Every point, example, and list must remain.
+    1. Do NOT skip any point or explanation from the original note.
 
-    2. ✍️ Annotate Simplified Words (Mandatory)
+    2. Simplify sentences and use clear, easy word.
 
-        For every unfamiliar, technical, or academic word, add a Chinese translation immediately after it.
+    3. Shorten the sentence, and change unfamiliar word to more common words, but do not skip any points or explanations.
 
-        Required format: word (中文翻译)
+    4. The output language must be the same as the source note (do not translate the whole note).
 
-        Example:
-        “The disaster (灾难) caused serious damage (损害) to the system (系统).”
-    
-    3. 📝 Short Explanations (When Helpful)
+    5. For any unfamiliar word, add a Chinese explanation (中文解释) right after it in brackets.
 
-        Add very short explanations only when a concept may be confusing.
+    6. You may add short explanations if they help students understand.
 
-        Explanations must be 1 short sentence or a short phrase.
+    7. Add some emojis to make the note friendly (do not overuse).
 
-        Do not repeat information or add new facts.
+    8. After each section, add a Mnemonic Tip to help students remember.
 
-        Purpose is understanding, not expansion.
+    🎯 Goal:
 
-    ## 3. 🎨 Formatting and Tone
-    *   Use markdown headings (`#`, `##`) that match the original text's structure. Add a relevant **emoji** to each main heading.
-    *   Use **bold text** to emphasize key simplified concepts.
-    *   Maintain a clear, direct, and helpful academic tone.
+    Make the note shorter, clearer, and student-friendly, while keeping 100% of the original information.
 
-    ## 4. 🧠 Memory Aid and Accuracy
-    *   Cover all major topics accurately. Do not skip sections or add new information.
-    *   At the end of each major section, create a short, creative **Mnemonic Tip (记忆技巧)** to aid recall.
+    📌 FINAL CHECK BEFORE RESPONDING:
 
-    **Please generate the Simplified Note for the following text:**
+    - Is EVERYTHING inside ONE Markdown code block?
+    - Is there ZERO text outside it?
+
+    If yes, generate the simplified note for the text below:
 
     {text} 
     """
@@ -132,6 +143,9 @@ def generate_note(text):
         response_text = browser_bridge.send_prompt(prompt)
         print("  ✅ Browser Bridge response received.")
         clean_text = response_text.replace("code Markdown download", "")
+        clean_text = re.sub(r'(#include\s*)<([^>]+)>', r'\1&lt;\2&gt;', clean_text)
+        clean_text = re.sub(r'([a-zA-Z0-9_]+\.h)>', r'\1&gt;', clean_text) # Fix closing >
+        clean_text = re.sub(r'<([a-zA-Z0-9_]+\.h)', r'&lt;\1', clean_text) # Fix opening <
         
         return markdown.markdown(clean_text, extensions=['tables'])
     except Exception as e:
@@ -562,6 +576,7 @@ def regenerate_note(project_id, source_id):
         if not original_text:
             return jsonify({"error": "Original source text not found or is empty. Please re-upload the document."}), 404
 
+        browser_bridge.reset()
         new_note_html = generate_note(original_text)
         
         source_ref = db.collection(STUDY_PROJECTS_COLLECTION).document(project_id).collection('sources').document(source_id)

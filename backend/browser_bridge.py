@@ -44,6 +44,8 @@ class AIStudioBridge:
                         "--js-flags='--max-old-space-size=512'"
                     ]
                 )
+
+                context.grant_permissions(["clipboard-read", "clipboard-write"], origin="https://aistudio.google.com")
                 
                 page = context.pages[0]
                 page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
@@ -157,6 +159,50 @@ class AIStudioBridge:
         except Exception as e:
             page.keyboard.press("Escape")
             return f"Upload/Extract Failed: {str(e)}"
+    
+    def _internal_get_markdown(self, page):
+        """Clicks 'Copy as Markdown' on the last response and returns clipboard content."""
+        print("   [Thread] Copying answer as Markdown...")
+        try:
+            # 1. Find the options button for the LAST turn
+            # Targeting ms-chat-turn-options
+            options_buttons = page.locator("ms-chat-turn-options button[aria-label='Open options']").all()
+            if not options_buttons:
+                return "Error: No chat options button found. Ensure chat has started."
+            
+            last_option_btn = options_buttons[-1]
+            last_option_btn.scroll_into_view_if_needed()
+            last_option_btn.click()
+            time.sleep(0.5) 
+            
+            # 2. Wait for the menu item 'Copy as markdown'
+            # Using text filter is safer than nth-child index which can change
+            copy_btn = page.locator("button.mat-mdc-menu-item").filter(has_text="Copy as markdown")
+            
+            if not copy_btn.is_visible():
+                # Fallback: sometimes it's just 'Copy'
+                print("   [Thread] 'Copy as markdown' not found, checking raw Copy...")
+                copy_btn = page.locator("button.mat-mdc-menu-item").filter(has_text="Copy").first
+            
+            if not copy_btn.is_visible():
+                page.keyboard.press("Escape")
+                return "Error: Copy option not found in menu."
+
+            # 3. Click Copy
+            copy_btn.click()
+            time.sleep(0.5) # Wait for clipboard write
+            
+            # 4. Read from clipboard
+            # This requires 'clipboard-read' permission set in launch_persistent_context
+            markdown_content = page.evaluate("navigator.clipboard.readText()")
+            
+            print(f"   [Thread] Markdown copied ({len(markdown_content)} chars).")
+            return markdown_content
+
+        except Exception as e:
+            # Attempt to close menu if open
+            page.keyboard.press("Escape")
+            return f"Error getting markdown: {str(e)}"
 
     def _internal_send_prompt(self, page, message, skip_nav=False):
         """Logic executed strictly inside the worker thread."""
@@ -406,6 +452,16 @@ class AIStudioBridge:
             return result_queue.get(timeout=60)
         except queue.Empty:
             return {"models": [], "active": None}
+    
+    def get_last_response_as_markdown(self):
+        """Retrieves the last AI response formatted as Markdown."""
+        self.start()
+        result_queue = queue.Queue()
+        self.cmd_queue.put(("get_markdown", None, result_queue))
+        try:
+            return result_queue.get(timeout=30)
+        except queue.Empty:
+            return "Error: Timeout retrieving markdown."
 
     def reset(self):
         self.start()
