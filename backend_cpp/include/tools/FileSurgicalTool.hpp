@@ -1,8 +1,8 @@
+// backend_cpp/include/tools/FileSurgicalTool.hpp
 #pragma once
-#include <fstream>
-#include <filesystem>
 #include "tools/ToolRegistry.hpp"
-#include "tools/AtomicJournal.hpp" // The safety logic we designed earlier
+#include "tools/AtomicJournal.hpp"
+#include <fstream>
 
 namespace code_assistance {
 
@@ -11,42 +11,34 @@ public:
     ToolMetadata get_metadata() override {
         return {
             "apply_edit",
-            "Surgically writes code to a file. Requires a full content overwrite for safety. "
-            "Input: {'path': 'string', 'content': 'string'}",
+            "Overwrites a file with new content. Use ONLY after verifying logic via read_file.",
             "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"content\":{\"type\":\"string\"}},\"required\":[\"path\",\"content\"]}"
         };
     }
 
     std::string execute(const std::string& args_json) override {
-        try {
-            auto j = nlohmann::json::parse(args_json);
-            std::string raw_path = j.value("path", "");
-            std::string content = j.value("content", "");
+        auto j = nlohmann::json::parse(args_json);
+        std::string project_root = j.value("project_id", ""); // Absolute path passed via gRPC
+        std::string relative_path = j.value("path", "");
+        std::string new_content = j.value("content", "");
 
-            // 1. Resolve Path Safety
-            std::filesystem::path target = std::filesystem::absolute(raw_path);
-            
-            // 2. Atomic Backup (The Safety Hull)
-            if (!AtomicJournal::backup(target.string())) {
-                return "ERROR: Failed to create safety journal. Write aborted.";
-            }
+        std::filesystem::path full_path = std::filesystem::path(project_root) / relative_path;
 
-            // 3. Perform Write
-            std::ofstream f(target, std::ios::trunc);
-            if (!f.is_open()) return "ERROR: Cannot open file for surgery.";
-            f << content;
-            f.close();
-
-            // 4. Verification (Simulated for Phase I)
-            // In Phase II, we will run Tree-sitter here.
-            AtomicJournal::commit(target.string());
-            
-            spdlog::info("🏗️ Surgery Successful: {}", target.string());
-            return "SUCCESS: File updated. Atomic journal cleared.";
-
-        } catch (const std::exception& e) {
-            return "ERROR: Surgery failed: " + std::string(e.what());
+        // 🚀 SAFETY CHECK: Atomic Backup
+        if (!AtomicJournal::backup(full_path.string())) {
+            return "ERROR: Failed to secure file backup. Surgery aborted.";
         }
+
+        std::ofstream out(full_path, std::ios::trunc);
+        if (!out) return "ERROR: Access denied to " + relative_path;
+        
+        out << new_content;
+        out.close();
+
+        // 🚀 COMMIT: In Phase II, this is where we'd run a Syntax Check
+        AtomicJournal::commit(full_path.string());
+        
+        return "SUCCESS: Applied edits to " + relative_path + ". Backup cleared.";
     }
 };
 }

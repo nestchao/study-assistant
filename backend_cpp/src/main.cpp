@@ -71,16 +71,16 @@ private:
 
         tool_registry_->register_tool(std::make_unique<code_assistance::FileSurgicalTool>());
 
-        tool_registry_->register_tool(std::make_unique<code_assistance::GenericTool>(
-            "web_search",
-            "Search the internet for documentation",
-            "{\"query\": \"string\"}",
-            [this](const std::string& args) { 
-                // 🚀 THE FIX: Use key_manager_ (the class member name)
-                return code_assistance::web_search(args, this->key_manager_->get_serper_key()); 
-            }
-        ));
-
+        // Web searching tool
+        // tool_registry_->register_tool(std::make_unique<code_assistance::GenericTool>(
+        //     "web_search",
+        //     "Search the internet for documentation",
+        //     "{\"query\": \"string\"}",
+        //     [this](const std::string& args) { 
+        //         // 🚀 THE FIX: Use key_manager_ (the class member name)
+        //         return code_assistance::web_search(args, this->key_manager_->get_serper_key()); 
+        //     }
+        // ));
 
         // Register Read File
        tool_registry_->register_tool(std::make_unique<code_assistance::GenericTool>(

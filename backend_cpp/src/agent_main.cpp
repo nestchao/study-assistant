@@ -87,47 +87,51 @@ int main() {
     // TOOL A: list_dir
     tools->register_tool(std::make_unique<code_assistance::GenericTool>(
         "list_dir",
-        "List files. Paths are relative to PROJECT_ROOT.",
+        "List files in the workspace. Path is relative to project root.",
         "{\"path\": \"string\"}",
         [](const std::string& args_json) -> std::string {
             auto j = nlohmann::json::parse(args_json);
-            fs::path p = resolve_safe_path(j.value("path", ""));
-            std::string res = "Contents of " + p.generic_string() + ":\n";
+            // 🚀 Dynamic Root: project_id IS the absolute path
+            std::filesystem::path root(j.value("project_id", "")); 
+            std::filesystem::path sub = j.value("path", ".");
+            std::filesystem::path target = (root / sub).lexically_normal();
+
+            std::string res = "Contents of " + sub.generic_string() + ":\n";
             try {
-                for (auto& entry : fs::directory_iterator(p)) {
+                for (auto& entry : std::filesystem::directory_iterator(target)) {
                     res += (entry.is_directory() ? "[DIR] " : "[FILE] ") + entry.path().filename().string() + "\n";
                 }
                 return res;
-            } catch (...) { return "ERROR: Path not found: " + p.string(); }
+            } catch (...) { return "ERROR: Cannot access path: " + sub.string(); }
         }
     ));
 
     // TOOL B: read_file
     tools->register_tool(std::make_unique<code_assistance::GenericTool>(
         "read_file",
-        "Read the full text of a file from the workspace tree.",
+        "Read a file's content. Path is relative to project root.",
         "{\"path\": \"string\"}",
         [](const std::string& args_json) -> std::string {
-            try {
-                auto j = nlohmann::json::parse(args_json);
-                std::string path = j.value("path", "");
-                std::ifstream f(path);
-                if (!f.is_open()) return "ERROR: File not found: " + path;
-                return std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-            } catch (...) { return "ERROR: Invalid JSON arguments."; }
+            auto j = nlohmann::json::parse(args_json);
+            std::filesystem::path root(j.value("project_id", "")); 
+            std::filesystem::path target = (root / j.value("path", "")).lexically_normal();
+
+            std::ifstream f(target);
+            if (!f.is_open()) return "ERROR: File not found at " + j.value("path", "");
+            return std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
         }
     ));
 
     // TOOL C: web_search
-    tools->register_tool(std::make_unique<code_assistance::GenericTool>(
-        "web_search",
-        "Search Google for documentation and high-concurrency patterns.",
-        "{\"query\": \"string\"}",
-        [keys](const std::string& args) { 
-            // 🚀 THE FIX: Provide BOTH arguments (args and the key)
-            return code_assistance::web_search(args, keys->get_serper_key()); 
-        }
-    ));
+    // tools->register_tool(std::make_unique<code_assistance::GenericTool>(
+    //     "web_search",
+    //     "Search Google for documentation and high-concurrency patterns.",
+    //     "{\"query\": \"string\"}",
+    //     [keys](const std::string& args) { 
+    //         // 🚀 THE FIX: Provide BOTH arguments (args and the key)
+    //         return code_assistance::web_search(args, keys->get_serper_key()); 
+    //     }
+    // ));
 
     // 3. Initialize Executor
     auto executor = std::make_shared<code_assistance::AgentExecutor>(

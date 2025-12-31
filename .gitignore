@@ -43,6 +43,9 @@ backend/chrome_stealth_profile
 # C++
 backend_cpp/build/
 
+# documentation
+documentation/
+
 # ===================================================================
 # Node.js / Frontend
 # ===================================================================
