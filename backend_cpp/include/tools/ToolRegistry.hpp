@@ -45,18 +45,32 @@ public:
         tools_[tool->get_metadata().name] = std::move(tool);
     }
 
-    // 🚀 FIX: Required by AgentExecutor for building the System Prompt
+    // inside class ToolRegistry
     nlohmann::json get_manifest_json() const {
         auto manifest = nlohmann::json::array();
+        
+        // 1. Add Registered Payload Tools (web_search, read_file, etc.)
         for (const auto& [name, tool] : tools_) {
             auto meta = tool->get_metadata();
             manifest.push_back({
                 {"name", meta.name},
                 {"description", meta.description},
-                {"parameters", meta.parameter_schema}
+                {"parameters", nlohmann::json::parse(meta.parameter_schema)}
             });
         }
+
+        // 2. Add Built-in Flight Controls
+        manifest.push_back({
+            {"name", "FINAL_ANSWER"},
+            {"description", "Use this ONLY when the mission is finished to provide the final result to the user."},
+            {"parameters", nlohmann::json::parse("{\"type\":\"object\",\"properties\":{\"answer\":{\"type\":\"string\"}},\"required\":[\"answer\"]}")}
+        });
+        
         return manifest;
+    }
+
+    std::string get_manifest() const {
+        return get_manifest_json().dump(2);
     }
 
     // 🚀 FIX: Required by AgentExecutor for executing actions
@@ -74,11 +88,6 @@ public:
             return res;
         }
         return "ERROR: Tool '" + name + "' not found.";
-    }
-
-    // Legacy support
-    std::string get_manifest() const {
-        return get_manifest_json().dump(2);
     }
 };
 }

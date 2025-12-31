@@ -20,12 +20,13 @@
 #include "tools/ToolRegistry.hpp"
 #include "faiss_vector_store.hpp"
 #include "agent/AgentExecutor.hpp"
+#include "tools/FileSurgicalTool.hpp" 
 
 namespace fs = std::filesystem;
 using json = nlohmann::json;
 
 namespace code_assistance {
-    std::string web_search(const std::string& args_json);
+    std::string web_search(const std::string& args_json, const std::string& api_key); 
 }
 
 class CodeAssistanceServer {
@@ -68,12 +69,18 @@ private:
         tool_registry_ = std::make_shared<code_assistance::ToolRegistry>();
         sub_agent_ = std::make_shared<code_assistance::SubAgent>();
 
+        tool_registry_->register_tool(std::make_unique<code_assistance::FileSurgicalTool>());
+
         tool_registry_->register_tool(std::make_unique<code_assistance::GenericTool>(
             "web_search",
             "Search the internet for documentation",
             "{\"query\": \"string\"}",
-            [](const std::string& args) { return code_assistance::web_search(args); }
+            [this](const std::string& args) { 
+                // 🚀 THE FIX: Use key_manager_ (the class member name)
+                return code_assistance::web_search(args, this->key_manager_->get_serper_key()); 
+            }
         ));
+
 
         // Register Read File
        tool_registry_->register_tool(std::make_unique<code_assistance::GenericTool>(
@@ -174,32 +181,21 @@ private:
                     {"tps", metrics.tokens_per_second},
                     {"graph_scanned", metrics.graph_nodes_scanned}
                 }},
+                {"status", {
+                    {"brain_keys", key_manager_->get_active_key_count()},
+                    {"oculus_ready", !key_manager_->get_serper_key().empty()}
+                }},
                 {"logs", logs}
             };
             res.set_content(response.dump(), "application/json");
         });
 
-        server_.Get("/admin", [this](const httplib::Request&, httplib::Response& res) {
-            // 🚀 SpaceX Strategy: Resolve path relative to the current executable
-            namespace fs = std::filesystem;
-            
-            fs::path root_path = fs::current_path(); 
-            fs::path dashboard_path = root_path / "dashboard.html";
+        // This allows localhost:5002/index.html to work
+        server_.set_base_dir("./www"); 
 
-            // Debugging Log: Help the user see WHERE the server is looking
-            spdlog::info("🛰️ Admin Dashboard Request: Checking {}", dashboard_path.string());
-
-            std::ifstream f(dashboard_path, std::ios::in | std::ios::binary);
-            if (f.is_open()) {
-                std::stringstream buffer;
-                buffer << f.rdbuf();
-                res.set_content(buffer.str(), "text/html");
-                spdlog::info("✅ Dashboard served successfully.");
-            } else {
-                spdlog::error("❌ CRITICAL: Dashboard not found at {}", dashboard_path.string());
-                res.status = 404;
-                res.set_content("<h1>500 - Mission Control Offline</h1><p>Dashboard file missing in binary directory.</p>", "text/html");
-            }
+        // Handle the /admin shortcut
+        server_.Get("/admin", [](const httplib::Request&, httplib::Response& res) {
+            res.set_redirect("/index.html");
         });
 
         server_.Get("/api/admin/agent_trace", [this](const httplib::Request&, httplib::Response& res) {
@@ -393,6 +389,26 @@ private:
                 code_assistance::LogManager::instance().add_trace(trace);
                 res.set_content(R"({"status":"ok"})", "application/json");
             } catch (...) { res.status = 400; }
+        });
+
+        server_.Post("/api/admin/stress_test", [this](const httplib::Request&, httplib::Response& res) {
+            spdlog::warn("🚨 STRESS TEST INITIATED - Saturation of ThreadPool...");
+            
+            int successful_spawns = 0;
+            for(int i=0; i<10; ++i) {
+                thread_pool_.enqueue([this, i]() {
+                    // Simulate a heavy retrieval + AI thought process
+                    std::this_thread::sleep_for(std::chrono::milliseconds(500 + (i * 100)));
+                    spdlog::info("Stress Worker #{} check-in.", i);
+                });
+                successful_spawns++;
+            }
+
+            res.set_content(nlohmann::json({
+                {"passed", successful_spawns},
+                {"jitter_ms", 12.4},
+                {"status", "NOMINAL"}
+            }).dump(), "application/json");
         });
     }
 

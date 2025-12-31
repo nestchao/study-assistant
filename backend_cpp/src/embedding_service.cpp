@@ -41,11 +41,15 @@ cpr::Response perform_request_with_retry(Func request_factory, std::shared_ptr<K
     for (int i = 0; i < max_retries; ++i) {
         r = request_factory(); 
         if (r.status_code == 200) return r;
-        if (r.status_code == 429 && km) {
-            spdlog::warn("⚠️ API 429. Rotating key...");
-            km->report_rate_limit(); // Using the correct method name
-            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-            continue;
+        if ((r.status_code == 429 || r.status_code == 503) && km) {
+            spdlog::warn("⚠️ API {} ({}). Rotating key and cooling down (Attempt {}/{})...", 
+                         r.status_code, (r.status_code == 429 ? "Quota" : "Overload"), i + 1, max_retries);
+            
+            km->report_rate_limit();
+            
+            // Exponential backoff: sleep longer each time (2s, 3s, 4s...)
+            std::this_thread::sleep_for(std::chrono::milliseconds(2000 + (i * 1000)));
+            continue; // This continue is now VALID because it's inside the 'for' loop
         }
         break;
     }
@@ -58,12 +62,12 @@ std::vector<float> EmbeddingService::generate_embedding(const std::string& text)
     auto start = std::chrono::high_resolution_clock::now();
 
     auto r = perform_request_with_retry([&]() {
-        json payload = {
-            {"model", "models/text-embedding-004"},
-            {"content", { {"parts", {{{"text", text}}}} }}
-        };
+        // 🚀 ARCHITECT'S NOTE: We ensure we get a fresh URL with the rotated key for every retry
         return cpr::Post(cpr::Url{get_endpoint_url("embedContent")},
-                         cpr::Body{payload.dump()},
+                         cpr::Body(json{
+                             {"model", "models/text-embedding-004"},
+                             {"content", {{"parts", {{{"text", text}}}}}}
+                         }.dump()),
                          cpr::Header{{"Content-Type", "application/json"}});
     }, key_manager_);
 
@@ -71,9 +75,10 @@ std::vector<float> EmbeddingService::generate_embedding(const std::string& text)
     double duration = std::chrono::duration<double, std::milli>(end - start).count();
     SystemMonitor::global_embedding_latency_ms.store(duration);
 
+    // After all retries, if we still don't have a 200, we fail the mission
     if (r.status_code != 200) {
-        spdlog::error("Embedding API error [{}]: {}", r.status_code, r.text);
-        throw std::runtime_error("Failed to generate embedding");
+        spdlog::error("❌ Embedding API Fatal Error [{}]: {}", r.status_code, r.text);
+        throw std::runtime_error("Failed to generate embedding after retries");
     }
 
     auto response_json = json::parse(r.text);

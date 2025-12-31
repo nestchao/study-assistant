@@ -28,12 +28,17 @@ AgentExecutor::AgentExecutor(
 
 nlohmann::json extract_json(const std::string& raw) {
     try {
-        std::regex json_re(R"(\{[\s\S]*\})");
-        std::smatch match;
-        if (std::regex_search(raw, match, json_re)) {
-            return nlohmann::json::parse(match.str());
+        // Find the first '{' and the last '}'
+        size_t first = raw.find('{');
+        size_t last = raw.rfind('}');
+        
+        if (first != std::string::npos && last != std::string::npos && last > first) {
+            std::string clean_json = raw.substr(first, last - first + 1);
+            return nlohmann::json::parse(clean_json);
         }
-    } catch (...) {}
+    } catch (const std::exception& e) {
+        spdlog::warn("⚠️ Failed to parse AI JSON: {}", e.what());
+    }
     return nlohmann::json::object();
 }
 
@@ -105,105 +110,133 @@ void AgentExecutor::determineContextStrategy(const std::string& query, ContextSn
 
 // --- 4. THE COGNITIVE ENGINE ---
 std::string AgentExecutor::run_autonomous_loop(const ::code_assistance::UserQuery& req, ::grpc::ServerWriter<::code_assistance::AgentResponse>* writer) {
-    std::string internal_monologue = "Mission Start. Workspace tree loaded.";
-    int max_steps = 12; 
+    // 1. DYNAMIC TOOL DISCOVERY
+    std::string tool_manifest = tool_registry_->get_manifest();
+    spdlog::info("🛰️ Flight Manual size: {} bytes", tool_manifest.length());
+    
+    if (tool_manifest.length() < 200) {
+        spdlog::error("🚨 CRITICAL: Tool Manifest is suspiciously small. AI will be blind!");
+    }
 
+    std::string internal_monologue = "";
+    
+    // 🚀 NEW: Track last tools to detect loops
+    std::string last_tool_used = "";
+    std::string second_to_last_tool = "";
+    
+    int max_steps = 10;
+    
     for (int step = 0; step < max_steps; ++step) {
-        spdlog::info("🧠 Step {}: Thought Processing...", step);
-        
-        // 🚀 ELITE PROMPT: We must be extremely explicit with the model
+        // 2. THE FLIGHT MANUAL (Prompt) - 🚀 UPDATED WITH STRONGER TERMINATION EMPHASIS
         std::string prompt = 
-            "### ROLE\n"
-            "You are an Autonomous Code Architect. You communicate ONLY via JSON tool calls or FINAL_ANSWER.\n\n"
-
-            "### TOOL SCHEMA (STRICT)\n"
-            "To use a tool, you MUST output exactly this format:\n"
+            "### CRITICAL: YOU MUST USE FINAL_ANSWER WHEN DONE\n"
+            "After EVERY tool observation, ask yourself: 'Do I now have enough information to answer?'\n"
+            "If YES: Immediately call {\"tool\": \"FINAL_ANSWER\", \"parameters\": {\"answer\": \"your complete answer here\"}}\n"
+            "DO NOT keep searching if you already have the answer!\n\n"
+            
+            "### YOUR TOOLS (The Flight Manual)\n"
+            "You MUST call tools using this JSON format:\n"
             "```json\n"
-            "{\n"
-            "  \"tool\": \"tool_name\",\n"
-            "  \"parameters\": { \"key\": \"value\" }\n"
-            "}\n"
+            "{\"tool\": \"tool_name\", \"parameters\": {...}}\n"
             "```\n\n"
-
-            "### FORBIDDEN ACTS\n"
-            "- DO NOT write code like 'print(tool())'.\n"
-            "- DO NOT explain your thought outside of the 'Thought' section.\n"
-            "- DO NOT invent tools like 'tool_code'.\n\n"
-
-            "### ERROR HANDLING RULES"
-            "- If a tool returns \"ERROR:\", \"File not found\", or empty content, DO NOT call the same tool again with the same parameters."
-            "- Instead, try listing the directory again or choose a different file."
-            "- If you cannot proceed, output FINAL_ANSWER with what you know."
-
+            "Available tools:\n" + tool_manifest + "\n\n"
+            
             "### MISSION\n" + req.prompt() + "\n\n"
-
-            "### FLIGHT LOGS (HISTORY)\n" + internal_monologue + "\n\n"
-
-            "### YOUR NEXT STEP\n"
-            "Current status: Waiting for next command. Provide Thought + Action:";
+            
+            "### CRITICAL PROTOCOL\n"
+            "1. Efficiency is your primary metric.\n"
+            "2. If an OBSERVATION provides the answer, you MUST use FINAL_ANSWER immediately.\n"
+            "3. DO NOT repeat the same search query more than once.\n"
+            "4. If a file is not found, use 'list_dir' to verify the path before giving up.\n\n"
+            
+            "### RULES\n"
+            "1. If you need info, call a tool.\n"
+            "2. If you have the answer, use FINAL_ANSWER.\n\n";
+        
+        // 🚀 NEW: Append conversation history with observations
+        if (!internal_monologue.empty()) {
+            prompt += "### PREVIOUS OBSERVATIONS:\n" + internal_monologue + "\n\n";
+        }
+        
+        prompt += "NEXT ACTION (respond with JSON tool call):";
 
         std::string thought = ai_service_->generate_text(prompt);
-        
-        // 🛰️ TELEMETRY: Log exactly what the AI said to the C++ console
-        spdlog::info("🛰️  AI Monologue (Step {}): [{}]", step, thought);
+        this->notify(writer, "THOUGHT", "Step " + std::to_string(step));
+        spdlog::info("🧠 Step {}: AI generated a thought.", step);
 
-        if (thought.empty() || thought == "ERROR: System Throttled.") {
-            return "Mission Abort: AI Service returned empty or throttled response. Check API Keys.";
-        }
-
-        // 1. Check for Final Answer
-        if (thought.find("FINAL_ANSWER:") != std::string::npos) {
-            return thought.substr(thought.find("FINAL_ANSWER:") + 13);
-        }
-
-        // 2. Check for Tool Call
+        // 3. HARDENED JSON EXTRACTION
         nlohmann::json action = extract_json(thought);
-
-        if (action.empty() || !action.contains("tool")) {
-            // 🚀 AUTO-CORRECTION: If AI sends a hallucination, tell it why it failed
-            spdlog::warn("⚠️  AI Hallucination Detected (Step {}). Sending corrective feedback.", step);
-            internal_monologue += "\nSYSTEM ERROR: Your previous response was NOT a valid JSON tool call. You must use the format: {\"tool\": \"...\", \"parameters\": {...}}";
-            continue; // Go back to the top of the loop and try again
-        }
-
-        if (!action.empty() && action.contains("tool")) {
+        
+        if (action.contains("tool")) {
             std::string tool_name = action["tool"];
-    
-            // 🚀 ELITE INJECTION: Augment the parameters with the current Project ID
-            nlohmann::json params = action.value("parameters", nlohmann::json::object());
+            
+            // 🚀 NEW: Loop detection logic
+            if (tool_name == last_tool_used && tool_name == second_to_last_tool) {
+                spdlog::warn("⚠️ LOOP DETECTED: Tool '{}' used 3 times in a row!", tool_name);
+                internal_monologue += "\n\n[SYSTEM OVERRIDE: You've used the tool '" + tool_name + 
+                                     "' three times consecutively. This suggests you're stuck in a loop. "
+                                     "Either synthesize your findings with FINAL_ANSWER NOW, or try a different tool.]\n";
+            }
+            
+            // 4. PREVENT TYPE_ERROR.302 (The "302" fix)
+            nlohmann::json params = nlohmann::json::object();
+            if (action.contains("parameters") && action["parameters"].is_object()) {
+                params = action["parameters"];
+            }
+            params["project_id"] = req.project_id();
 
+            // 5. CHECK FOR FINAL_ANSWER BEFORE DISPATCH
             if (tool_name == "FINAL_ANSWER") {
-                return params.value("answer", "Mission completed with no descriptive answer.");
+                std::string final_answer = params.value("answer", "No answer provided.");
+                this->notify(writer, "FINAL", final_answer);
+                spdlog::info("✅ Mission completed successfully at step {}", step);
+                return final_answer;
             }
-            
-            params["project_id"] = req.project_id(); // Use the ID from the gRPC request
-            
-            spdlog::info("🔧 Dispatching Augmented Tool: {} (Project: {})", tool_name, req.project_id());
-            
-            // Dispatch now has the ID even if the AI didn't provide it
+
+            // 6. HALLUCINATION CATCHER & TOOL EXECUTION
             std::string observation = tool_registry_->dispatch(tool_name, params);
-
-            if (observation.find("ERROR:") != std::string::npos) {
-                internal_monologue += "\nSYSTEM: The tool returned an ERROR. You must adapt your plan. Do NOT repeat the same failing action.";
-            }
             
-            std::string log_entry = "\n[STEP " + std::to_string(step) + " RESULT]\n";
-            log_entry += "TOOL USED: " + tool_name + "\n";
-            log_entry += "OUTPUT:\n" + observation.substr(0, 5000); // Cap size to prevent prompt blowing up
-            log_entry += "\n[END OF RESULT]";
+            std::string formatted_observation = 
+                "\n--- OBSERVATION FROM " + tool_name + " (Step " + std::to_string(step) + ") ---\n" +
+                observation.substr(0, 3000) + 
+                "\n--- END OBSERVATION ---\n";
+            
+            internal_monologue += formatted_observation;
 
-            internal_monologue += log_entry;
+            // 🚀 UPDATE: Track tool usage for loop detection
+            second_to_last_tool = last_tool_used;
+            last_tool_used = tool_name;
 
-            spdlog::info("🛰️  Tool Output Appended ({} bytes)", observation.length());
+            // 🚀 AUTO-LANDING: Remind AI to finish if it has enough data
+            if (step >= 2) {
+                internal_monologue += "\n(SYSTEM HINT: You have collected " + std::to_string(step + 1) + 
+                                     " observations. If you can answer the mission goal, use FINAL_ANSWER now to complete efficiently.)\n";
+            }
 
             this->notify(writer, "TOOL_EXEC", "Used " + tool_name);
+            
         } else {
-            // 🚀 FALLBACK: If AI didn't use a tool or say FINAL_ANSWER, 
-            // but gave a regular response, treat it as the answer.
-            if (thought.length() > 5) return thought;
+            // If AI didn't use a tool, check if it's trying to answer directly
+            if (thought.find("FINAL_ANSWER") != std::string::npos || 
+                thought.find("final answer") != std::string::npos) {
+                spdlog::warn("⚠️ AI attempted direct answer without proper JSON format");
+                this->notify(writer, "FINAL", thought);
+                return thought;
+            }
+            
+            internal_monologue += "\n[SYSTEM ERROR: You did not use a valid tool call. "
+                                 "Please respond with ONLY a JSON object in this format: "
+                                 "{\"tool\": \"tool_name\", \"parameters\": {...}}]\n";
+            
+            spdlog::warn("⚠️ Step {}: Invalid tool call format", step);
         }
     }
-    return "Mission timed out after maximum reasoning steps.";
+
+    // Mission timeout
+    std::string timeout_msg = "Mission timed out after " + std::to_string(max_steps) + " steps without reaching FINAL_ANSWER.";
+    this->notify(writer, "FINAL", timeout_msg);
+    spdlog::error("❌ {}", timeout_msg);
+    return timeout_msg;
 }
 
 std::string AgentExecutor::run_autonomous_loop_internal(const nlohmann::json& body) {

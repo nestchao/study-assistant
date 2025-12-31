@@ -96,8 +96,8 @@ endif()
 set(DEPLOY_DIR "$<TARGET_FILE_DIR:code_assistance_server>")
 
 add_custom_command(TARGET code_assistance_server POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/dashboard.html" "${DEPLOY_DIR}/dashboard.html"
+    # 🚀 THE FIX: Copy the entire FOLDER, not just one file
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/www" "${DEPLOY_DIR}/www"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/keys.json" "${DEPLOY_DIR}/keys.json"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/test/test_quality.py" "${DEPLOY_DIR}/test_quality.py"
-    COMMENT "🚀 Deploying Dashboard, Keys, and Tests to binary folder..."
+    COMMENT "🛰️ Syncing www assets to binary folder..."
 )

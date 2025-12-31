@@ -21,6 +21,7 @@ private:
     size_t current_index = 0;
     std::string primary_model;
     std::string secondary_model;
+    std::string serper_key;
 
 public:
     KeyManager() {
@@ -55,19 +56,43 @@ public:
         }
 
         try {
-            spdlog::info("🛰️ Key Pool found at: {}", found_path);
             auto j = nlohmann::json::parse(f);
+            
+            // 1. Load Brain Keys (Gemini)
             key_pool.clear();
             for (auto& k : j["keys"]) {
                 key_pool.push_back({k.get<std::string>(), true, 0});
             }
 
-            primary_model = j.value("primary", "gemini-2.5-flash");
-            secondary_model = j.value("secondary", "gemini-2.5-flash-lite");
-            spdlog::info("🛰️ Key Pool Synchronized: {} active keys", key_pool.size());
+            // 2. Load Static Metadata
+            primary_model = j.value("primary", "gemini-1.5-flash");
+            
+            // 🚀 Load Sensory Payload (Serper)
+            serper_key = j.value("serper", ""); 
+
+            if (serper_key.empty()) {
+                spdlog::warn("⚠️ Web-Oculus (Serper) key is missing in keys.json!");
+            }
+            
+            spdlog::info("🛰️ Unified Vault Synchronized: {} brain keys, Oculus status: {}", 
+                         key_pool.size(), serper_key.empty() ? "OFFLINE" : "READY");
         } catch (const std::exception& e) {
-            spdlog::error("💥 Failed to parse Key Pool JSON: {}", e.what());
+            spdlog::error("💥 Failed to parse Intelligence Vault: {}", e.what());
         }
+    }
+
+    size_t get_active_key_count() const {
+        std::shared_lock lock(pool_mutex);
+        size_t count = 0;
+        for (const auto& k : key_pool) {
+            if (k.is_active) count++;
+        }
+        return count;
+    }
+
+    std::string get_serper_key() const {
+        std::shared_lock lock(pool_mutex);
+        return serper_key;
     }
 
     std::string get_current_key() const { 
