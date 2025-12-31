@@ -66,10 +66,11 @@ function renderTrace(traces) {
         if (t.state === "TOOL_CALL") detail = `🔧 Invoking Tool: <strong>${t.detail}</strong>`;
         if (t.state === "REFLECTION") detail = `🧠 AI Analysis: ${t.detail.substring(0, 80)}...`;
 
+        const dockingPoint = t.session_id.includes("D:/") ? t.session_id : "Default";
         return `
             <tr>
                 <td>${new Date().toLocaleTimeString()}</td>
-                <td><span class="phase-pill">${t.state}</span></td>
+                <td><span class="dock-tag">${dockingPoint}</span></td>
                 <td>${detail}</td>
                 <td style="color: ${t.duration > 1000 ? 'var(--red)' : 'var(--accent)'}">${t.duration.toFixed(0)}ms</td>
                 <td style="font-family: monospace; font-size: 10px;">${t.session_id.substring(0, 8)}</td>

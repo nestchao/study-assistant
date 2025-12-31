@@ -5,6 +5,12 @@ import time
 import json
 import statistics
 from termcolor import colored
+import os
+from pathlib import Path
+
+# 🛰️ DYNAMIC TARGETING
+# Point this to your actual Extension Testing Folder
+WORKSPACE_TARGET = "D:/Projects/SA_ETF" 
 
 class SynapseTester:
     def __init__(self, target="127.0.0.1:50051"):
@@ -15,9 +21,9 @@ class SynapseTester:
     def run_mission(self, name, prompt):
         print(f"\n🚀 Launching Mission: [{colored(name, 'cyan')}]")
         query = agent_pb2.UserQuery(
-            project_id="SYNAPSE_INTERNAL_TEST",
+            project_id=WORKSPACE_TARGET, 
             prompt=prompt,
-            session_id=f"test_{int(time.time())}"
+            session_id=f"etf_test_{int(time.time())}"
         )
         
         start_time = time.time()
@@ -49,8 +55,8 @@ class SynapseTester:
 # --- TEST SCENARIOS ---
 tester = SynapseTester()
 missions = [
-    ("Web-Oculus Check", "Search the web for 'C++23 std::expected documentation' and summarize the top result."),
-    ("Surgical I/O Check", "Read the file 'vcpkg.json' and tell me the version of nlohmann-json."),
+    # ("Web-Oculus Check", "Search the web for 'C++23 std::expected documentation' and summarize the top result."),
+    ("Surgical I/O Check", "Read the file 'test03.ts' at the root and tell me the version of nlohmann-json."),
     ("Hybrid Logic Check", "Find the current version of 'httplib' on GitHub and check if it matches our local version.")
 ]
 
