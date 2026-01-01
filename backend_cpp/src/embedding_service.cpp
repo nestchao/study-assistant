@@ -152,15 +152,6 @@ std::string EmbeddingService::generate_text(const std::string& prompt) {
             continue;
         }
 
-        auto response_json = json::parse(r.text);
-        int p_tokens = 0, c_tokens = 0, t_tokens = 0;
-        if (response_json.contains("usageMetadata")) {
-            auto& usage = response_json["usageMetadata"];
-            p_tokens = usage.value("promptTokenCount", 0);
-            c_tokens = usage.value("candidatesTokenCount", 0);
-            t_tokens = usage.value("totalTokenCount", 0);
-        }
-
         // If it's a 400 or 404, the model name or prompt is wrong
         spdlog::error("❌ Fatal API Error [{}]: {}", r.status_code, r.text);
         return "ERROR: API Protocol Failure.";
@@ -170,6 +161,56 @@ std::string EmbeddingService::generate_text(const std::string& prompt) {
 
     auto response_json = json::parse(r.text);
     return response_json["candidates"][0]["content"]["parts"][0]["text"];
+}
+
+GenerationResult EmbeddingService::generate_text_elite(const std::string& prompt) {
+    cpr::Response r;
+    int max_retries = 4;
+    GenerationResult final_result;
+
+    for (int i = 0; i < max_retries; ++i) {
+        std::string current_url = get_endpoint_url("generateContent");
+        json payload = {{"contents", {{ {"parts", {{{"text", prompt}}}} }}}};
+
+        r = cpr::Post(cpr::Url{current_url},
+                      cpr::Body{payload.dump()},
+                      cpr::Header{{"Content-Type", "application/json"}});
+
+        if (r.status_code == 200) {
+            auto response_json = json::parse(r.text);
+            
+            // 🚀 SUCCESS PATH: Parse Text
+            final_result.text = response_json["candidates"][0]["content"]["parts"][0]["text"];
+            
+            // 🚀 SUCCESS PATH: Parse Fuel (Tokens)
+            if (response_json.contains("usageMetadata")) {
+                auto& usage = response_json["usageMetadata"];
+                final_result.prompt_tokens = usage.value("promptTokenCount", 0);
+                final_result.completion_tokens = usage.value("candidatesTokenCount", 0);
+                final_result.total_tokens = usage.value("totalTokenCount", 0);
+            }
+            
+            final_result.success = true;
+            
+            // Update Global Metrics for Dashboard Gauges
+            SystemMonitor::global_output_tokens.store(final_result.completion_tokens);
+            
+            return final_result;
+        }
+
+        if (r.status_code == 429) {
+            spdlog::warn("⚠️ Quota Exceeded. Rotating key...");
+            key_manager_->report_rate_limit();
+            std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+            continue;
+        }
+
+        spdlog::error("❌ Fatal API Error [{}]: {}", r.status_code, r.text);
+    }
+
+    final_result.text = "ERROR: System Throttled.";
+    final_result.success = false;
+    return final_result;
 }
 
 std::string HyDEGenerator::generate_hyde(const std::string& query) {

@@ -410,6 +410,26 @@ private:
                 {"status", "NOMINAL"}
             }).dump(), "application/json");
         });
+
+        server_.Post("/api/admin/publish_log", [this](const httplib::Request& req, httplib::Response& res) {
+            try {
+                auto j = nlohmann::json::parse(req.body);
+                code_assistance::InteractionLog log;
+                log.timestamp = j.value("timestamp", 0LL);
+                log.project_id = j.value("project_id", "unknown");
+                log.user_query = j.value("user_query", "");
+                log.ai_response = j.value("ai_response", "");
+                log.duration_ms = j.value("duration_ms", 0.0);
+                log.prompt_tokens = j.value("prompt_tokens", 0);
+                log.completion_tokens = j.value("completion_tokens", 0);
+                log.total_tokens = j.value("total_tokens", 0);
+
+                // 🚀 THE FIX: Add to the Dashboard's singleton memory
+                code_assistance::LogManager::instance().add_log(log);
+                
+                res.set_content(R"({"status":"log_synchronized"})", "application/json");
+            } catch (...) { res.status = 400; }
+        });
     }
 
     std::vector<std::string> get_json_list(const json& body, const std::string& key1, const std::string& key2) {

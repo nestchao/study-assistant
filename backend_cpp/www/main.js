@@ -81,13 +81,21 @@ function renderTrace(traces) {
 }
 
 function renderArchives(logs) {
-    UI.logList.innerHTML = logs.map(log => `
+    if (!logs || logs.length === 0) {
+        UI.logList.innerHTML = '<div class="placeholder">No missions archived yet.</div>';
+        return;
+    }
+
+    // Sort by timestamp newest first
+    const sortedLogs = logs.sort((a, b) => b.timestamp - a.timestamp);
+
+    UI.logList.innerHTML = sortedLogs.map(log => `
         <div class="log-item" onclick='inspectLog(${JSON.stringify(log).replace(/'/g, "&apos;")})'>
             <div class="log-meta">
                 <span>${new Date(log.timestamp * 1000).toLocaleTimeString()}</span>
-                <span class="token-badge">${log.total_tokens} Tkn</span> <!-- 🚀 Fuel Gauge -->
+                <span class="token-badge">${log.total_tokens || 0} Tkn</span>
             </div>
-            <div class="log-query">${log.user_query.substring(0, 40)}...</div>
+            <div class="log-query">${escapeHtml(log.user_query.substring(0, 40))}...</div>
         </div>
     `).join('');
 }
