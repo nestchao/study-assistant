@@ -1,0 +1,9 @@
+[submodule "backend_cpp/third_party/tree-sitter-cpp"]
+	path = backend_cpp/third_party/tree-sitter-cpp
+	url = https://github.com/tree-sitter/tree-sitter-cpp
+[submodule "backend_cpp/third_party/tree-sitter-python"]
+	path = backend_cpp/third_party/tree-sitter-python
+	url = https://github.com/tree-sitter/tree-sitter-python
+[submodule "backend_cpp/third_party/tree-sitter-typescript"]
+	path = backend_cpp/third_party/tree-sitter-typescript
+	url = https://github.com/tree-sitter/tree-sitter-typescript
