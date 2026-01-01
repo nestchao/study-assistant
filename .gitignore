@@ -31,7 +31,6 @@ dist/
 htmlcov/
 
 venv/
-# --- THIS IS THE FIX ---
 # Remove the leading slash to make the pattern more robust
 backend/venv/
 backend/.venv/
@@ -42,6 +41,7 @@ backend/chrome_stealth_profile
 
 # C++
 backend_cpp/build/
+backend_cpp/third_party/
 
 # documentation
 documentation/
