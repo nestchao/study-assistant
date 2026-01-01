@@ -81,16 +81,13 @@ function renderTrace(traces) {
 }
 
 function renderArchives(logs) {
-    if (UI.logList.children.length === logs.length) return;
-    
     UI.logList.innerHTML = logs.map(log => `
         <div class="log-item" onclick='inspectLog(${JSON.stringify(log).replace(/'/g, "&apos;")})'>
-            <div style="font-size: 10px; color: var(--accent); margin-bottom: 5px;">
-                ${new Date(log.timestamp * 1000).toLocaleString()}
+            <div class="log-meta">
+                <span>${new Date(log.timestamp * 1000).toLocaleTimeString()}</span>
+                <span class="token-badge">${log.total_tokens} Tkn</span> <!-- 🚀 Fuel Gauge -->
             </div>
-            <div style="font-weight: bold; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-                ${log.user_query}
-            </div>
+            <div class="log-query">${log.user_query.substring(0, 40)}...</div>
         </div>
     `).join('');
 }
@@ -99,22 +96,50 @@ window.inspectLog = (log) => {
     const content = document.getElementById('inspector-content');
     const placeholder = document.getElementById('inspector-default');
     
+    // 🛡️ Safety Guard: Prevent division by zero
+    const durationSec = log.duration_ms / 1000 || 1;
+    const fuelEfficiency = (log.total_tokens / durationSec).toFixed(0);
+    
     placeholder.classList.add('hidden');
     content.classList.remove('hidden');
 
     content.innerHTML = `
-        <h2 style="margin-top:0">${log.ai_response ? '✅ Mission Resolved' : '🔍 Retrieval Query'}</h2>
-        <div style="background: #000; padding: 15px; border-radius: 8px; font-family: monospace; font-size: 12px; max-height: 400px; overflow-y: auto;">
-            <span style="color: var(--green)">> USER_INTENT:</span> ${log.user_query}<br><br>
-            <span style="color: var(--accent)">> AI_SOLUTION:</span><br>
-            ${log.ai_response || 'Pending...'}
+        <div class="inspector-header">
+            <h2 style="margin:0">Mission Telemetry</h2>
+            <div class="token-stats">
+                <span class="stat-pill">Input (Prompt): ${log.prompt_tokens}</span>
+                <span class="stat-pill">Output (Reply): ${log.completion_tokens}</span>
+                <span class="stat-pill total">Total Fuel: ${log.total_tokens} Tkn</span>
+            </div>
+            <div class="burn-rate-label">
+                <i class="fas fa-fire"></i> Burn Rate: ${fuelEfficiency} tokens/sec
+            </div>
         </div>
-        <div style="margin-top: 15px; font-size: 12px;">
-            <strong>Latency:</strong> ${log.duration_ms.toFixed(0)}ms | 
-            <strong>Project:</strong> ${log.project_id}
+
+        <div class="mission-report">
+            <h3>${log.ai_response ? '✅ Mission Resolved' : '🔍 Retrieval Query'}</h3>
+            
+            <div class="terminal-box">
+                <span class="line-header">> USER_INTENT:</span>
+                <p class="raw-text">${escapeHtml(log.user_query)}</p>
+                
+                <span class="line-header">> AI_SOLUTION:</span>
+                <div class="raw-text code-block">${escapeHtml(log.ai_response) || 'Processing...'}</div>
+            </div>
+        </div>
+
+        <div class="meta-footer">
+            <strong>Engine Latency:</strong> ${log.duration_ms.toFixed(0)}ms | 
+            <strong>Target Project:</strong> ${log.project_id}
         </div>
     `;
 };
+
+function escapeHtml(text) {
+    if (!text) return "";
+    return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
 
 // Stress Test
 window.triggerStressTest = async () => {

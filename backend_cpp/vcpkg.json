@@ -7,6 +7,7 @@
     "nlohmann-json",
     "spdlog",
     "cpr",
-    "faiss"
+    "faiss",
+    "tree-sitter"
   ]
 }

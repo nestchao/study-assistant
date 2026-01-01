@@ -152,6 +152,15 @@ std::string EmbeddingService::generate_text(const std::string& prompt) {
             continue;
         }
 
+        auto response_json = json::parse(r.text);
+        int p_tokens = 0, c_tokens = 0, t_tokens = 0;
+        if (response_json.contains("usageMetadata")) {
+            auto& usage = response_json["usageMetadata"];
+            p_tokens = usage.value("promptTokenCount", 0);
+            c_tokens = usage.value("candidatesTokenCount", 0);
+            t_tokens = usage.value("totalTokenCount", 0);
+        }
+
         // If it's a 400 or 404, the model name or prompt is wrong
         spdlog::error("❌ Fatal API Error [{}]: {}", r.status_code, r.text);
         return "ERROR: API Protocol Failure.";

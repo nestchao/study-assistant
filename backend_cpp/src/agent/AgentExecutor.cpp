@@ -8,6 +8,7 @@
 #include <sstream>
 #include <filesystem>
 #include <spdlog/spdlog.h>
+#include "parser_elite.hpp" 
 
 namespace code_assistance {
 
@@ -196,10 +197,31 @@ std::string AgentExecutor::run_autonomous_loop(const ::code_assistance::UserQuer
             // 6. HALLUCINATION CATCHER & TOOL EXECUTION
             std::string observation = tool_registry_->dispatch(tool_name, params);
             
-            std::string formatted_observation = 
-                "\n--- OBSERVATION FROM " + tool_name + " (Step " + std::to_string(step) + ") ---\n" +
-                observation.substr(0, 3000) + 
-                "\n--- END OBSERVATION ---\n";
+            if (tool_name == "read_file" && !observation.starts_with("ERROR")) {
+                try {
+                    // Use full qualification: code_assistance::elite
+                    code_assistance::elite::ASTBooster sensor; 
+                    
+                    std::string relative_path = params.value("path", "unknown");
+                    
+                    // 🛰️ Trigger structural analysis
+                    // Note: CodeNode is in namespace code_assistance
+                    std::vector<code_assistance::CodeNode> symbols = sensor.extract_symbols(relative_path, observation);
+                    
+                    this->notify(writer, "AST_SCAN", 
+                        "X-Ray: Identified " + std::to_string(symbols.size()) + 
+                        " symbols in [" + relative_path + "]");
+                        
+                    internal_monologue += "\n[SYSTEM: AST Scanner detected " + std::to_string(symbols.size()) + " symbols.]";
+                    
+                } catch (const std::exception& e) {
+                    spdlog::warn("⚠️ AST Scanner bypassed: {}", e.what());
+                }
+            }
+            // --- 🚀 END OF X-RAY INJECTION ---
+
+            // 2. Format and append observation to monologue as usual
+            std::string formatted_observation = "\n[CRITICAL DATA RECEIVED FROM " + tool_name + "]\n" + observation;
             
             internal_monologue += formatted_observation;
 

@@ -26,6 +26,9 @@ struct InteractionLog {
     std::string ai_response;
     int token_count_est;     // Rough estimate
     double duration_ms;
+    int prompt_tokens = 0;
+    int completion_tokens = 0;
+    int total_tokens = 0;
 };
 
 class LogManager {

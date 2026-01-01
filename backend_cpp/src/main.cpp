@@ -655,16 +655,31 @@ private:
 
 void pre_flight_check() {
     namespace fs = std::filesystem;
-    std::vector<std::string> required_assets = {"dashboard.html", "keys.json"};
     
+    // 🚀 THE FIX: Check for the new folder structure
+    // We check for 'www/index.html' instead of 'dashboard.html'
+    std::vector<std::string> required_assets = {
+        "www/index.html", 
+        "www/style.css", 
+        "www/main.js", 
+        "keys.json"
+    };
+    
+    bool integrity_pass = true;
     for (const auto& asset : required_assets) {
         if (!fs::exists(asset)) {
             spdlog::critical("🚨 PRE-FLIGHT FAILURE: Missing asset: {}", asset);
-            spdlog::info("💡 Ensure you are running from the 'build/Release' directory.");
-            std::exit(EXIT_FAILURE); // Stop the launch
+            integrity_pass = false;
         }
     }
-    spdlog::info("🚀 All systems nominal. Assets verified.");
+    
+    if (!integrity_pass) {
+        spdlog::info("💡 Technical Note: Assets must be in: {}", fs::current_path().string());
+        spdlog::info("💡 Ensure 'www' folder and 'keys.json' are next to the .exe");
+        std::exit(EXIT_FAILURE); 
+    }
+    
+    spdlog::info("🚀 All systems nominal. UI Assets verified.");
 }
 
 int main(int argc, char* argv[]) {
