@@ -3,6 +3,7 @@
 #include <fstream>
 #include <sstream>
 #include <spdlog/spdlog.h>
+#include <omp.h>
 
 namespace code_assistance {
 
@@ -46,21 +47,49 @@ ProjectFilter FileSystemTools::load_config(const std::string& root) {
 }
 
 std::string FileSystemTools::list_dir_deep(const std::string& root, const std::string& sub, const ProjectFilter& filter, int max_depth) {
+    namespace fs = std::filesystem;
     fs::path base_root = fs::absolute(root).lexically_normal();
     fs::path target_path = (base_root / sub).lexically_normal();
 
-    // 🛡️ Geofence Guard
     if (base_root.relative_path().empty()) return "ERROR: Security - Root scan blocked.";
+    if (!fs::exists(target_path)) return "ERROR: Path not found.";
 
-    std::stringstream ss;
-    ss << "🛰️ SCANNING WORKSPACE: " << base_root.generic_string() << "\n";
-
+    // --- PHASE 1: SERIAL DISCOVERY (Fast I/O) ---
+    std::vector<fs::directory_entry> all_entries;
     try {
-        for (const auto& entry : fs::recursive_directory_iterator(target_path, fs::directory_options::skip_permission_denied)) {
+        auto iter_options = fs::directory_options::skip_permission_denied;
+        for (const auto& entry : fs::recursive_directory_iterator(target_path, iter_options)) {
+            all_entries.push_back(entry);
+            // 🛡️ EMERGENCY BRAKE: Limit discovery to prevent RAM overflow
+            if (all_entries.size() > 5000) break; 
+        }
+    } catch (...) {}
+
+    // --- PHASE 2: PARALLEL VALIDATION (Heavy Logic) ---
+    // We use a vector of strings to hold results to avoid thread-shuffling
+    std::vector<std::string> results(all_entries.size(), "");
+    int found_count = 0;
+
+    #pragma omp parallel
+    {
+        #pragma omp for reduction(+:found_count)
+        for (int i = 0; i < (int)all_entries.size(); ++i) {
+            const auto& entry = all_entries[i];
             fs::path current = entry.path();
-            fs::path rel_path = fs::relative(current, base_root);
+            std::error_code ec;
             
-            // 🚀 THE MIRROR LOGIC: Ignore vs Exception
+            // Calculate depth relative to target
+            auto depth_rel = fs::relative(current, target_path, ec);
+            if (ec) continue;
+            int depth = 0;
+            for (auto it = depth_rel.begin(); it != depth_rel.end(); ++it) depth++;
+            
+            if (depth > max_depth) continue;
+
+            // Mirror Logic: Ignore vs Exception
+            auto rel_path = fs::relative(current, base_root, ec);
+            if (ec) continue;
+
             bool is_ignored = false;
             for (const auto& p : filter.ignored_paths) {
                 if (is_inside_path(rel_path, fs::path(p))) { is_ignored = true; break; }
@@ -77,13 +106,10 @@ std::string FileSystemTools::list_dir_deep(const std::string& root, const std::s
             }
 
             if (entry.is_directory()) {
-                // Enter if not ignored OR if it's a bridge to an exception
                 if (is_ignored && !is_bridge && !is_exception) continue; 
             } else {
-                // Collect file if not ignored OR if it's an explicit exception
                 if (is_ignored && !is_exception) continue;
                 
-                // Extension Filter
                 std::string ext = current.extension().string();
                 if (!ext.empty()) ext = ext.substr(1);
                 bool ext_match = filter.allowed_extensions.empty();
@@ -92,15 +118,24 @@ std::string FileSystemTools::list_dir_deep(const std::string& root, const std::s
                 if (!ext_match && !is_exception) continue;
             }
 
-            // Depth calculation relative to the scan start
-            auto depth_rel = fs::relative(current, target_path);
-            int depth = std::distance(depth_rel.begin(), depth_rel.end());
-            if (depth > max_depth) continue;
-
-            for (int i = 0; i < depth - 1; ++i) ss << "  ";
-            ss << (entry.is_directory() ? "📁 " : "📄 ") << rel_path.generic_string() << "\n";
+            // SUCCESS: Build thread-local visual string
+            std::string line = "";
+            for (int d = 0; d < depth - 1; ++d) line += "  ";
+            line += (entry.is_directory() ? "📁 " : "📄 ") + rel_path.generic_string() + "\n";
+            
+            results[i] = line;
+            found_count++;
         }
-    } catch (const std::exception& e) { spdlog::error("💥 Scanner fail: {}", e.what()); }
+    }
+
+    // --- PHASE 3: AGGREGATION (Merging the Stream) ---
+    std::stringstream ss;
+    ss << "🛰️ PARALLEL SCAN COMPLETE | WORKSPACE: " << base_root.generic_string() << "\n";
+    for (const auto& s : results) {
+        if (!s.empty()) ss << s;
+    }
+
+    if (found_count == 0) ss << "(No visible files matching filters)\n";
 
     return ss.str();
 }

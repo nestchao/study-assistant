@@ -22,10 +22,14 @@ struct IndexDeleter {
 };
 
 FaissVectorStore::FaissVectorStore(int dimension) : dimension_(dimension) {
-    auto idx = new faiss::IndexHNSWFlat(dimension, 32);
-    idx->hnsw.efConstruction = 40;
-    idx->hnsw.efSearch = 16;
-    index_.reset(idx); 
+    // 🚀 THE ACCELERATOR: 32 links per node. efConstruction=128.
+    // This allows the search to 'jump' across the code graph.
+    faiss::IndexHNSWFlat* hnsw_idx = new faiss::IndexHNSWFlat(dimension, 32);
+    hnsw_idx->hnsw.efConstruction = 128; // High precision indexing
+    hnsw_idx->hnsw.efSearch = 64;       // Fast retrieval
+    
+    index_.reset(hnsw_idx); 
+    spdlog::info("🚀 HNSW Accelerator Core Primed. Dimension: {}", dimension);
 }
 
 FaissVectorStore::~FaissVectorStore() {

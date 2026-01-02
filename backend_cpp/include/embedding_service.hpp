@@ -8,6 +8,12 @@
 
 namespace code_assistance {
 
+struct VisionResult {
+    std::string analysis;
+    int fuel_consumed;
+    bool success;
+};
+
 struct GenerationResult {
     std::string text;
     int prompt_tokens = 0;
@@ -28,6 +34,7 @@ public:
     std::string generate_text(const std::string& prompt);
     std::string generate_autocomplete(const std::string& prefix);
     GenerationResult generate_text_elite(const std::string& prompt); 
+    VisionResult analyze_vision(const std::string& prompt, const std::string& base64_image);
 
 private:
     std::shared_ptr<KeyManager> key_manager_;
