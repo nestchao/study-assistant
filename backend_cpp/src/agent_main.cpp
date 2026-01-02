@@ -9,6 +9,7 @@
 #include "tools/ToolRegistry.hpp"
 #include "KeyManager.hpp"
 #include "embedding_service.hpp"
+#include "tools/FileSystemTools.hpp"
 
 // Forward declare the web_search function
 namespace code_assistance { 
@@ -84,43 +85,8 @@ int main() {
 
     // 2. 🚀 WIRE THE TOOLS (The Missing Step)
     
-    // TOOL A: list_dir
-    tools->register_tool(std::make_unique<code_assistance::GenericTool>(
-        "list_dir",
-        "List files in the workspace. Path is relative to project root.",
-        "{\"path\": \"string\"}",
-        [](const std::string& args_json) -> std::string {
-            auto j = nlohmann::json::parse(args_json);
-            // 🚀 Dynamic Root: project_id IS the absolute path
-            std::filesystem::path root(j.value("project_id", "")); 
-            std::filesystem::path sub = j.value("path", ".");
-            std::filesystem::path target = (root / sub).lexically_normal();
-
-            std::string res = "Contents of " + sub.generic_string() + ":\n";
-            try {
-                for (auto& entry : std::filesystem::directory_iterator(target)) {
-                    res += (entry.is_directory() ? "[DIR] " : "[FILE] ") + entry.path().filename().string() + "\n";
-                }
-                return res;
-            } catch (...) { return "ERROR: Cannot access path: " + sub.string(); }
-        }
-    ));
-
-    // TOOL B: read_file
-    tools->register_tool(std::make_unique<code_assistance::GenericTool>(
-        "read_file",
-        "Read a file's content. Path is relative to project root.",
-        "{\"path\": \"string\"}",
-        [](const std::string& args_json) -> std::string {
-            auto j = nlohmann::json::parse(args_json);
-            std::filesystem::path root(j.value("project_id", "")); 
-            std::filesystem::path target = (root / j.value("path", "")).lexically_normal();
-
-            std::ifstream f(target);
-            if (!f.is_open()) return "ERROR: File not found at " + j.value("path", "");
-            return std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-        }
-    ));
+    tools->register_tool(std::make_unique<code_assistance::ListDirTool>());
+    tools->register_tool(std::make_unique<code_assistance::ReadFileTool>());
 
     // TOOL C: web_search
     // tools->register_tool(std::make_unique<code_assistance::GenericTool>(
