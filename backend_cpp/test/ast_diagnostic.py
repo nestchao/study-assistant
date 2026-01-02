@@ -10,10 +10,12 @@ def run_ast_test():
     channel = grpc.insecure_channel('127.0.0.1:50051')
     stub = agent_pb2_grpc.AgentServiceStub(channel)
 
+    WORKSPACE_TARGET = "D:/Projects/SA_ETF" # 🚀 FULL PATH
+
+    # In the query construction:
     query = agent_pb2.UserQuery(
-        project_id="D:/Projects/SA_ETF",
-        # 🚀 THE TACTICAL PROMPT: Force a directory scan before the read
-        prompt="Perform a 'list_dir' of the root directory. If you see 'calibration_target.cpp', use 'read_file' on it and report the symbol count.",
+        project_id=WORKSPACE_TARGET,
+        prompt="Recursively list the directory. Look for 'calibration_target.cpp' inside any 'exception' folder and report its symbols.",
         session_id=f"DIAG_{int(time.time())}"
     )
 
