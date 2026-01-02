@@ -74,8 +74,13 @@ class AIStudioBridge:
                             result_queue.put(True)
 
                         elif cmd_type == "get_state":
+                            if "aistudio.google.com/app" not in page.url:
+                                page.goto("https://aistudio.google.com/app/prompts/new_chat", wait_until="networkidle")
+                            
+                            # Get the list and the active one
                             models = self._internal_get_models(page)
                             active = self._internal_get_active_model_name(page)
+                            
                             result_queue.put({"models": models, "active": active})
                             
                         elif cmd_type == "get_models":
@@ -335,29 +340,30 @@ class AIStudioBridge:
     def _internal_get_models(self, page):
         """Scrapes available Gemini models from the UI."""
         print("   [Thread] Fetching models...")
-        if "aistudio.google.com" not in page.url:
+        # Ensure we are on the app page
+        if "aistudio.google.com/app" not in page.url:
              page.goto("https://aistudio.google.com/app/prompts/new_chat", wait_until="networkidle", timeout=60000)
 
         try:
-            page.locator("ms-model-selector button").wait_for(state="visible", timeout=30000)
+            # Wait for the model selector to be present
+            page.locator("ms-model-selector button").wait_for(state="visible", timeout=20000)
+            
+            # Open the menu to populate the list
             model_btn = page.locator("ms-model-selector button")
-            if not model_btn.is_visible():
-                page.get_by_label("Run settings").click()
-                time.sleep(0.5)
             model_btn.click()
-            time.sleep(1.0)
-            try:
-                gemini_filter = page.locator("button.ms-button-filter-chip").filter(has_text="Gemini").first
-                if gemini_filter.is_visible(): gemini_filter.click()
-                time.sleep(0.5)
-            except: pass 
-
-            page.locator(".model-title-text").first.wait_for(timeout=3000)
+            time.sleep(1.0) # Wait for animation
+            
+            # Target the model title text in the dropdown
+            page.locator(".model-title-text").first.wait_for(timeout=5000)
             elements = page.locator(".model-title-text").all()
+            
             models = list(dict.fromkeys([t.inner_text().strip() for t in elements if t.inner_text().strip()]))
+            
+            # Close menu
             page.keyboard.press("Escape")
             return models
         except Exception as e:
+            print(f"   [Thread] Error fetching model list: {e}")
             page.keyboard.press("Escape")
             return []
 
@@ -411,18 +417,41 @@ class AIStudioBridge:
             return "Error: Browser bridge timed out during extraction."
     
     def _internal_get_active_model_name(self, page):
-        """Scrapes the name of the model currently selected in the dropdown."""
+        """
+        Scrapes the clean Display Name of the active model using the 
+        specific span.title inside the model selector button.
+        """
         try:
-            # Look for the model selector button text
-            selector = page.locator("ms-model-selector button .mat-mdc-button-touch-target").first
-            # If that fails, look for the title text in the settings side panel
-            model_text_el = page.locator("ms-model-selector .mdc-button__label").first
+            # We use a combined selector: Look for span.title specifically 
+            # inside the ms-model-selector button.
+            # This matches your provided path but is more resilient to small UI changes.
+            selector = "ms-model-selector button span.title"
             
-            if model_text_el.is_visible():
-                return model_text_el.inner_text().strip()
-            return None
-        except:
-            return None
+            model_el = page.locator(selector).first
+            
+            # Ensure the element is attached and visible
+            model_el.wait_for(state="visible", timeout=5000)
+            
+            # Get the text (e.g., "Gemini 3 Flash Preview")
+            text = model_el.inner_text().strip()
+            
+            # Final cleanup: Remove hidden characters or extra newlines
+            # which sometimes appear in Angular spans
+            clean_text = " ".join(text.split())
+            
+            print(f"   [Thread] Scraped Active Model: {clean_text}")
+            return clean_text
+            
+        except Exception as e:
+            print(f"   [Thread] Warning: Could not scrape active model name: {e}")
+            
+            # Fallback to the exact full path you provided if the short one fails
+            try:
+                full_path_selector = "body > app-root > ms-app > div > div > div.layout-wrapper > div > span > ms-prompt-renderer > ms-chunk-editor > ms-right-side-panel > div > ms-run-settings > div.settings-items-wrapper > div > ms-prompt-run-settings-switcher > ms-prompt-run-settings > div.settings-item.settings-model-selector > div > ms-model-selector > button > span.title"
+                text = page.locator(full_path_selector).first.inner_text().strip()
+                return " ".join(text.split())
+            except:
+                return None
 
     def get_available_models(self):
         self.start()
