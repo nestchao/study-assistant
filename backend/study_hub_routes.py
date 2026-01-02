@@ -10,7 +10,6 @@ import time
 from pathlib import Path 
 import google.api_core.exceptions
 from browser_bridge import browser_bridge
-# --- FIX: Added convert_pptx_to_pdf_windows to imports ---
 from utils import extract_text, delete_collection, split_chunks, convert_pptx_to_pdf_windows
 import redis
 from google.genai import types 
