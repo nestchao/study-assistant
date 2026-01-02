@@ -189,3 +189,69 @@ body {
 }
 .btn-danger { background: var(--red); color: white; }
 .btn-secondary { background: #30363d; color: white; }
+
+.token-badge {
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 10px;
+    background: #23863633;
+    color: #3fb950;
+    border: 1px solid #3fb95033;
+}
+
+/* --- Token Telemetry Styles --- */
+.log-meta {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+.token-badge {
+    font-size: 10px;
+    font-weight: 800;
+    padding: 2px 8px;
+    border-radius: 12px;
+    background: rgba(63, 185, 80, 0.15); /* Transparent Green */
+    color: var(--green);
+    border: 1px solid rgba(63, 185, 80, 0.3);
+    text-transform: uppercase;
+}
+
+.inspector-header {
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 20px;
+    padding-bottom: 10px;
+}
+
+.token-stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 12px;
+}
+
+.stat-pill {
+    font-family: 'Consolas', monospace;
+    font-size: 11px;
+    padding: 5px 12px;
+    background: #12141a;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-muted);
+}
+
+.stat-pill.total {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: rgba(88, 166, 255, 0.1);
+}
+
+.burn-rate-label {
+    font-size: 12px;
+    color: var(--yellow);
+    margin: 10px 0;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}

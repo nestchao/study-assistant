@@ -71,16 +71,16 @@ private:
 
         tool_registry_->register_tool(std::make_unique<code_assistance::FileSurgicalTool>());
 
-        tool_registry_->register_tool(std::make_unique<code_assistance::GenericTool>(
-            "web_search",
-            "Search the internet for documentation",
-            "{\"query\": \"string\"}",
-            [this](const std::string& args) { 
-                // 🚀 THE FIX: Use key_manager_ (the class member name)
-                return code_assistance::web_search(args, this->key_manager_->get_serper_key()); 
-            }
-        ));
-
+        // Web searching tool
+        // tool_registry_->register_tool(std::make_unique<code_assistance::GenericTool>(
+        //     "web_search",
+        //     "Search the internet for documentation",
+        //     "{\"query\": \"string\"}",
+        //     [this](const std::string& args) { 
+        //         // 🚀 THE FIX: Use key_manager_ (the class member name)
+        //         return code_assistance::web_search(args, this->key_manager_->get_serper_key()); 
+        //     }
+        // ));
 
         // Register Read File
        tool_registry_->register_tool(std::make_unique<code_assistance::GenericTool>(
@@ -410,6 +410,26 @@ private:
                 {"status", "NOMINAL"}
             }).dump(), "application/json");
         });
+
+        server_.Post("/api/admin/publish_log", [this](const httplib::Request& req, httplib::Response& res) {
+            try {
+                auto j = nlohmann::json::parse(req.body);
+                code_assistance::InteractionLog log;
+                log.timestamp = j.value("timestamp", 0LL);
+                log.project_id = j.value("project_id", "unknown");
+                log.user_query = j.value("user_query", "");
+                log.ai_response = j.value("ai_response", "");
+                log.duration_ms = j.value("duration_ms", 0.0);
+                log.prompt_tokens = j.value("prompt_tokens", 0);
+                log.completion_tokens = j.value("completion_tokens", 0);
+                log.total_tokens = j.value("total_tokens", 0);
+
+                // 🚀 THE FIX: Add to the Dashboard's singleton memory
+                code_assistance::LogManager::instance().add_log(log);
+                
+                res.set_content(R"({"status":"log_synchronized"})", "application/json");
+            } catch (...) { res.status = 400; }
+        });
     }
 
     std::vector<std::string> get_json_list(const json& body, const std::string& key1, const std::string& key2) {
@@ -655,16 +675,31 @@ private:
 
 void pre_flight_check() {
     namespace fs = std::filesystem;
-    std::vector<std::string> required_assets = {"dashboard.html", "keys.json"};
     
+    // 🚀 THE FIX: Check for the new folder structure
+    // We check for 'www/index.html' instead of 'dashboard.html'
+    std::vector<std::string> required_assets = {
+        "www/index.html", 
+        "www/style.css", 
+        "www/main.js", 
+        "keys.json"
+    };
+    
+    bool integrity_pass = true;
     for (const auto& asset : required_assets) {
         if (!fs::exists(asset)) {
             spdlog::critical("🚨 PRE-FLIGHT FAILURE: Missing asset: {}", asset);
-            spdlog::info("💡 Ensure you are running from the 'build/Release' directory.");
-            std::exit(EXIT_FAILURE); // Stop the launch
+            integrity_pass = false;
         }
     }
-    spdlog::info("🚀 All systems nominal. Assets verified.");
+    
+    if (!integrity_pass) {
+        spdlog::info("💡 Technical Note: Assets must be in: {}", fs::current_path().string());
+        spdlog::info("💡 Ensure 'www' folder and 'keys.json' are next to the .exe");
+        std::exit(EXIT_FAILURE); 
+    }
+    
+    spdlog::info("🚀 All systems nominal. UI Assets verified.");
 }
 
 int main(int argc, char* argv[]) {

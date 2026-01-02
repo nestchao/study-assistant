@@ -8,6 +8,20 @@
 
 namespace code_assistance {
 
+struct VisionResult {
+    std::string analysis;
+    int fuel_consumed;
+    bool success;
+};
+
+struct GenerationResult {
+    std::string text;
+    int prompt_tokens = 0;
+    int completion_tokens = 0;
+    int total_tokens = 0;
+    bool success = false;
+};
+
 // Declaration only
 std::string utf8_safe_substr(const std::string& str, size_t length);
 
@@ -19,6 +33,8 @@ public:
     std::vector<std::vector<float>> generate_embeddings_batch(const std::vector<std::string>& texts);
     std::string generate_text(const std::string& prompt);
     std::string generate_autocomplete(const std::string& prefix);
+    GenerationResult generate_text_elite(const std::string& prompt); 
+    VisionResult analyze_vision(const std::string& prompt, const std::string& base64_image);
 
 private:
     std::shared_ptr<KeyManager> key_manager_;

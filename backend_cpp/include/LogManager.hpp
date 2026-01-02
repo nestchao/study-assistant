@@ -21,11 +21,11 @@ struct InteractionLog {
     long long timestamp;
     std::string project_id;
     std::string user_query; 
-    std::string prompt_preview;
-    std::string full_prompt; // The raw prompt sent to AI
     std::string ai_response;
-    int token_count_est;     // Rough estimate
     double duration_ms;
+    int prompt_tokens = 0;
+    int completion_tokens = 0;
+    int total_tokens = 0;
 };
 
 class LogManager {
@@ -47,15 +47,18 @@ public:
     json get_logs_json() {
         std::lock_guard<std::mutex> lock(mtx_);
         json j_list = json::array();
-        // Return in reverse order (newest first)
+        // Return newest first for the dashboard list
         for (auto it = logs_.rbegin(); it != logs_.rend(); ++it) {
             j_list.push_back({
                 {"timestamp", it->timestamp},
                 {"project_id", it->project_id},
                 {"user_query", it->user_query},
-                {"full_prompt", it->full_prompt},
                 {"ai_response", it->ai_response},
-                {"duration_ms", it->duration_ms}
+                {"duration_ms", it->duration_ms},
+                // 🚀 THE FIX: Exporting tokens to JSON
+                {"prompt_tokens", it->prompt_tokens},
+                {"completion_tokens", it->completion_tokens},
+                {"total_tokens", it->total_tokens}
             });
         }
         return j_list;

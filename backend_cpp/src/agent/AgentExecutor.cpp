@@ -8,6 +8,7 @@
 #include <sstream>
 #include <filesystem>
 #include <spdlog/spdlog.h>
+#include "parser_elite.hpp" 
 
 namespace code_assistance {
 
@@ -110,133 +111,132 @@ void AgentExecutor::determineContextStrategy(const std::string& query, ContextSn
 
 // --- 4. THE COGNITIVE ENGINE ---
 std::string AgentExecutor::run_autonomous_loop(const ::code_assistance::UserQuery& req, ::grpc::ServerWriter<::code_assistance::AgentResponse>* writer) {
-    // 1. DYNAMIC TOOL DISCOVERY
+    auto mission_start_time = std::chrono::steady_clock::now();
+    
+    // 1. Initial Setup
     std::string tool_manifest = tool_registry_->get_manifest();
-    spdlog::info("🛰️ Flight Manual size: {} bytes", tool_manifest.length());
-    
-    if (tool_manifest.length() < 200) {
-        spdlog::error("🚨 CRITICAL: Tool Manifest is suspiciously small. AI will be blind!");
-    }
-
     std::string internal_monologue = "";
-    
-    // 🚀 NEW: Track last tools to detect loops
     std::string last_tool_used = "";
     std::string second_to_last_tool = "";
+    
+    // 🚀 THE TELEMETRY BUCKET: Capture the very last generation for logging
+    code_assistance::GenerationResult last_gen; 
+    std::string final_output = "Mission Timed Out.";
     
     int max_steps = 10;
     
     for (int step = 0; step < max_steps; ++step) {
-        // 2. THE FLIGHT MANUAL (Prompt) - 🚀 UPDATED WITH STRONGER TERMINATION EMPHASIS
+        // 2. PROMPT CONSTRUCTION (Decisive Landing Logic)
         std::string prompt = 
-            "### CRITICAL: YOU MUST USE FINAL_ANSWER WHEN DONE\n"
-            "After EVERY tool observation, ask yourself: 'Do I now have enough information to answer?'\n"
-            "If YES: Immediately call {\"tool\": \"FINAL_ANSWER\", \"parameters\": {\"answer\": \"your complete answer here\"}}\n"
-            "DO NOT keep searching if you already have the answer!\n\n"
-            
-            "### YOUR TOOLS (The Flight Manual)\n"
-            "You MUST call tools using this JSON format:\n"
-            "```json\n"
-            "{\"tool\": \"tool_name\", \"parameters\": {...}}\n"
-            "```\n\n"
-            "Available tools:\n" + tool_manifest + "\n\n"
-            
+            "### ROLE: Synapse Autonomous Pilot\n"
+            "### TOOLS\n" + tool_manifest + "\n\n"
             "### MISSION\n" + req.prompt() + "\n\n"
-            
-            "### CRITICAL PROTOCOL\n"
-            "1. Efficiency is your primary metric.\n"
-            "2. If an OBSERVATION provides the answer, you MUST use FINAL_ANSWER immediately.\n"
-            "3. DO NOT repeat the same search query more than once.\n"
-            "4. If a file is not found, use 'list_dir' to verify the path before giving up.\n\n"
-            
-            "### RULES\n"
-            "1. If you need info, call a tool.\n"
-            "2. If you have the answer, use FINAL_ANSWER.\n\n";
-        
-        // 🚀 NEW: Append conversation history with observations
+            "### PROTOCOL\n"
+            "1. Format calls as JSON: {\"tool\": \"name\", \"parameters\": {...}}\n"
+            "2. If the answer is in the history, use FINAL_ANSWER immediately.\n"
+            "3. Efficiency = Success. Do not repeat failed steps.\n";
+
         if (!internal_monologue.empty()) {
-            prompt += "### PREVIOUS OBSERVATIONS:\n" + internal_monologue + "\n\n";
+            prompt += "\n### HISTORY & OBSERVATIONS\n" + internal_monologue;
         }
+        prompt += "\nNEXT ACTION:";
+
+        // 🚀 THE BRAIN: Use the Elite Generator (Token-Aware)
+        last_gen = ai_service_->generate_text_elite(prompt);
         
-        prompt += "NEXT ACTION (respond with JSON tool call):";
+        if (!last_gen.success) {
+            this->notify(writer, "ERROR", "AI Service Unreachable");
+            return "ERROR: AI Service Failure";
+        }
 
-        std::string thought = ai_service_->generate_text(prompt);
+        std::string thought = last_gen.text;
         this->notify(writer, "THOUGHT", "Step " + std::to_string(step));
-        spdlog::info("🧠 Step {}: AI generated a thought.", step);
+        spdlog::info("🧠 Step {}: AI Thinking ({} tokens)", step, last_gen.total_tokens);
 
-        // 3. HARDENED JSON EXTRACTION
+        // 3. JSON EXTRACTION & VALIDATION
         nlohmann::json action = extract_json(thought);
         
         if (action.contains("tool")) {
             std::string tool_name = action["tool"];
             
-            // 🚀 NEW: Loop detection logic
+            // Loop Detection
             if (tool_name == last_tool_used && tool_name == second_to_last_tool) {
-                spdlog::warn("⚠️ LOOP DETECTED: Tool '{}' used 3 times in a row!", tool_name);
-                internal_monologue += "\n\n[SYSTEM OVERRIDE: You've used the tool '" + tool_name + 
-                                     "' three times consecutively. This suggests you're stuck in a loop. "
-                                     "Either synthesize your findings with FINAL_ANSWER NOW, or try a different tool.]\n";
+                internal_monologue += "\n[SYSTEM: Loop detected. Change strategy or use FINAL_ANSWER.]";
             }
-            
-            // 4. PREVENT TYPE_ERROR.302 (The "302" fix)
-            nlohmann::json params = nlohmann::json::object();
-            if (action.contains("parameters") && action["parameters"].is_object()) {
-                params = action["parameters"];
+
+            // 4. CHECK FOR FINAL_ANSWER
+            if (tool_name == "FINAL_ANSWER") {
+                final_output = action["parameters"].value("answer", "No answer provided.");
+                this->notify(writer, "FINAL", final_output);
+                goto mission_complete; // 🚀 Jump to logging and exit
             }
+
+            // 5. TOOL DISPATCH
+            nlohmann::json params = action.value("parameters", nlohmann::json::object());
             params["project_id"] = req.project_id();
 
-            // 5. CHECK FOR FINAL_ANSWER BEFORE DISPATCH
-            if (tool_name == "FINAL_ANSWER") {
-                std::string final_answer = params.value("answer", "No answer provided.");
-                this->notify(writer, "FINAL", final_answer);
-                spdlog::info("✅ Mission completed successfully at step {}", step);
-                return final_answer;
-            }
-
-            // 6. HALLUCINATION CATCHER & TOOL EXECUTION
             std::string observation = tool_registry_->dispatch(tool_name, params);
             
-            std::string formatted_observation = 
-                "\n--- OBSERVATION FROM " + tool_name + " (Step " + std::to_string(step) + ") ---\n" +
-                observation.substr(0, 3000) + 
-                "\n--- END OBSERVATION ---\n";
-            
-            internal_monologue += formatted_observation;
-
-            // 🚀 UPDATE: Track tool usage for loop detection
-            second_to_last_tool = last_tool_used;
-            last_tool_used = tool_name;
-
-            // 🚀 AUTO-LANDING: Remind AI to finish if it has enough data
-            if (step >= 2) {
-                internal_monologue += "\n(SYSTEM HINT: You have collected " + std::to_string(step + 1) + 
-                                     " observations. If you can answer the mission goal, use FINAL_ANSWER now to complete efficiently.)\n";
+            // 🛰️ SENSOR: AST X-Ray (Only for successful reads)
+            if (tool_name == "read_file" && !observation.starts_with("ERROR")) {
+                code_assistance::elite::ASTBooster sensor;
+                auto symbols = sensor.extract_symbols(params.value("path", ""), observation);
+                this->notify(writer, "AST_SCAN", "Identified " + std::to_string(symbols.size()) + " symbols.");
+                internal_monologue += "\n[AST DATA: " + std::to_string(symbols.size()) + " symbols detected]";
             }
 
+            internal_monologue += "\n[STEP " + std::to_string(step) + " RESULT FROM " + tool_name + "]\n" + observation;
+            
+            second_to_last_tool = last_tool_used;
+            last_tool_used = tool_name;
             this->notify(writer, "TOOL_EXEC", "Used " + tool_name);
             
         } else {
-            // If AI didn't use a tool, check if it's trying to answer directly
-            if (thought.find("FINAL_ANSWER") != std::string::npos || 
-                thought.find("final answer") != std::string::npos) {
-                spdlog::warn("⚠️ AI attempted direct answer without proper JSON format");
-                this->notify(writer, "FINAL", thought);
-                return thought;
+            // Handle non-JSON attempts
+            if (thought.find("FINAL_ANSWER") != std::string::npos) {
+                final_output = thought;
+                goto mission_complete;
             }
-            
-            internal_monologue += "\n[SYSTEM ERROR: You did not use a valid tool call. "
-                                 "Please respond with ONLY a JSON object in this format: "
-                                 "{\"tool\": \"tool_name\", \"parameters\": {...}}]\n";
-            
-            spdlog::warn("⚠️ Step {}: Invalid tool call format", step);
+            internal_monologue += "\n[SYSTEM: Error - Your last response was not valid JSON.]";
         }
     }
 
-    // Mission timeout
-    std::string timeout_msg = "Mission timed out after " + std::to_string(max_steps) + " steps without reaching FINAL_ANSWER.";
-    this->notify(writer, "FINAL", timeout_msg);
-    spdlog::error("❌ {}", timeout_msg);
-    return timeout_msg;
+mission_complete:
+    // 🚀 THE TELEMETRY BRIDGE: Executed ONCE per mission
+    auto mission_end_time = std::chrono::steady_clock::now();
+    double total_ms = std::chrono::duration<double, std::milli>(mission_end_time - mission_start_time).count();
+
+    code_assistance::InteractionLog log;
+    log.timestamp = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    log.project_id = req.project_id();
+    log.user_query = req.prompt();
+    log.ai_response = final_output;
+    log.duration_ms = total_ms;
+    log.prompt_tokens = last_gen.prompt_tokens;
+    log.completion_tokens = last_gen.completion_tokens;
+    log.total_tokens = last_gen.total_tokens;
+
+    // 1. Save to local process memory
+    code_assistance::LogManager::instance().add_log(log);
+
+    // 2. Radio back to Dashboard (Port 5002)
+    nlohmann::json packet = {
+        {"timestamp", log.timestamp},
+        {"project_id", log.project_id},
+        {"user_query", log.user_query},
+        {"ai_response", log.ai_response},
+        {"duration_ms", log.duration_ms},
+        {"prompt_tokens", log.prompt_tokens},
+        {"completion_tokens", log.completion_tokens},
+        {"total_tokens", log.total_tokens}
+    };
+
+    cpr::PostAsync(cpr::Url{"http://127.0.0.1:5002/api/admin/publish_log"},
+                  cpr::Body{packet.dump()},
+                  cpr::Header{{"Content-Type", "application/json"}});
+
+    spdlog::info("✅ Mission Logged. Fuel consumed: {} tokens.", log.total_tokens);
+    return final_output;
 }
 
 std::string AgentExecutor::run_autonomous_loop_internal(const nlohmann::json& body) {

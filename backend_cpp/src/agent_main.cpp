@@ -9,6 +9,7 @@
 #include "tools/ToolRegistry.hpp"
 #include "KeyManager.hpp"
 #include "embedding_service.hpp"
+#include "tools/FileSystemTools.hpp"
 
 // Forward declare the web_search function
 namespace code_assistance { 
@@ -84,50 +85,19 @@ int main() {
 
     // 2. 🚀 WIRE THE TOOLS (The Missing Step)
     
-    // TOOL A: list_dir
-    tools->register_tool(std::make_unique<code_assistance::GenericTool>(
-        "list_dir",
-        "List files. Paths are relative to PROJECT_ROOT.",
-        "{\"path\": \"string\"}",
-        [](const std::string& args_json) -> std::string {
-            auto j = nlohmann::json::parse(args_json);
-            fs::path p = resolve_safe_path(j.value("path", ""));
-            std::string res = "Contents of " + p.generic_string() + ":\n";
-            try {
-                for (auto& entry : fs::directory_iterator(p)) {
-                    res += (entry.is_directory() ? "[DIR] " : "[FILE] ") + entry.path().filename().string() + "\n";
-                }
-                return res;
-            } catch (...) { return "ERROR: Path not found: " + p.string(); }
-        }
-    ));
-
-    // TOOL B: read_file
-    tools->register_tool(std::make_unique<code_assistance::GenericTool>(
-        "read_file",
-        "Read the full text of a file from the workspace tree.",
-        "{\"path\": \"string\"}",
-        [](const std::string& args_json) -> std::string {
-            try {
-                auto j = nlohmann::json::parse(args_json);
-                std::string path = j.value("path", "");
-                std::ifstream f(path);
-                if (!f.is_open()) return "ERROR: File not found: " + path;
-                return std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-            } catch (...) { return "ERROR: Invalid JSON arguments."; }
-        }
-    ));
+    tools->register_tool(std::make_unique<code_assistance::ListDirTool>());
+    tools->register_tool(std::make_unique<code_assistance::ReadFileTool>());
 
     // TOOL C: web_search
-    tools->register_tool(std::make_unique<code_assistance::GenericTool>(
-        "web_search",
-        "Search Google for documentation and high-concurrency patterns.",
-        "{\"query\": \"string\"}",
-        [keys](const std::string& args) { 
-            // 🚀 THE FIX: Provide BOTH arguments (args and the key)
-            return code_assistance::web_search(args, keys->get_serper_key()); 
-        }
-    ));
+    // tools->register_tool(std::make_unique<code_assistance::GenericTool>(
+    //     "web_search",
+    //     "Search Google for documentation and high-concurrency patterns.",
+    //     "{\"query\": \"string\"}",
+    //     [keys](const std::string& args) { 
+    //         // 🚀 THE FIX: Provide BOTH arguments (args and the key)
+    //         return code_assistance::web_search(args, keys->get_serper_key()); 
+    //     }
+    // ));
 
     // 3. Initialize Executor
     auto executor = std::make_shared<code_assistance::AgentExecutor>(

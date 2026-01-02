@@ -1,11 +1,9 @@
 // lib/screens/workspace_panels.dart
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import 'package:study_assistance/provider/project_provider.dart';
 import 'package:flutter_html/flutter_html.dart';
 import 'package:super_clipboard/super_clipboard.dart';
-import 'package:study_assistance/models/project.dart'; // Ensure Source model is imported
 import 'package:flutter_markdown/flutter_markdown.dart'; 
 
 // Shared Constants for Styling
