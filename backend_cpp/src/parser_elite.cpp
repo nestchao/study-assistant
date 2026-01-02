@@ -3,6 +3,7 @@
 #include <spdlog/spdlog.h>
 #include <filesystem>
 #include <fstream>
+#include <stack>
 
 // 🚀 LINK THE EMBEDDED GRAMMARS (Must be global scope)
 extern "C" {
@@ -43,7 +44,7 @@ bool ASTBooster::validate_syntax(const std::string& content, const std::string& 
 }
 
 std::vector<CodeNode> ASTBooster::extract_symbols(const std::string& path, const std::string& content) {
-    std::vector<CodeNode> nodes;
+    std::vector<CodeNode> found_nodes;
     std::string ext = std::filesystem::path(path).extension().string();
     const TSLanguage* lang = get_lang(ext);
     
@@ -53,19 +54,54 @@ std::vector<CodeNode> ASTBooster::extract_symbols(const std::string& path, const
     TSTree* tree = ts_parser_parse_string(parser_, nullptr, content.c_str(), (uint32_t)content.length());
     TSNode root = ts_tree_root_node(tree);
 
-    // 🚀 PHASE 2: Symbol Extraction (Surgical Search)
-    // We walk the tree here. For now, we return 1 dummy node if syntax is valid 
-    // to prove the sensor pipeline is connected.
-    if (!ts_node_has_error(root)) {
-        CodeNode info;
-        info.name = "AST_VALIDATED_ROOT";
-        info.type = "file";
-        info.file_path = path;
-        nodes.push_back(info);
+    // 🚀 THE ELITE FIX: Non-recursive stack-based tree traversal (Memory Efficient)
+    std::stack<TSNode> stack;
+    stack.push(root);
+
+    while (!stack.empty()) {
+        TSNode node = stack.top();
+        stack.pop();
+
+        std::string type = ts_node_type(node);
+
+        // 🎯 TARGETING THE SKELETON: Logic-bearing nodes
+        if (type == "function_definition" || type == "class_specifier" || 
+            type == "method_definition" || type == "function_item") {
+            
+            CodeNode symbol;
+            symbol.file_path = path;
+            symbol.type = type;
+            
+            // Extract Symbol Name (Surgical Extraction)
+            // Usually the 'identifier' node is a child of these types
+            uint32_t children = ts_node_child_count(node);
+            for (uint32_t i = 0; i < children; i++) {
+                TSNode child = ts_node_child(node, i);
+                if (std::string(ts_node_type(child)) == "identifier" || 
+                    std::string(ts_node_type(child)) == "type_identifier") {
+                    
+                    uint32_t start = ts_node_start_byte(child);
+                    uint32_t end = ts_node_end_byte(child);
+                    symbol.name = content.substr(start, end - start);
+                    break;
+                }
+            }
+            
+            if (!symbol.name.empty()) {
+                found_nodes.push_back(symbol);
+            }
+        }
+
+        // Add children to stack for continued exploration
+        uint32_t count = ts_node_child_count(node);
+        for (uint32_t i = 0; i < count; i++) {
+            stack.push(ts_node_child(node, i));
+        }
     }
     
     ts_tree_delete(tree);
-    return nodes;
+    spdlog::info("🛰️  AST X-Ray Complete: Found {} logical symbols in {}", found_nodes.size(), path);
+    return found_nodes;
 }
 
 } // namespace code_assistance::elite

@@ -75,6 +75,7 @@ add_library(core_engine STATIC
     src/agent/AgentExecutor.cpp
     src/tools/WebSearchTool.cpp
     src/parser_elite.cpp 
+    src/tools/FileSystemTools.cpp
     ${GEN_PB_SRC}
     ${GEN_GRPC_SRC}
 )

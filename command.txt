@@ -35,3 +35,4 @@ cd Release; ./code_assistance_server.exe
 
 clear; cd D:\Projects\ali_study_assistance\Synapse-Flow\backend_cpp\build\Release; ./agent_service.exe
 
+clear; cd D:\Projects\ali_study_assistance\Synapse-Flow; .\launch.ps1
