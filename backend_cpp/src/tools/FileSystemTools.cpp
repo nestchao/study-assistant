@@ -1,109 +1,142 @@
-#include "tools/FileSystemTools.hpp" // 🚀 THE CRITICAL MISSING LINK
+#include "tools/FileSystemTools.hpp"
 #include <nlohmann/json.hpp>
 #include <fstream>
 #include <sstream>
 #include <spdlog/spdlog.h>
+#include <omp.h>
 
 namespace code_assistance {
 
 namespace fs = std::filesystem;
 
+// 🚀 THE ELITE HELPER: Segment-based path comparison (Mirroring Sync Logic)
+bool is_inside_path(const fs::path& child, const fs::path& parent) {
+    if (parent.empty()) return false;
+    auto c = child.lexically_normal();
+    auto p = parent.lexically_normal();
+    auto it_c = c.begin();
+    for (auto it_p = p.begin(); it_p != p.end(); ++it_p) {
+        if (it_c == c.end() || *it_c != *it_p) return false;
+        ++it_c;
+    }
+    return true;
+}
+
 ProjectFilter FileSystemTools::load_config(const std::string& root) {
     ProjectFilter filter;
-    fs::path config_path = fs::path(root) / "config.json";
+    // 🚀 THE FIX: Look inside the .study_assistant folder for the config
+    fs::path config_path = fs::path(root) / ".study_assistant" / "config.json";
     
+    if (!fs::exists(config_path)) {
+        // Fallback to root
+        config_path = fs::path(root) / "config.json";
+    }
+
     if (fs::exists(config_path)) {
         try {
             std::ifstream f(config_path);
             auto j = nlohmann::json::parse(f);
-            if (j.contains("allowed_extensions")) filter.allowed_extensions = j["allowed_extensions"].get<std::vector<std::string>>();
-            if (j.contains("ignored_paths")) filter.ignored_paths = j["ignored_paths"].get<std::vector<std::string>>();
-            if (j.contains("included_paths")) filter.included_paths = j["included_paths"].get<std::vector<std::string>>();
-            
-            // 🚀 LOG: Config Content
-            spdlog::info("⚙️  Config Loaded: [Ext: {}] [Ignore: {}] [Incl: {}]", 
-                filter.allowed_extensions.size(), filter.ignored_paths.size(), filter.included_paths.size());
-        } catch (const std::exception& e) {
-            spdlog::error("❌ Config Read Failed: {}", e.what());
-        }
-    } else {
-        spdlog::warn("⚠️  No config.json found at {}. Using empty filter.", root);
+            filter.allowed_extensions = j.value("allowed_extensions", std::vector<std::string>{});
+            filter.ignored_paths = j.value("ignored_paths", std::vector<std::string>{});
+            filter.included_paths = j.value("included_paths", std::vector<std::string>{});
+            spdlog::info("⚙️  Config Synced: {} ignores, {} exceptions.", 
+                         filter.ignored_paths.size(), filter.included_paths.size());
+        } catch (...) { spdlog::error("❌ Config corrupted at {}", config_path.string()); }
     }
     return filter;
 }
 
 std::string FileSystemTools::list_dir_deep(const std::string& root, const std::string& sub, const ProjectFilter& filter, int max_depth) {
+    namespace fs = std::filesystem;
     fs::path base_root = fs::absolute(root).lexically_normal();
     fs::path target_path = (base_root / sub).lexically_normal();
 
-    spdlog::info("🛰️  SCAN START | Target: {}", target_path.string());
+    if (base_root.relative_path().empty()) return "ERROR: Security - Root scan blocked.";
+    if (!fs::exists(target_path)) return "ERROR: Path not found.";
 
-    if (!fs::exists(target_path)) {
-        spdlog::error("❌ TARGET MISSING: {}", target_path.string());
-        return "ERROR: Path not found.";
-    }
-
-    std::stringstream ss;
-    int found_count = 0;
-    int skip_count = 0;
-
+    // --- PHASE 1: SERIAL DISCOVERY (Fast I/O) ---
+    std::vector<fs::directory_entry> all_entries;
     try {
         auto iter_options = fs::directory_options::skip_permission_denied;
         for (const auto& entry : fs::recursive_directory_iterator(target_path, iter_options)) {
+            all_entries.push_back(entry);
+            // 🛡️ EMERGENCY BRAKE: Limit discovery to prevent RAM overflow
+            if (all_entries.size() > 5000) break; 
+        }
+    } catch (...) {}
+
+    // --- PHASE 2: PARALLEL VALIDATION (Heavy Logic) ---
+    // We use a vector of strings to hold results to avoid thread-shuffling
+    std::vector<std::string> results(all_entries.size(), "");
+    int found_count = 0;
+
+    #pragma omp parallel
+    {
+        #pragma omp for reduction(+:found_count)
+        for (int i = 0; i < (int)all_entries.size(); ++i) {
+            const auto& entry = all_entries[i];
             fs::path current = entry.path();
             std::error_code ec;
-            auto rel_to_root = fs::relative(current, base_root, ec);
+            
+            // Calculate depth relative to target
+            auto depth_rel = fs::relative(current, target_path, ec);
+            if (ec) continue;
+            int depth = 0;
+            for (auto it = depth_rel.begin(); it != depth_rel.end(); ++it) depth++;
+            
+            if (depth > max_depth) continue;
+
+            // Mirror Logic: Ignore vs Exception
+            auto rel_path = fs::relative(current, base_root, ec);
             if (ec) continue;
 
-            std::string rel_str = rel_to_root.generic_string();
-            
-            // 🚀 LOG: Every item the OS reveals
-            spdlog::debug("🔍 Checking: {}", rel_str);
-
-            // 1. Ignore Check
-            bool ignored = false;
-            for (const auto& i : filter.ignored_paths) {
-                if (!i.empty() && rel_str.find(i) == 0) { ignored = true; break; }
+            bool is_ignored = false;
+            for (const auto& p : filter.ignored_paths) {
+                if (is_inside_path(rel_path, fs::path(p))) { is_ignored = true; break; }
             }
 
-            // 2. Exception Check
-            bool exception = false;
-            for (const auto& i : filter.included_paths) {
-                if (!i.empty() && rel_str.find(i) == 0) { exception = true; break; }
+            bool is_exception = false;
+            for (const auto& p : filter.included_paths) {
+                if (is_inside_path(rel_path, fs::path(p))) { is_exception = true; break; }
             }
 
-            if (ignored && !exception) {
-                spdlog::info("🚫 Ignored: {}", rel_str);
-                skip_count++;
-                continue;
+            bool is_bridge = false;
+            for (const auto& p : filter.included_paths) {
+                if (is_inside_path(fs::path(p), rel_path)) { is_bridge = true; break; }
             }
 
-            // 3. Extension Check
-            if (entry.is_regular_file()) {
+            if (entry.is_directory()) {
+                if (is_ignored && !is_bridge && !is_exception) continue; 
+            } else {
+                if (is_ignored && !is_exception) continue;
+                
                 std::string ext = current.extension().string();
                 if (!ext.empty()) ext = ext.substr(1);
+                bool ext_match = filter.allowed_extensions.empty();
+                for (const auto& a : filter.allowed_extensions) if (ext == a) { ext_match = true; break; }
                 
-                bool match = filter.allowed_extensions.empty();
-                for (const auto& a : filter.allowed_extensions) {
-                    if (ext == a) { match = true; break; }
-                }
-
-                if (!match && !exception) {
-                    spdlog::info("✂️  Ext Mismatch: {} (ext: {})", rel_str, ext);
-                    skip_count++;
-                    continue;
-                }
+                if (!ext_match && !is_exception) continue;
             }
 
-            // 4. Success - Add to result
+            // SUCCESS: Build thread-local visual string
+            std::string line = "";
+            for (int d = 0; d < depth - 1; ++d) line += "  ";
+            line += (entry.is_directory() ? "📁 " : "📄 ") + rel_path.generic_string() + "\n";
+            
+            results[i] = line;
             found_count++;
-            ss << (entry.is_directory() ? "📁 " : "📄 ") << rel_str << "\n";
         }
-    } catch (const std::exception& e) {
-        spdlog::error("💥 Scanner Crash: {}", e.what());
     }
 
-    spdlog::info("🏁 SCAN COMPLETE | Found: {} | Filtered: {}", found_count, skip_count);
+    // --- PHASE 3: AGGREGATION (Merging the Stream) ---
+    std::stringstream ss;
+    ss << "🛰️ PARALLEL SCAN COMPLETE | WORKSPACE: " << base_root.generic_string() << "\n";
+    for (const auto& s : results) {
+        if (!s.empty()) ss << s;
+    }
+
+    if (found_count == 0) ss << "(No visible files matching filters)\n";
+
     return ss.str();
 }
 
