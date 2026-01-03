@@ -256,6 +256,9 @@ class AIStudioBridge:
                 page.locator('ms-text-chunk').last.wait_for(state="visible", timeout=120000)
             except:
                 return "Error: AI took too long to start generating text."
+            
+            stop_btn = page.locator("ms-run-button button").filter(has_text="Stop")
+            run_btn = page.locator("ms-run-button button").filter(has_text="Run")
 
             start_time = time.time()
             last_len = 0
@@ -290,12 +293,13 @@ class AIStudioBridge:
                     """)
 
                 current_chunks = page.locator('ms-text-chunk').all()
-                run_btn = page.locator('ms-run-button button[aria-label="Run"]')
+                run_btn = page.locator('ms-run-button button').first
                 
                 # Check busy state
-                is_run_visible = run_btn.is_visible()
-                stop_btn = page.get_by_label("Stop message")
                 is_stopping = stop_btn.is_visible()
+                is_run_ready = run_btn.is_visible()
+                
+                print(is_stopping, is_run_ready, end=" | ", flush=True)
 
                 current_text = current_chunks[-1].inner_text().strip() if current_chunks else ""
                 current_len = len(current_text)
@@ -303,13 +307,23 @@ class AIStudioBridge:
                 print(".", end="", flush=True)
 
                 # Heuristic: If Run button is visible AND stop button is NOT visible AND we have text
-                if is_run_visible and not is_stopping and current_len > 0:
-                    if current_len == last_len:
+                if is_stopping:
+                    stable_count = 0 # Reset counter, we are definitely busy
+                
+                elif is_run_ready:
+                    # Even if buttons say "Ready", we double check text stability 
+                    # just in case of a UI glitch.
+                    if current_len == last_len and current_len > 0:
                         stable_count += 1
-                        if stable_count >= 3:
+                        
+                        # Wait 4 ticks (4 seconds) of total stability to be safe
+                        if stable_count >= 4:
                             break
                     else:
                         stable_count = 0
+                
+                # CASE C: Ambiguous State (No Run button, No Stop button)
+                # This happens during transitions. Assume busy.
                 else:
                     stable_count = 0
                 
