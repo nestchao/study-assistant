@@ -1,21 +1,23 @@
-#define NOMINMAX            // 🚀 SPACE-X FIX: Stop Windows.h from breaking FAISS/std::max
-#include <cpr/cpr.h>        // 🚀 REQUIRED for Telemetry Bridge
-#include "agent/AgentExecutor.hpp"
-#include "LogManager.hpp"
+#define NOMINMAX
+#include <cpr/cpr.h>
 #include <regex>
 #include <chrono>
 #include <fstream>
 #include <sstream>
 #include <filesystem>
 #include <spdlog/spdlog.h>
-#include "parser_elite.hpp" 
+#include <stack>
+#include <unordered_set>
+
+#include "LogManager.hpp"
+#include "agent/AgentExecutor.hpp"
+#include "parser_elite.hpp"
 
 namespace code_assistance {
 
 namespace fs = std::filesystem;
 
 // --- 1. CONSTRUCTOR ---
-
 AgentExecutor::AgentExecutor(
     std::shared_ptr<RetrievalEngine> engine,
     std::shared_ptr<EmbeddingService> ai,
@@ -27,14 +29,34 @@ AgentExecutor::AgentExecutor(
 
 // --- 2. HELPERS ---
 
+// Stack-Based JSON Extractor
 nlohmann::json extract_json(const std::string& raw) {
     try {
-        // Find the first '{' and the last '}'
-        size_t first = raw.find('{');
-        size_t last = raw.rfind('}');
-        
-        if (first != std::string::npos && last != std::string::npos && last > first) {
-            std::string clean_json = raw.substr(first, last - first + 1);
+        std::stack<char> braces;
+        size_t start = std::string::npos;
+        size_t end = std::string::npos;
+
+        for (size_t i = 0; i < raw.length(); ++i) {
+            if (raw[i] == '{') {
+                if (braces.empty()) start = i;
+                braces.push('{');
+            } else if (raw[i] == '}') {
+                if (!braces.empty()) {
+                    braces.pop();
+                    if (braces.empty()) {
+                        end = i;
+                        // We found a complete top-level JSON object.
+                        // For this agent, we assume the *last* valid JSON block is the action.
+                        // Or we can break here if we want the first. 
+                        // Let's break to capture the first distinct action.
+                        break; 
+                    }
+                }
+            }
+        }
+
+        if (start != std::string::npos && end != std::string::npos) {
+            std::string clean_json = raw.substr(start, end - start + 1);
             return nlohmann::json::parse(clean_json);
         }
     } catch (const std::exception& e) {
@@ -113,20 +135,19 @@ void AgentExecutor::determineContextStrategy(const std::string& query, ContextSn
 std::string AgentExecutor::run_autonomous_loop(const ::code_assistance::UserQuery& req, ::grpc::ServerWriter<::code_assistance::AgentResponse>* writer) {
     auto mission_start_time = std::chrono::steady_clock::now();
     
-    // 1. Initial Setup
     std::string tool_manifest = tool_registry_->get_manifest();
     std::string internal_monologue = "";
-    std::string last_tool_used = "";
-    std::string second_to_last_tool = "";
     
-    // 🚀 THE TELEMETRY BUCKET: Capture the very last generation for logging
+    // 🚀 LOOP DETECTION HASH SET
+    std::unordered_set<size_t> action_history;
+    std::hash<std::string> hasher;
+
     code_assistance::GenerationResult last_gen; 
     std::string final_output = "Mission Timed Out.";
     
     int max_steps = 10;
     
     for (int step = 0; step < max_steps; ++step) {
-        // 2. PROMPT CONSTRUCTION (Decisive Landing Logic)
         std::string prompt = 
             "### ROLE: Synapse Autonomous Pilot\n"
             "### TOOLS\n" + tool_manifest + "\n\n"
@@ -141,17 +162,15 @@ std::string AgentExecutor::run_autonomous_loop(const ::code_assistance::UserQuer
         }
         prompt += "\nNEXT ACTION:";
 
-        // 🚀 THE BRAIN: Use the Elite Generator (Token-Aware)
         last_gen = ai_service_->generate_text_elite(prompt);
         
         if (!last_gen.success) {
-            this->notify(writer, "ERROR", "AI Service Unreachable");
+            // ... error handling ...
             return "ERROR: AI Service Failure";
         }
 
         std::string thought = last_gen.text;
         this->notify(writer, "THOUGHT", "Step " + std::to_string(step));
-        spdlog::info("🧠 Step {}: AI Thinking ({} tokens)", step, last_gen.total_tokens);
 
         // 3. JSON EXTRACTION & VALIDATION
         nlohmann::json action = extract_json(thought);
@@ -159,25 +178,30 @@ std::string AgentExecutor::run_autonomous_loop(const ::code_assistance::UserQuer
         if (action.contains("tool")) {
             std::string tool_name = action["tool"];
             
-            // Loop Detection
-            if (tool_name == last_tool_used && tool_name == second_to_last_tool) {
-                internal_monologue += "\n[SYSTEM: Loop detected. Change strategy or use FINAL_ANSWER.]";
+            // 🚀 LOOP DETECTION (HASH BASED)
+            std::string action_sig = tool_name + action["parameters"].dump();
+            size_t action_hash = hasher(action_sig);
+            
+            if (action_history.count(action_hash)) {
+                 internal_monologue += "\n[SYSTEM ALERT: You have already performed this exact action. CHANGE STRATEGY.]";
+                 spdlog::warn("🔄 Loop Detected on step {}", step);
+                 // Don't execute, just continue loop to force AI to rethink
+                 continue; 
             }
+            action_history.insert(action_hash);
 
-            // 4. CHECK FOR FINAL_ANSWER
             if (tool_name == "FINAL_ANSWER") {
                 final_output = action["parameters"].value("answer", "No answer provided.");
                 this->notify(writer, "FINAL", final_output);
-                goto mission_complete; // 🚀 Jump to logging and exit
+                goto mission_complete; 
             }
 
-            // 5. TOOL DISPATCH
             nlohmann::json params = action.value("parameters", nlohmann::json::object());
             params["project_id"] = req.project_id();
 
             std::string observation = tool_registry_->dispatch(tool_name, params);
             
-            // 🛰️ SENSOR: AST X-Ray (Only for successful reads)
+            // 🛰️ SENSOR: AST X-Ray
             if (tool_name == "read_file" && !observation.starts_with("ERROR")) {
                 code_assistance::elite::ASTBooster sensor;
                 auto symbols = sensor.extract_symbols(params.value("path", ""), observation);
@@ -186,13 +210,9 @@ std::string AgentExecutor::run_autonomous_loop(const ::code_assistance::UserQuer
             }
 
             internal_monologue += "\n[STEP " + std::to_string(step) + " RESULT FROM " + tool_name + "]\n" + observation;
-            
-            second_to_last_tool = last_tool_used;
-            last_tool_used = tool_name;
             this->notify(writer, "TOOL_EXEC", "Used " + tool_name);
             
         } else {
-            // Handle non-JSON attempts
             if (thought.find("FINAL_ANSWER") != std::string::npos) {
                 final_output = thought;
                 goto mission_complete;
