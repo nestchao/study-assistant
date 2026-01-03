@@ -95,21 +95,17 @@ def generate_note(text):
     - If something exists in the raw note, it must also exist in the final note.
 
     📝 CRITICAL OUTPUT RULE (The "Wrapper"):
-    1. Markdown Syntax: You MUST wrap your ENTIRE output inside ONE Markdown code block.
-        - If the original note contains code:
-            - Indent it with spaces
-
-    2. Headings:
+    1. Headings:
         - Use # for main titles
         - Use ## for sections
     
-    3. Bold Keywords:
+    2. Bold Keywords:
         - You MUST bold (**text**) all key terms, definitions, and important concepts
 
-    4. Dividers:
+    3. Dividers:
         - Insert a horizontal rule (---) between every major section
 
-    5. Lists:
+    4. Lists:
         - Use bullet points (*)
 
     ✏️ Content Rules:
@@ -130,11 +126,6 @@ def generate_note(text):
 
     Make the note shorter, clearer, and student-friendly, while keeping 100% of the original information.
 
-    📌 FINAL CHECK BEFORE RESPONDING:
-
-    - Is EVERYTHING inside ONE Markdown code block?
-    - Is there ZERO text outside it?
-
     If yes, generate the simplified note for the text below:
 
     {text} 
@@ -144,12 +135,20 @@ def generate_note(text):
         # Ensure bridge thread is running
         browser_bridge.start()
         
-        response_text = browser_bridge.send_prompt(prompt)
+        response_text = browser_bridge.send_prompt(prompt, use_clipboard=True)
         print("  ✅ Browser Bridge response received.")
-        clean_text = response_text.replace("code Markdown download", "")
+        clean_text = response_text.strip()
+        
+        # Remove Markdown fences if present
+        if clean_text.startswith("```markdown"):
+            clean_text = clean_text.replace("```markdown", "", 1)
+        elif clean_text.startswith("```"):
+            clean_text = clean_text.replace("```", "", 1)
+        if clean_text.endswith("```"):
+            clean_text = clean_text[:-3]
+
+        # Fix HTML entities
         clean_text = re.sub(r'(#include\s*)<([^>]+)>', r'\1&lt;\2&gt;', clean_text)
-        clean_text = re.sub(r'([a-zA-Z0-9_]+\.h)>', r'\1&gt;', clean_text) # Fix closing >
-        clean_text = re.sub(r'<([a-zA-Z0-9_]+\.h)', r'&lt;\1', clean_text) # Fix opening <
         
         return markdown.markdown(clean_text, extensions=['tables'])
     except Exception as e:
