@@ -22,7 +22,7 @@ class AgentServiceImpl final : public AgentService::Service {
 
         // 2. High-Performance Logic (The Engine)
         // This calls the state-machine we discussed earlier
-        std::string final_answer = executor->run(request->prompt(), request->session_id());
+        std::string final_answer = executor->run_autonomous_loop(request->prompt(), request->session_id(), writer);
 
         // 3. Final Payload
         res.set_phase("final");
