@@ -11,17 +11,20 @@ namespace code_assistance {
 
 struct AgentTrace {
     std::string session_id;
-    std::string timestamp;
-    std::string state;    // "RETRIEVING", "REFLECTING", etc.
-    std::string detail;   // "E-Graph found 84 nodes", "Critic says context missing"
+    std::string timestamp; // Not strictly used in JSON output logic below but good to have
+    std::string state;
+    std::string detail;
     double duration_ms;
 };
 
 struct InteractionLog {
     long long timestamp;
     std::string project_id;
-    std::string user_query; 
+    std::string request_type; // "AGENT" or "GHOST"
+    std::string user_query;   
+    std::string full_prompt;  // 🚀 What AI saw
     std::string ai_response;
+    std::vector<float> vector_snapshot; // 🚀 DNA
     double duration_ms;
     int prompt_tokens = 0;
     int completion_tokens = 0;
@@ -39,7 +42,7 @@ public:
     void add_log(const InteractionLog& log) {
         std::lock_guard<std::mutex> lock(mtx_);
         logs_.push_back(log);
-        if (logs_.size() > 50) { // Keep last 50 only
+        if (logs_.size() > 100) { // Keep last 50 only
             logs_.pop_front();
         }
     }
@@ -47,18 +50,19 @@ public:
     json get_logs_json() {
         std::lock_guard<std::mutex> lock(mtx_);
         json j_list = json::array();
-        // Return newest first for the dashboard list
         for (auto it = logs_.rbegin(); it != logs_.rend(); ++it) {
             j_list.push_back({
                 {"timestamp", it->timestamp},
                 {"project_id", it->project_id},
+                {"type", it->request_type},
                 {"user_query", it->user_query},
+                {"full_prompt", it->full_prompt},
                 {"ai_response", it->ai_response},
+                {"vector_snapshot", it->vector_snapshot},
                 {"duration_ms", it->duration_ms},
-                // 🚀 THE FIX: Exporting tokens to JSON
+                {"total_tokens", it->total_tokens},
                 {"prompt_tokens", it->prompt_tokens},
-                {"completion_tokens", it->completion_tokens},
-                {"total_tokens", it->total_tokens}
+                {"completion_tokens", it->completion_tokens}
             });
         }
         return j_list;

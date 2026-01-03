@@ -1,9 +1,18 @@
 const UI = {
-    pages: document.querySelectorAll('.page'),
-    navItems: document.querySelectorAll('.nav-links li'),
-    traceList: document.getElementById('trace-list'),
     logList: document.getElementById('log-list'),
-    syncTime: document.getElementById('sync-time'),
+    kpiLatency: document.getElementById('kpi-latency'),
+    kpiTps: document.getElementById('kpi-tps'),
+    
+    // Inspector Fields
+    inspId: document.getElementById('insp-id'),
+    inspType: document.getElementById('insp-type'),
+    inspTime: document.getElementById('insp-time'),
+    inspLatency: document.getElementById('insp-latency'),
+    inspTokens: document.getElementById('insp-tokens'),
+    inspFullPrompt: document.getElementById('insp-full-prompt'),
+    inspResponse: document.getElementById('insp-response'),
+    inspUserInput: document.getElementById('insp-user-input'),
+    inspVector: document.getElementById('insp-vector')
 };
 
 // --- NAVIGATION ---
@@ -21,16 +30,20 @@ UI.navItems.forEach(item => {
 });
 
 // --- DATA POLLING ---
-async function pollSystemData() {
+async function pollTelemetry() {
     try {
         const res = await fetch('/api/admin/telemetry');
         const data = await res.json();
         
-        updateOverview(data.metrics);
-        renderArchives(data.logs);
-        UI.syncTime.innerText = new Date().toLocaleTimeString();
-    } catch (e) { console.error("Poll Error", e); }
+        // Update KPIs
+        UI.kpiLatency.innerText = data.metrics.llm_latency.toFixed(0) + 'ms';
+        UI.kpiTps.innerText = data.metrics.tps.toFixed(1);
+
+        renderLogs(data.logs);
+    } catch(e) { console.error(e); }
 }
+
+let lastLogCount = 0;
 
 async function pollTraceData() {
     try {
@@ -59,25 +72,26 @@ function updateOverview(metrics) {
     document.getElementById('tps-val').innerText = metrics.tps.toFixed(1) + ' T/s';
 }
 
-function renderTrace(traces) {
-    UI.traceList.innerHTML = traces.slice().reverse().map(t => {
-        // Make details meaningful
-        let detail = t.detail;
-        if (t.state === "TOOL_CALL") detail = `🔧 Invoking Tool: <strong>${t.detail}</strong>`;
-        if (t.state === "REFLECTION") detail = `🧠 AI Analysis: ${t.detail.substring(0, 80)}...`;
+function renderLogs(logs) {
+    if (logs.length === lastLogCount) return;
+    lastLogCount = logs.length;
 
-        const dockingPoint = t.session_id.includes("D:/") ? t.session_id : "Default";
+    UI.logList.innerHTML = logs.slice().reverse().map((log, index) => {
+        const time = new Date(log.timestamp * 1000).toLocaleTimeString();
+        const typeClass = log.type === 'GHOST' ? 'type-GHOST' : 'type-AGENT';
+        
         return `
-            <tr>
-                <td>${new Date().toLocaleTimeString()}</td>
-                <td><span class="dock-tag">${dockingPoint}</span></td>
-                <td>${detail}</td>
-                <td style="color: ${t.duration > 1000 ? 'var(--red)' : 'var(--accent)'}">${t.duration.toFixed(0)}ms</td>
-                <td style="font-family: monospace; font-size: 10px;">${t.session_id.substring(0, 8)}</td>
-            </tr>
+            <div class="log-item" onclick='inspect(${JSON.stringify(log).replace(/'/g, "&apos;")})'>
+                <div class="log-top">
+                    <span class="type-tag ${typeClass}">${log.type || 'AGENT'}</span>
+                    <span style="color:#666">${time}</span>
+                </div>
+                <div style="font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis">
+                    ${log.user_query}
+                </div>
+            </div>
         `;
     }).join('');
-    document.getElementById('trace-count').innerText = `${traces.length} Events Detected`;
 }
 
 function renderArchives(logs) {
@@ -100,47 +114,33 @@ function renderArchives(logs) {
     `).join('');
 }
 
-window.inspectLog = (log) => {
-    const content = document.getElementById('inspector-content');
-    const placeholder = document.getElementById('inspector-default');
+window.inspect = (log) => {
+    // Header
+    UI.inspId.innerText = log.project_id || "UNKNOWN";
+    UI.inspType.className = `badge type-${log.type || 'AGENT'}`;
+    UI.inspType.innerText = log.type || 'AGENT';
     
-    // 🛡️ Safety Guard: Prevent division by zero
-    const durationSec = log.duration_ms / 1000 || 1;
-    const fuelEfficiency = (log.total_tokens / durationSec).toFixed(0);
-    
-    placeholder.classList.add('hidden');
-    content.classList.remove('hidden');
+    UI.inspTime.innerText = new Date(log.timestamp * 1000).toLocaleTimeString();
+    UI.inspLatency.innerText = log.duration_ms.toFixed(0) + "ms";
+    UI.inspTokens.innerText = `${log.total_tokens} (In: ${log.prompt_tokens} / Out: ${log.completion_tokens})`;
 
-    content.innerHTML = `
-        <div class="inspector-header">
-            <h2 style="margin:0">Mission Telemetry</h2>
-            <div class="token-stats">
-                <span class="stat-pill">Input (Prompt): ${log.prompt_tokens}</span>
-                <span class="stat-pill">Output (Reply): ${log.completion_tokens}</span>
-                <span class="stat-pill total">Total Fuel: ${log.total_tokens} Tkn</span>
-            </div>
-            <div class="burn-rate-label">
-                <i class="fas fa-fire"></i> Burn Rate: ${fuelEfficiency} tokens/sec
-            </div>
-        </div>
+    // Content
+    UI.inspUserInput.innerText = log.user_query;
+    UI.inspFullPrompt.innerText = log.full_prompt || "(No context captured)";
+    UI.inspResponse.innerText = log.ai_response;
 
-        <div class="mission-report">
-            <h3>${log.ai_response ? '✅ Mission Resolved' : '🔍 Retrieval Query'}</h3>
-            
-            <div class="terminal-box">
-                <span class="line-header">> USER_INTENT:</span>
-                <p class="raw-text">${escapeHtml(log.user_query)}</p>
-                
-                <span class="line-header">> AI_SOLUTION:</span>
-                <div class="raw-text code-block">${escapeHtml(log.ai_response) || 'Processing...'}</div>
-            </div>
-        </div>
-
-        <div class="meta-footer">
-            <strong>Engine Latency:</strong> ${log.duration_ms.toFixed(0)}ms | 
-            <strong>Target Project:</strong> ${log.project_id}
-        </div>
-    `;
+    // Vector Visualization
+    if (log.vector_snapshot && log.vector_snapshot.length > 0) {
+        UI.inspVector.innerHTML = log.vector_snapshot.map(val => {
+            // Map float -0.5 to 0.5 to a color intensity
+            const intensity = Math.min(255, Math.max(0, Math.floor((val + 0.1) * 1000)));
+            const color = `rgb(0, ${intensity}, ${255 - intensity})`;
+            return `<div class="vec-cell" style="background:${color}" title="${val.toFixed(4)}"></div>`;
+        }).join('');
+        UI.inspVector.innerHTML += `<div class="vec-val" style="margin-left:10px">${log.vector_snapshot.length} dims shown</div>`;
+    } else {
+        UI.inspVector.innerHTML = '<span style="color:#555">No vector data available</span>';
+    }
 };
 
 function escapeHtml(text) {
@@ -158,4 +158,5 @@ window.triggerStressTest = async () => {
 // Intervals
 setInterval(pollSystemData, 1000);
 setInterval(pollTraceData, 1000);
-pollSystemData();
+setInterval(pollTelemetry, 1000);
+pollTelemetry();
