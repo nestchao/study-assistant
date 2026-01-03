@@ -35,4 +35,23 @@ cd Release; ./code_assistance_server.exe
 
 clear; cd D:\Projects\ali_study_assistance\Synapse-Flow\backend_cpp\build\Release; ./agent_service.exe
 
+// Exception
+extension\src\
+extension\media\
+frontend\lib\
+
+// Ignore
+firebase-credentials.json
+package-lock.json
+.git\
+assests\
+backend\venv\
+backend\vector_stores\
+backend\__pycache__\
+backend_cpp\build\
+extension\
+frontend\
+backend_cpp\test\venv\
+documentation\
+
 clear; cd D:\Projects\ali_study_assistance\Synapse-Flow; .\launch.ps1

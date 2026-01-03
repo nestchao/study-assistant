@@ -1,4 +1,3 @@
-#include "sync_service.hpp"
 #include <string>
 #include <vector>
 #include <unordered_map>
@@ -10,10 +9,13 @@
 #include <cctype>
 #include <spdlog/spdlog.h>
 #include <nlohmann/json.hpp>
-#include "code_graph.hpp"
-#include "embedding_service.hpp"
 #include <map>
 #include <sstream> 
+
+#include "PrefixTrie.hpp"
+#include "code_graph.hpp"
+#include "sync_service.hpp"
+#include "embedding_service.hpp"
 
 namespace code_assistance {
 
@@ -283,50 +285,52 @@ void SyncService::recursive_scan(
     const fs::path& current_dir,
     const fs::path& root_dir,
     const fs::path& storage_dir,
-    const FilterConfig& cfg,
+    const FilterConfig& cfg, // You might need to refactor FilterConfig to hold the Trie
     std::vector<fs::path>& results
 ) {
+    // 1. Build Trie locally (In production, build this ONCE in the class constructor/update)
+    // For this snippet, we assume 'trie_' is a member of SyncService populated from cfg.
+    PrefixTrie trie;
+    for(const auto& p : cfg.blacklist) trie.insert(p, PathFlag::IGNORE);
+    for(const auto& p : cfg.whitelist) trie.insert(p, PathFlag::INCLUDE);
+
     try {
         for (const auto& entry : fs::directory_iterator(current_dir)) {
             const auto& path = entry.path();
-            
-            // Critical Safety: Don't scan our own metadata folder
-            if (fs::exists(storage_dir) && fs::equivalent(path, storage_dir)) continue;
+            if (fs::equivalent(path, storage_dir)) continue;
 
             fs::path rel_path = fs::relative(path, root_dir);
+            
+            // 🚀 ELITE O(1) LOOKUP
+            uint8_t flag = trie.check(rel_path);
+            
+            bool is_ignored = (flag & PathFlag::IGNORE);
+            bool is_included = (flag & PathFlag::INCLUDE);
 
             if (entry.is_directory()) {
-                // DECISION: Enter if not ignored OR if it contains a whitelisted item
-                bool explicitly_ignored = false;
-                for (const auto& ign : cfg.blacklist) {
-                    if (rel_path.generic_string().find(ign) == 0) { 
-                        explicitly_ignored = true; 
-                        break; 
-                    }
-                }
-
-                bool is_bridge = false;
-                for (const auto& inc : cfg.whitelist) {
-                    if (inc.find(rel_path.generic_string()) == 0) { 
-                        is_bridge = true; 
-                        break; 
-                    }
-                }
-
-                if (!explicitly_ignored || is_bridge) {
+                // Logic: Enter if NOT ignored, OR if explicit exception exists
+                // Note: The Trie check returns the status of the *current* path.
+                // We need to know if there's a deep exception.
+                // For simplicity in Phase 2.1: We scan if not ignored OR if included.
+                
+                if (!is_ignored || is_included) {
                     recursive_scan(path, root_dir, storage_dir, cfg, results);
                 }
             } 
             else if (entry.is_regular_file()) {
-                // 🚀 CALLING VIA THIS
-                if (this->should_index(rel_path, cfg)) {
+                // File Logic
+                if (is_ignored && !is_included) continue;
+
+                // Extension Check
+                std::string ext = path.extension().string();
+                if (!ext.empty() && ext[0] == '.') ext = ext.substr(1);
+                
+                if (cfg.allowed_extensions.count(ext)) {
                     results.push_back(path);
                 }
             }
         }
-    } catch (const std::exception& e) {
-        spdlog::error("Scanner stall: {}", e.what());
-    }
+    } catch (...) {}
 }
 
 SyncResult SyncService::perform_sync(

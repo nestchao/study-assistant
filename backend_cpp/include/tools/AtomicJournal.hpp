@@ -3,6 +3,7 @@
 #include <fstream>
 #include <string>
 #include <spdlog/spdlog.h>
+
 #include "parser_elite.hpp"
 
 namespace code_assistance {
@@ -50,13 +51,17 @@ public:
 
     // 🚀 THE FIX: Integrated Surgery Logic
     static bool apply_surgery_safe(const std::string& path, const std::string& new_code) {
-        if (!backup(path)) return false;
+        fs::path p(path);
+        std::string ext = p.extension().string();
 
-        if (new_code.empty()) {
-            spdlog::error("🚨 Surgery resulted in empty payload. Rolling back.");
-            rollback(path);
-            return false;
+        // 🛑 STEP 1: MEMORY-ONLY VALIDATION (Zero Disk I/O)
+        // We validate BEFORE we even touch the disk or create a journal.
+        if (!validate_ast_integrity(new_code, ext)) {
+            return false; // Rejection
         }
+
+        // 🛡️ STEP 2: JOURNAL & WRITE
+        if (!backup(path)) return false;
 
         std::ofstream out(path, std::ios::trunc);
         if (!out.is_open()) {
@@ -67,25 +72,27 @@ public:
         out << new_code;
         out.close();
 
-        // 🛰️ ELITE CHECK: In Phase 2, we call Tree-sitter here.
-        // For now, we use basic validation.
-        if (new_code.empty()) {
-            spdlog::error("🚨 Surgery resulted in empty payload. Rolling back.");
-            rollback(path);
-            return false;
-        }
-
-        // 🛰️ AST VALIDATION
-        elite::ASTBooster sensor;
-        std::string ext = fs::path(path).extension().string();
-        
-        if (!sensor.validate_syntax(new_code, ext)) {
-            spdlog::critical("🚨 SURGERY ABORTED: AI generated invalid syntax for {}. Rolling back!", path);
-            rollback(path);
-            return false;
-        }
-
+        // ✅ STEP 3: COMMIT
         commit(path);
+        return true;
+    }
+
+    static bool validate_ast_integrity(const std::string& code, const std::string& ext) {
+        // Instantiate the Elite Parser
+        code_assistance::elite::ASTBooster parser;
+        
+        // 1. Syntax Check
+        if (!parser.validate_syntax(code, ext)) {
+            spdlog::error("❌ AST REJECTION: Syntax error detected in proposed code.");
+            return false;
+        }
+
+        // 2. Critical Heuristic (Optional): Prevent emptying a file
+        if (code.length() < 10 && ext != ".txt") {
+            spdlog::warn("⚠️ AST WARNING: Proposed code is dangerously short.");
+            return false;
+        }
+
         return true;
     }
 };
