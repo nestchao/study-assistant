@@ -60,7 +60,8 @@ class AIStudioBridge:
                     try:
                         if cmd_type == "prompt":
                             # Normal prompt, allow navigation/reset if needed
-                            response = self._internal_send_prompt(page, data, skip_nav=False)
+                            msg, use_clip = data
+                            response = self._internal_send_prompt(page, msg, use_clipboard=use_clip, skip_nav=False)
                             result_queue.put(response)
                         
                         elif cmd_type == "upload_extract":
@@ -159,7 +160,7 @@ class AIStudioBridge:
             print("   [Thread] File attached. Sending prompt...")
             
             # 5. Send Prompt with SKIP NAV enabled so we don't refresh the page
-            return self._internal_send_prompt(page, prompt, skip_nav=True)
+            return self._internal_send_prompt(page, prompt, use_clipboard=False, skip_nav=True)
 
         except Exception as e:
             page.keyboard.press("Escape")
@@ -209,7 +210,7 @@ class AIStudioBridge:
             page.keyboard.press("Escape")
             return f"Error getting markdown: {str(e)}"
 
-    def _internal_send_prompt(self, page, message, skip_nav=False):
+    def _internal_send_prompt(self, page, message, use_clipboard=False, skip_nav=False):
         """Logic executed strictly inside the worker thread."""
         try:
             # Navigation logic depends on whether we are continuing a flow (file upload) or starting new
@@ -293,7 +294,6 @@ class AIStudioBridge:
                     """)
 
                 current_chunks = page.locator('ms-text-chunk').all()
-                run_btn = page.locator('ms-run-button button').first
                 
                 # Check busy state
                 is_stopping = stop_btn.is_visible()
@@ -317,7 +317,7 @@ class AIStudioBridge:
                         stable_count += 1
                         
                         # Wait 4 ticks (4 seconds) of total stability to be safe
-                        if stable_count >= 4:
+                        if stable_count >= 8:
                             break
                     else:
                         stable_count = 0
@@ -331,6 +331,13 @@ class AIStudioBridge:
                 time.sleep(1)
 
             print("\n   [Thread] Captured.")
+
+            if use_clipboard:
+                # Use the new Clipboard logic ONLY if requested
+                clipboard_content = self._internal_get_markdown_via_clipboard(page)
+                if clipboard_content and len(clipboard_content) > 10:
+                    return clipboard_content
+                print("   [Thread] Clipboard failed or empty. Falling back to scraping.")
 
             final_chunks = page.locator('ms-text-chunk').all()
             if not final_chunks: return "Error: No response chunks found."
@@ -409,10 +416,10 @@ class AIStudioBridge:
             page.keyboard.press("Escape")
             return f"Error: {e}"
 
-    def send_prompt(self, message):
+    def send_prompt(self, message, use_clipboard=False):
         self.start()
         result_queue = queue.Queue()
-        self.cmd_queue.put(("prompt", message, result_queue))
+        self.cmd_queue.put(("prompt", (message, use_clipboard), result_queue))
         try:
             return result_queue.get(timeout=250)
         except queue.Empty:
@@ -466,6 +473,35 @@ class AIStudioBridge:
                 return " ".join(text.split())
             except:
                 return None
+    
+    def _internal_get_markdown_via_clipboard(self, page):
+        """Hovers over the last message and clicks 'Copy as markdown'."""
+        print("   [Thread] Attempting 'Copy as Markdown' via Clipboard...")
+        try:
+            latest_turn = page.locator("ms-chat-turn").last
+            latest_turn.scroll_into_view_if_needed()
+            latest_turn.hover()
+            time.sleep(0.5) 
+
+            options_btn = latest_turn.locator("button[aria-label='Open options']")
+            options_btn.wait_for(state="visible", timeout=3000)
+            options_btn.click()
+            
+            copy_btn = page.locator("button[role='menuitem']").filter(has_text="Copy as markdown")
+            copy_btn.wait_for(state="visible", timeout=2000)
+            copy_btn.click()
+            
+            time.sleep(0.5) 
+            clipboard_text = page.evaluate("navigator.clipboard.readText()")
+            page.keyboard.press("Escape")
+            
+            print(f"   [Thread] Clipboard Copy Successful ({len(clipboard_text)} chars).")
+            return clipboard_text
+
+        except Exception as e:
+            print(f"   [Thread] ⚠️ Copy as Markdown failed: {e}")
+            page.keyboard.press("Escape")
+            return None
 
     def get_available_models(self):
         self.start()
