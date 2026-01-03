@@ -42,7 +42,14 @@ export async function activate(context: vscode.ExtensionContext) {
         // Guard 1: Don't sync if no project is loaded
         if (!currentProjectId) return;
 
-        // Guard 2: Don't sync the AI's own context files or ignored types
+        // 🚀 FIX: INSTANTLY REJECT INTERNAL STORAGE FILES
+        if (document.fileName.includes('.study_assistant') || 
+            document.fileName.includes('.codeminds') ||
+            document.fileName.includes('converted_files')) {
+            return;
+        }
+
+        // Guard 2: Don't sync ignored types
         const ext = path.extname(document.fileName).toLowerCase();
         if (ext === '.txt' || ext === '.json' || document.uri.scheme !== 'file') return;
 

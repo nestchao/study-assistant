@@ -244,22 +244,107 @@ VisionResult EmbeddingService::analyze_vision(const std::string& prompt, const s
 }
 
 std::string EmbeddingService::generate_autocomplete(const std::string& prefix) {
-    // Lightweight call, 1 retry only
-    std::string key = key_manager_->get_current_key();
-    std::string url = base_url_ + "gemini-1.5-flash:generateContent?key=" + key;
+    size_t total_keys = key_manager_->get_total_keys();
+    size_t total_models = key_manager_->get_total_models();
+    size_t max_attempts = total_keys * total_models; // Try ALL combinations
     
-    json payload = {
-        {"contents", {{ {"parts", {{{"text", "Complete code: " + prefix}}}} }}},
-        {"generationConfig", {{"maxOutputTokens", 64}, {"stopSequences", {";", "\n", "}"}}}}
-    };
-
-    auto r = cpr::Post(cpr::Url{url}, cpr::Body{payload.dump()}, cpr::Header{{"Content-Type", "application/json"}});
-    if (r.status_code == 200) {
-        try {
-            auto j = json::parse(r.text);
-            return j["candidates"][0]["content"]["parts"][0]["text"];
-        } catch(...) {}
+    // 🚀 LOGIC: Check if prefix ends with open parenthesis or comma to preserve spacing
+    bool needs_space = false;
+    if (!prefix.empty()) {
+        char last = prefix.back();
+        if (last == ',' || last == ')') needs_space = true;
     }
+
+    for(size_t attempt = 0; attempt < max_attempts; ++attempt) {
+        auto pair = key_manager_->get_current_pair();
+        
+        // Construct URL for specific model
+        std::string url = base_url_ + pair.model + ":generateContent?key=" + pair.key;
+        
+        json payload = {
+            {"contents", {{ 
+                {"parts", {{{"text", 
+                    "ROLE: Code Completion Engine.\n"
+                    "TASK: Complete the code at the cursor.\n"
+                    "RULES:\n"
+                    "1. Output ONLY the code to be inserted.\n"
+                    "2. Do NOT repeat the input.\n"
+                    "3. Do NOT wrap in markdown.\n"
+                    "4. If the input is a function signature, complete the parameters or body.\n"
+                    "5. DO NOT hallucinate a new 'main()' function.\n\n"
+                    "INPUT CONTEXT:\n" + prefix}}}} 
+            }}},
+            {"generationConfig", {
+                {"maxOutputTokens", 64},
+                {"stopSequences", {"\n\n", "```", "void main"}} // 🚀 HARD STOP on hallucinations
+            }}
+        };
+
+        auto r = cpr::Post(
+            cpr::Url{url}, 
+            cpr::Body{payload.dump()}, 
+            cpr::Header{{"Content-Type", "application/json"}},
+            cpr::Timeout{3500} // 3.5s timeout per attempt
+        );
+        
+        // ✅ SUCCESS
+        if (r.status_code == 200) {
+            try {
+                auto j = json::parse(r.text);
+                if (j["candidates"].empty()) {
+                    // Empty candidates often means safety filter block
+                    spdlog::warn("⚠️ Blocked/Empty (Model: {} | Key: #{})", pair.model, pair.key_index);
+                    key_manager_->rotate_key(); 
+                    continue;
+                }
+                
+                std::string text = j["candidates"][0]["content"]["parts"][0]["text"];
+                
+                // 🚀 SANITIZATION
+                // Remove Markdown
+                if (text.find("```") != std::string::npos) {
+                    size_t start = text.find("```");
+                    size_t end = text.rfind("```");
+                    if (start != std::string::npos) text = text.substr(text.find('\n', start) + 1);
+                    if (end != std::string::npos && end > 0) text = text.substr(0, end);
+                }
+                
+                // Remove Repetitive "main()"
+                if (text.find("void main") != std::string::npos) {
+                    text = ""; // Reject bad completion
+                }
+
+                if (text.empty()) {
+                    key_manager_->rotate_key(); continue;
+                }
+
+                spdlog::info("✅ Ghost: '{}' (Model: {} | Key: #{})", text, pair.model, pair.key_index);
+                return text;
+
+            } catch(...) { 
+                key_manager_->rotate_key(); continue;
+            }
+        }
+
+        // ⚠️ 429: ROTATE KEY
+        if (r.status_code == 429) {
+            spdlog::warn("⚠️ 429 Rate Limit (Model: {} | Key: #{}) -> Rotating...", pair.model, pair.key_index);
+            key_manager_->rotate_key();
+            continue;
+        }
+
+        // ❌ 400/404: BAD MODEL -> ROTATE MODEL
+        if (r.status_code == 400 || r.status_code == 404) {
+            spdlog::error("❌ Bad Model '{}' -> Switching Model...", pair.model);
+            key_manager_->rotate_model();
+            continue;
+        }
+
+        // ❌ OTHER: TRY NEXT KEY
+        spdlog::error("❌ API Error {}: {}", r.status_code, r.text.substr(0,50));
+        key_manager_->rotate_key();
+    }
+
     return "";
 }
 
