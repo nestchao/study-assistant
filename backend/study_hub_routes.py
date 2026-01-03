@@ -82,8 +82,17 @@ def generate_note(text):
     """Generates a simplified study note using the Browser Bridge (Direct)."""
     print("  🤖 Generating AI study note via Browser Bridge...")
     prompt = f"""
-    You are given an original study note.
-    Your task is to rewrite it into a simplified version for students but do not skip any point or explanation from the original note.
+    You are given a raw study note.
+
+    Your task is to rewrite it into a simpler and clearer version for students, WITHOUT removing, skipping, summarizing away, or merging any information from the original note.
+
+    ⚠️ ABSOLUTE RULE (Very Important):
+
+    - Every sentence, explanation, example, and detail in the raw note MUST appear in the output.
+
+    - You may reword sentences using simpler words, but you are NOT allowed to delete or shorten ideas.
+
+    - If something exists in the raw note, it must also exist in the final note.
 
     📝 CRITICAL OUTPUT RULE (The "Wrapper"):
     1. Markdown Syntax: You MUST wrap your ENTIRE output inside ONE Markdown code block.
